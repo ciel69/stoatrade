@@ -118,7 +118,7 @@ let last = 0
 let acc = 0
 let loop = 0
 let lastTouch = 0
-const TAIL = [[0, 1, 1.05], [0.07, 0.5, 0.8], [0.14, 0.26, 0.6], [0.21, 0.12, 0.45]]       // отступ по пути, прозрачность, радиус
+const TAIL = [[0, 1, 1.35], [0.07, 0.6, 1.05], [0.14, 0.34, 0.8], [0.21, 0.16, 0.55]]       // отступ по пути, прозрачность, радиус
 
 function collect(): void {
   const q = <T extends Element>(c: string): T[] => Array.from(svg.value!.querySelectorAll<T>(c))
@@ -132,7 +132,7 @@ function draw(): void {
   LINKS.forEach(([a, b], i) => {
     const dd = `M${num(sim.x[a])} ${num(sim.y[a])}Q${num(sim.qx[i])} ${num(sim.qy[i])} ${num(sim.x[b])} ${num(sim.y[b])}`
     e.wire[i].setAttribute('d', dd)
-    e.wire[i].style.opacity = String(Math.min(1, (wireBase + 0.55 * sim.glow[i]) * sim.str[i]))
+    e.wire[i].style.opacity = String(Math.min(1, (wireBase + 0.7 * sim.glow[i]) * sim.str[i]))
     if (hasLit.value) e.hl[i].setAttribute('d', dd)
   })
   for (let i = 0; i < nodes.length; i++) {
@@ -140,8 +140,8 @@ function draw(): void {
     const x = num(sim.x[i]); const y = num(sim.y[i])
     for (const c of [e.node[i], e.flash[i], e.halo[i]]) { c.setAttribute('cx', x); c.setAttribute('cy', y) }
     e.node[i].style.opacity = String(0.38 + 0.62 * f)
-    e.flash[i].setAttribute('r', num((1.7 + 1.5 * f) * kk))
-    e.flash[i].style.opacity = String(0.8 * f * f)
+    e.flash[i].setAttribute('r', num((1.7 + 2.1 * f) * kk))
+    e.flash[i].style.opacity = String(0.9 * f * f)
   }
   const vis = 0.55 + 0.45 * sAmp
   for (let p = 0; p < PULSE_POOL; p++) {

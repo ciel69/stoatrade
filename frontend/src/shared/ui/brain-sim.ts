@@ -12,8 +12,10 @@ const N = BRAIN_NODES.length
 const LINK_MAX = 17          // дальше этого расстояния связь не образуется
 const MAX_DEG = 4            // у нейрона не больше четырёх связей: сеть остаётся разреженной
 const MAX_PULSES = 30
-const POINTER_R = 14         // радиус влияния курсора, единиц рисунка
-const POINTER_PULL = 3       // на сколько ближний нейрон тянется к курсору
+const POINTER_R = 19         // радиус влияния курсора, единиц рисунка
+const POINTER_PULL = 5       // на сколько ближний нейрон тянется к курсору
+const CLICK_PUSH = 4.2       // толчок нейрона от места клика
+const CLICK_R = 24
 
 /** Кандидаты в связи: ближайшие пары, у каждого нейрона не больше MAX_DEG. */
 function buildLinks(): Array<[number, number]> {
@@ -132,8 +134,8 @@ export class BrainSim {
 
   /** Нейрон ответил на касание курсора: одиночный тихий импульс. */
   touch(node: number): void {
-    this.fire[node] = Math.max(this.fire[node], 0.7)
-    this.emit(node, -1, 0, 0.7, 0, 0.2)
+    this.fire[node] = Math.max(this.fire[node], 0.9)
+    this.emit(node, -1, 0, 0.9, 0, 0.35)
   }
 
   /** Клик в точке (x, y): ближние нейроны упруго отталкиваются, от нейрона node идёт каскад импульсов (глубже и вероятнее обычного, даже в ожидании). */
@@ -142,9 +144,9 @@ export class BrainSim {
       const dx = this.x[i] - x
       const dy = this.y[i] - y
       const d = Math.hypot(dx, dy) || 1
-      const w = Math.max(0, 1 - d / 18)
-      this.ox[i] += (dx / d) * 2.4 * w
-      this.oy[i] += (dy / d) * 2.4 * w
+      const w = Math.max(0, 1 - d / CLICK_R)
+      this.ox[i] += (dx / d) * CLICK_PUSH * w
+      this.oy[i] += (dy / d) * CLICK_PUSH * w
     }
     this.fire[node] = 1
     this.emit(node, -1, 0, 1, 0, 1)
