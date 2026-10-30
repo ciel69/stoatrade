@@ -33,6 +33,30 @@ describe('BrainSim', () => {
     expect(sim.pulses.length).toBe(0)
     expect(sim.x.every(Number.isFinite) && sim.qy.every(Number.isFinite)).toBe(true)
   })
+  it('клик запускает каскад даже в ожидании, затем всё затихает', () => {
+    const sim = new BrainSim(4)
+    run(sim, 3, 0)
+    sim.burst(3, 22, 36)
+    expect(sim.fire[3]).toBe(1)
+    expect(sim.pulses.length).toBeGreaterThan(0)
+    let maxDepth = 0
+    run(sim, 4, 0, () => sim.pulses.forEach((p) => { if (p.boost >= 1) maxDepth = Math.max(maxDepth, p.depth) }))
+    expect(maxDepth).toBeGreaterThan(0)
+    run(sim, 8, 0)
+    expect(sim.pulses.filter((p) => p.boost >= 1).length).toBe(0)        // клик не заводит сеть навсегда
+  })
+  it('курсор притягивает ближний нейрон и отпускает, когда уходит', () => {
+    const a = new BrainSim(8)
+    const b = new BrainSim(8)
+    const [bx, by] = [22, 36]
+    b.setPointer([bx + 6, by])
+    run(a, 2, 0)
+    run(b, 2, 0)
+    expect(b.x[3]).toBeGreaterThan(a.x[3] + 0.5)
+    b.setPointer(null)
+    run(b, 3, 0)
+    expect(Math.abs(b.x[3] - a.x[3])).toBeLessThan(1.6)        // свободное блуждание само расходится по времени, но не на величину притяжения
+  })
   it('нейроны остаются близко к своим местам', () => {
     const sim = new BrainSim(2)
     const x0 = [...sim.x]

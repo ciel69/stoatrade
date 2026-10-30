@@ -67,9 +67,16 @@ function onMove(ev: PointerEvent): void {
   if (!props.interactive || !canHover || ev.pointerType === 'touch' || !svg.value) return
   const [x, y] = toBox(ev)
   const n = nearestNode(x, y, 9)
-  if (n !== overNode) { overNode = n; emit('node', n) }
+  if (n !== overNode) {
+    overNode = n
+    emit('node', n)
+    const t = performance.now()
+    if (n >= 0 && loop && t - lastTouch > 160) { lastTouch = t; sim.touch(n) }       // курсор вошёл в нейрон: он отвечает тихим импульсом (не чаще раза в 160 мс)
+  }
+  if (loop) sim.setPointer([x, y])
 }
 function onLeave(): void {
+  sim.setPointer(null)
   if (overNode !== -1) { overNode = -1; emit('node', -1) }
 }
 
@@ -79,6 +86,11 @@ function fire(ev?: MouseEvent): void {
   timers.forEach(clearTimeout)
   timers = []
   const [x, y] = ev && ev.clientX ? toBox(ev) : [32, 32]
+  if (loop) {                         // живая сеть: от ближайшего к клику нейрона идёт каскад импульсов, окрестность упруго отталкивается; без точки клика (шаг запуска) старт с любого нейрона
+    const n = ev && ev.clientX ? nearestNode(x, y, 64) : Math.floor(Math.random() * nodes.length)
+    sim.burst(n, x, y)
+    return
+  }
   const order = waveOrder(x, y)
   if (calm) {
     fired.value = order
@@ -105,6 +117,7 @@ let sAmp = 0                                         // плавная доля 
 let last = 0
 let acc = 0
 let loop = 0
+let lastTouch = 0
 const TAIL = [[0, 1, 1.05], [0.07, 0.5, 0.8], [0.14, 0.26, 0.6], [0.21, 0.12, 0.45]]       // отступ по пути, прозрачность, радиус
 
 function collect(): void {
@@ -161,6 +174,7 @@ function run(): void {
     return
   }
   if (loop) { cancelAnimationFrame(loop); loop = 0 }
+  sim.setPointer(null)
   sAmp = props.state === 'thinking' ? 1 : 0           // замершая иконка: один кадр без импульсов
   sim.step(0, sAmp, false)
   draw()
