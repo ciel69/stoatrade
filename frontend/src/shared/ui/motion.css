@@ -21,7 +21,9 @@
 }
 .feed-leave-active {
   position: absolute;
-  transition: opacity var(--dur-fast) var(--ease-out);
+  left: 0;
+  right: 0;
+  transition: opacity 400ms var(--ease-out);        /* мысль уже почти растаяла: уходит мягко, без рывка */
 }
 .feed-leave-to {
   opacity: 0;

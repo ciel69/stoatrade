@@ -5,6 +5,7 @@ import { router } from './router'
 import { useLive } from '@/shared/api'
 import '@/shared/ui/tokens.css'
 import '@/shared/ui/motion.css'
+import '@/shared/ui/scrollbar.css'
 import './styles/global.css'
 
 createApp(App).use(createPinia()).use(router).mount('#app')
