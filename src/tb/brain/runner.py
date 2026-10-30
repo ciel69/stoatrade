@@ -25,7 +25,14 @@ from tb.llm import budget as budget_mod, schema as schema_mod, toolloop, usage a
 from tb.llm.gate import PriorityGate
 from tb.llm.types import LLMError, Req, assistant, user
 
+FLAKY_GEN_RETRIES = 2           # повторы того же профиля при разовом сбое разбора вывода модели (локальный сервер отвечает 400 «output does not match the expected format»)
 MAX_BRIEF_CHARS = 20000
+
+
+def _flaky_generation(e):
+    """Локальный сервер (LM Studio) вернул 400, потому что модель выдала вызов инструмента не в своём формате: запрос верный, помогает повтор."""
+    low = (e.msg or "").lower()
+    return e.code == "bad_request" and ("does not match the expected" in low or "failed to parse" in low)
 MAX_EVENTS = 20
 PROTECT_BLOCKED = ("submit_plan", "amend_plan", "release_plan")
 DECISION_TOOLS = {"move_stop": "stop_plan", "close": "close_plan", "partial_close": "close_plan", "cancel": "cancel_plan", "amend": "amend_plan",
@@ -582,7 +589,14 @@ class Runner(object):
             m = dict(meta, profile=pid, fallback_from=fb_from)
             try:
                 with self._gate(p.provider).slot(self._job_prio(ctx), timeout=role.timeout_s * 2):      # очередь к провайдеру по срочности: позиция раньше поиска входа
-                    r = self._call_profile(role, p, pid, text, m, meter, ctx)
+                    for attempt in range(FLAKY_GEN_RETRIES + 1):
+                        try:
+                            r = self._call_profile(role, p, pid, text, m, meter, ctx)
+                            break
+                        except LLMError as e:
+                            if attempt < FLAKY_GEN_RETRIES and _flaky_generation(e):       # разовый сбой разбора вывода модели: повтор того же профиля, а не отказ профиля
+                                continue
+                            raise
             except JobBudget:
                 return {"obj": None, "code": "JOB_BUDGET", "profile": pid, "fallback_from": fb_from}
             except LLMError as e:
