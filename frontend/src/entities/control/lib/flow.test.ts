@@ -1,9 +1,24 @@
 import { describe, expect, it } from 'vitest'
 import type { ChallengeData, CtlSnapshot } from '../model/types'
-import { acceptList, buttonKind, canStart, litNodes, regionProgress, startArgs, stepRows } from './flow'
+import { acceptList, buttonKind, canStart, launchFill, litNodes, regionProgress, startArgs, stepRows } from './flow'
 
 const s = (name: string, ok: boolean | null) => ({ name, phase: 'start', ok, code: null })
 const REGIONS = [[0, 1, 8, 9], [2, 3, 10, 11], [4, 6, 12, 14], [5, 7, 13, 15]]
+
+describe('launchFill', () => {
+  const rowsAt = (done: number) => stepRows(Array.from({ length: done }, (_, i) => s(`S${i + 1}`, true)), true)
+  it('растёт со временем внутри шага и не доходит до конца шага', () => {
+    const a = launchFill(rowsAt(4), 0)
+    const b = launchFill(rowsAt(4), 10)
+    const c = launchFill(rowsAt(4), 600)
+    expect(b).toBeGreaterThan(a)
+    expect(c).toBeLessThan(launchFill(rowsAt(5), 0))
+  })
+  it('долгие LLM-шаги (S5, S6) занимают основную часть шкалы, без прыжка в конце', () => {
+    expect(launchFill(rowsAt(4), 0)).toBeLessThan(0.3)
+    expect(launchFill(rowsAt(6), 0)).toBeGreaterThan(0.8)
+  })
+})
 
 describe('stepRows', () => {
   it('записанные шаги как есть, первый ненаписанный идёт сейчас', () => {

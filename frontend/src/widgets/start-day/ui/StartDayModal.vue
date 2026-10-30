@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { CTL_STEP_LABEL, acceptList, canStart, litNodes, regionProgress, stepRows, useControlStore, type DayMode } from '@/entities/control'
+import { CTL_STEP_LABEL, acceptList, canStart, launchFill, litNodes, regionProgress, stepRows, useControlStore, type DayMode } from '@/entities/control'
 import { BRAIN_REGIONS, UiBrainIcon, UiMeter, UiSegment, type BrainIconState } from '@/shared/ui'
 import { useNow } from '@/shared/lib'
 
@@ -64,7 +64,9 @@ const rows = computed(() => stepRows(control.ctl?.day?.steps, launching.value))
 const progress = computed(() => regionProgress(rows.value, BRAIN_REGIONS.length))
 const lit = computed(() => (launching.value ? litNodes(progress.value, BRAIN_REGIONS) : []))
 const doneCount = computed(() => rows.value.filter((r) => r.state === 'ok').length)
-const fill = computed(() => (rows.value.length ? doneCount.value / rows.value.length : 0))
+const stepSince = ref(0)                    // когда начался текущий шаг (по числу готовых шагов)
+watch([doneCount, launching], () => { stepSince.value = now.value }, { immediate: true })
+const fill = computed(() => (launching.value ? launchFill(rows.value, now.value - stepSince.value) : rows.value.length ? doneCount.value / rows.value.length : 0))
 const failed = computed(() => rows.value.some((r) => r.state === 'bad'))
 watch(doneCount, (n, o) => { if (n > o) icon.value?.fire() })
 watch(failed, (v) => { if (v) details.value = true })
@@ -262,6 +264,7 @@ function stopNow(): void {
 .spin { flex: none; width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--line2); border-top-color: var(--accent); animation: sd-spin 0.9s linear infinite; }
 @keyframes sd-spin { to { transform: rotate(360deg); } }
 .bar { margin: var(--space-1) var(--space-4) 0; }
+.bar :deep(.fill) { transition-duration: 1000ms; transition-timing-function: linear; }        /* значение приходит раз в секунду: линейный переход той же длины даёт ровный ход без рывков */
 
 /* «Подробнее»: одна строка-сводка, список раскрывается плавно (строки сетки 0fr -> 1fr) */
 .more { justify-self: center; display: inline-flex; align-items: center; gap: var(--space-2); padding: 4px 10px; background: transparent; border: 0; border-radius: 99px; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease; }

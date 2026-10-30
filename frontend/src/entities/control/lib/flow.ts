@@ -13,6 +13,23 @@ export const START_STEPS: ReadonlyArray<{ name: string; label: string; region: n
   { name: 'S9', label: 'Стартовый отчёт', region: 3 },
 ]
 
+/** Ожидаемая длительность шагов, с (S5 и S6 идут через LLM и занимают основное время): вес шага на шкале и постоянная времени его плавного хода. */
+const STEP_SECONDS: Record<string, number> = { S1: 2, S2: 4, S3: 3, S4: 3, S5: 25, S6: 18, S7: 2, S8: 2, S9: 4 }
+
+/**
+ * Доля хода запуска 0..1: готовые шаги целиком, текущий растёт по затухающей кривой от времени в нём (никогда не доходит до конца, пока ctl не отметит шаг),
+ * поэтому шкала идёт ровно и не стоит на долгих LLM-шагах, а потом не прыгает.
+ */
+export function launchFill(rows: readonly StepRow[], secondsInStep: number): number {
+  const w = (n: string): number => STEP_SECONDS[n] ?? 3
+  const total = rows.reduce((a, r) => a + w(r.name), 0)
+  if (!total) return 0
+  let done = rows.reduce((a, r) => a + (r.state === 'ok' ? w(r.name) : 0), 0)
+  const cur = rows.find((r) => r.state === 'run')
+  if (cur) done += w(cur.name) * 0.9 * (1 - Math.exp(-Math.max(0, secondsInStep) / w(cur.name)))
+  return Math.min(1, done / total)
+}
+
 /** Названия областей коры в модалке запуска (индексы как у BRAIN_REGIONS). */
 export const REGION_LABELS = ['проверки', 'сверка и досье', 'план дня', 'торговля']
 
