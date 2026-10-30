@@ -46,7 +46,12 @@ const dots = computed(() => {
 const line = computed(() => (w.value.tone === 'wait' ? (props.plan.missing[0] ?? props.plan.text) : w.value.headline))
 /** Метка уровня над полосой: центр по входу, не дальше краёв. */
 const entryLeft = computed(() => (r.value ? Math.min(90, Math.max(10, units(r.value.entry))) : 50))
-const ttlSoon = computed(() => (props.plan.ttl_at != null && props.plan.ttl_at > props.now && props.plan.ttl_at - props.now <= 900 ? props.plan.ttl_at - props.now : null))
+/** Срок плана, если он скоро кончится и не совпадает с отсчётом до свечи (иначе на карточке два одинаковых таймера). */
+const ttlSoon = computed(() => {
+  const left = props.plan.ttl_at != null ? props.plan.ttl_at - props.now : null
+  if (left == null || left <= 0 || left > 900) return null
+  return eta.value != null && Math.abs(left - eta.value) <= 20 ? null : left
+})
 const tip = computed(() => {
   const p = props.plan
   const bits = [p.setup, p.entry_text && `вход: ${p.entry_text}`, p.missing.length > 1 ? `ещё: ${p.missing.slice(1).join('; ')}` : '', p.price != null ? `цена ${price(p.price)}` : '',
