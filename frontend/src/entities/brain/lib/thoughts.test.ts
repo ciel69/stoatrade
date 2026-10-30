@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { DecisionRow } from '../model/types'
-import { FADE_S, importance, opacityAt, pickThoughts } from './thoughts'
+import { FADE_S, importance, pickThoughts } from './thoughts'
 
 let n = 0
 const row = (o: Partial<DecisionRow>): DecisionRow => ({
@@ -9,13 +9,6 @@ const row = (o: Partial<DecisionRow>): DecisionRow => ({
 })
 
 describe('thoughts', () => {
-  it('прозрачность убывает от 1 до нуля за FADE_S', () => {
-    expect(opacityAt(0)).toBe(1)
-    expect(opacityAt(30)).toBeGreaterThan(opacityAt(60))
-    expect(opacityAt(FADE_S - 1)).toBeGreaterThanOrEqual(0.1)
-    expect(opacityAt(FADE_S)).toBe(0)
-  })
-
   it('шум машинерии и пустые тексты не мысли', () => {
     expect(importance(row({ code: 'BAD_FORMAT' }))).toBe(0)
     expect(importance(row({ code: 'PROTECT_ONLY' }))).toBe(0)
@@ -39,7 +32,7 @@ describe('thoughts', () => {
       row({ t: 1070, decision: 'close', text: 'закрыл по инвалидации' }),
       row({ t: 1000 - FADE_S - 5, what: 'brain_why', text: 'давно' }),
     ]
-    const out = pickThoughts(rows, now).map((t) => t.row.text)
+    const out = pickThoughts(rows, now, 3).map((t) => t.row.text)
     expect(out).toHaveLength(3)
     expect(out).toEqual(['стоп подтянут', 'пропуск SOL', 'закрыл по инвалидации'].sort((a, b) => rows.find((r) => r.text === b)!.t - rows.find((r) => r.text === a)!.t))
     expect(out).not.toContain('давно')

@@ -1,8 +1,9 @@
 import type { DecisionRow } from '../model/types'
 
-/** Сколько секунд мысль остаётся на виду; за это время она плавно тускнеет и исчезает (в журнале решений остаётся навсегда). */
+/** Сколько секунд мысль остаётся на виду, потом быстро и плавно исчезает (в журнале решений остаётся навсегда). */
 export const FADE_S = 90
-export const MAX_THOUGHTS = 3
+/** Сколько мыслей держим в списке; всё, что не влезло в область, прокручивается. */
+export const MAX_THOUGHTS = 12
 
 /** Коды, которые описывают работу машинерии и детерминированные отказы, а не ход мысли (состояние мозга показывает его индикатор). */
 const NOISE = new Set(['BAD_FORMAT', 'PROTECT_ONLY', 'NOT_PAPER', 'IDLE_NO_PLAN', 'DOSSIER', 'STALE', 'REPEAT_DECISION', 'ROLE_BUDGET', 'JOB_BUDGET', 'LLM_DOWN', 'TIMEOUT', 'EMPTY', 'TRUNCATED', 'LOOP', 'MAX_ROUNDS',
@@ -13,8 +14,6 @@ export interface Thought {
   row: DecisionRow
   /** возраст, с */
   age: number
-  /** прозрачность 0.1..1 по возрасту: свежая яркая, старая растворяется */
-  opacity: number
 }
 
 /** Ценность мысли для владельца: действие или объяснение действия важнее разбора пропуска входа, «держу» важнее всего прочего шума. 0: не показывать. */
@@ -28,11 +27,6 @@ export function importance(r: DecisionRow): number {
   return 3                     // разбор входа: почему вошёл или пропустил (по нему видно, в ту ли сторону думает мозг)
 }
 
-export function opacityAt(age: number, fadeS = FADE_S): number {
-  if (age >= fadeS) return 0
-  return Math.max(0.1, 1 - Math.pow(Math.max(0, age) / fadeS, 1.5))
-}
-
 /** Не больше max мыслей моложе fadeS: сначала по ценности, потом по свежести; на выходе от новой к старой. Одинаковый текст не повторяется. */
 export function pickThoughts(rows: DecisionRow[], nowS: number, max = MAX_THOUGHTS, fadeS = FADE_S): Thought[] {
   const seen = new Set<string>()
@@ -42,7 +36,7 @@ export function pickThoughts(rows: DecisionRow[], nowS: number, max = MAX_THOUGH
     const imp = importance(r)
     if (!imp || age >= fadeS || age < -5 || seen.has(r.text as string)) continue
     seen.add(r.text as string)
-    live.push({ row: r, age: Math.max(0, age), opacity: opacityAt(age, fadeS) })
+    live.push({ row: r, age: Math.max(0, age) })
   }
   live.sort((a, b) => importance(b.row) - importance(a.row) || a.age - b.age)
   return live.slice(0, max).sort((a, b) => a.age - b.age)

@@ -43,8 +43,8 @@ const fell = computed(() => brain.roles.filter((r) => r.last?.fallback_from).len
     <p v-if="snap?.protect_reason" class="alert">{{ snap.protect_reason }}</p>
     <p v-else-if="fell" class="alert soft">отвечает запасная модель у ролей: {{ fell }}</p>
 
-    <!-- область под три мысли фиксированной высоты: новые мысли не раздвигают панель -->
-    <div class="sky" :style="{ '--cloud-play': paused ? 'paused' : 'running' }" @pointerenter="paused = true" @pointerleave="paused = false" @focusin="paused = true" @focusout="paused = false">
+    <!-- область под мысли фиксированной высоты: новые не раздвигают панель, лишние прокручиваются -->
+    <div class="sky" @pointerenter="paused = true" @pointerleave="paused = false" @focusin="paused = true" @focusout="paused = false">
       <TransitionGroup name="feed" tag="ul" class="cloud" aria-live="polite">
         <ThoughtBubble v-for="t in thoughts" :key="t.row.seq" :thought="t" :now="now" />
       </TransitionGroup>
@@ -70,7 +70,7 @@ const fell = computed(() => brain.roles.filter((r) => r.last?.fallback_from).len
 .st-idle { color: var(--pos); }
 .alert { margin: 0; padding: var(--space-2) var(--space-3); border: 1px solid var(--warn); border-radius: var(--radius-sm); color: var(--warn); font-size: 13px; }
 .alert.soft { border-color: var(--line2); color: var(--muted); }
-.sky { --thought-h: 76px; position: relative; height: calc(var(--thought-h) * 3 + var(--space-2) * 2); }
+.sky { --thought-h: 76px; position: relative; height: calc(var(--thought-h) * 3 + var(--space-2) * 2); overflow-y: auto; scrollbar-gutter: stable; }
 .cloud { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); position: relative; }
 .quiet { position: absolute; inset: 0; margin: 0; display: grid; place-items: center; color: var(--muted); font-size: 13px; }
 .foot { margin-top: auto; padding-top: var(--space-2); border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
