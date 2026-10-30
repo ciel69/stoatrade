@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { BRAIN_NODES, nearestNode, waveOrder } from './brain-regions'
+import { BrainSim, LINKS, PULSE_POOL } from './brain-sim'
 /**
  * Нарисованный мозг (вид спереди): два полушария, борозды коры, 16 нейронов и связи между ними, включая мостик между полушариями. Один SVG, одна толщина линии.
  * Анимация (навык animate), назначение: показать состояние.
@@ -20,11 +21,8 @@ const props = withDefaults(defineProps<{ state?: BrainIconState; size?: number; 
 const emit = defineEmits<{ node: [index: number] }>()
 
 const nodes = BRAIN_NODES
-const pairs: Array<[number, number]> = [[0, 1], [1, 3], [2, 3], [3, 5], [4, 6], [6, 5], [5, 7], [2, 1]]
-const links: Array<[number, number]> = [...pairs, ...pairs.map(([a, b]): [number, number] => [a + 8, b + 8]), [1, 9], [3, 11], [5, 13], [7, 15]]
-const d = (a: number, b: number) => `M${nodes[a][0]} ${nodes[a][1]}L${nodes[b][0]} ${nodes[b][1]}`
-const delays = [0, 380, 140, 620, 250, 500, 90, 700, 310, 60, 560, 200, 430, 680, 160, 520]       // порядок вспышек: не по кругу, как у живой сети
-const idleTwinkle = new Set([2, 7, 10, 13])
+const links = LINKS
+const pool = Array.from({ length: PULSE_POOL * 4 }, (_, i) => i)      // у каждого импульса голова и три точки хвоста
 
 /*
  * Интерактив (interactive): курсор над нейроном сообщает наверх его номер (область коры), lit подсвечивает нейроны области роли, fire() запускает волну от места нажатия.
@@ -94,10 +92,87 @@ function fire(ev?: MouseEvent): void {
   })
 }
 defineExpose({ fire })
+
+/*
+ * Живая сеть (brain-sim.ts): нейроны блуждают, связи изгибаются, образуются и растворяются, по ним бегут импульсы с хвостом, нейрон по прибытии вспыхивает и передаёт сигнал дальше.
+ * Модель считается кадрами (около 30 в секунду, только пока иконка живая), положения пишутся прямо в атрибуты SVG, а не через реактивность. Для замершего мозга
+ * (защита, нет связи, reduce motion) рисуется один кадр.
+ */
+const sim = new BrainSim(7 + Math.floor(Math.random() * 90))
+const kk = props.crisp ? 0.8 : 1                    // размер голов импульсов и вспышек
+let els: { wire: SVGPathElement[]; hl: SVGPathElement[]; node: SVGCircleElement[]; flash: SVGCircleElement[]; halo: SVGCircleElement[]; imp: SVGCircleElement[] } | null = null
+let sAmp = 0                                         // плавная доля «думает» для модели
+let last = 0
+let acc = 0
+let loop = 0
+const TAIL = [[0, 1, 1.05], [0.07, 0.5, 0.8], [0.14, 0.26, 0.6], [0.21, 0.12, 0.45]]       // отступ по пути, прозрачность, радиус
+
+function collect(): void {
+  const q = <T extends Element>(c: string): T[] => Array.from(svg.value!.querySelectorAll<T>(c))
+  els = { wire: q('.wire'), hl: q('.wire-hl'), node: q('.node'), flash: q('.flash'), halo: q('.halo'), imp: q('.imp circle') }
+}
+const num = (v: number): string => v.toFixed(2)
+function draw(): void {
+  if (!els) return
+  const e = els
+  const wireBase = 0.1 + 0.2 * sAmp
+  LINKS.forEach(([a, b], i) => {
+    const dd = `M${num(sim.x[a])} ${num(sim.y[a])}Q${num(sim.qx[i])} ${num(sim.qy[i])} ${num(sim.x[b])} ${num(sim.y[b])}`
+    e.wire[i].setAttribute('d', dd)
+    e.wire[i].style.opacity = String(Math.min(1, (wireBase + 0.55 * sim.glow[i]) * sim.str[i]))
+    if (hasLit.value) e.hl[i].setAttribute('d', dd)
+  })
+  for (let i = 0; i < nodes.length; i++) {
+    const f = sim.fire[i]
+    const x = num(sim.x[i]); const y = num(sim.y[i])
+    for (const c of [e.node[i], e.flash[i], e.halo[i]]) { c.setAttribute('cx', x); c.setAttribute('cy', y) }
+    e.node[i].style.opacity = String(0.38 + 0.62 * f)
+    e.flash[i].setAttribute('r', num((1.7 + 1.5 * f) * kk))
+    e.flash[i].style.opacity = String(0.8 * f * f)
+  }
+  const vis = 0.55 + 0.45 * sAmp
+  for (let p = 0; p < PULSE_POOL; p++) {
+    const pl = sim.pulses[p]
+    for (let k = 0; k < 4; k++) {
+      const c = e.imp[p * 4 + k]
+      if (!pl) { c.style.opacity = '0'; continue }
+      const [px, py] = sim.point(pl, TAIL[k][0])
+      c.setAttribute('cx', num(px)); c.setAttribute('cy', num(py)); c.setAttribute('r', num(TAIL[k][2] * kk))
+      c.style.opacity = String(TAIL[k][1] * pl.power * vis)
+    }
+  }
+}
+function frame(ts: number): void {
+  loop = requestAnimationFrame(frame)
+  const dt = Math.min(0.1, (ts - last) / 1000)
+  last = ts
+  acc += dt
+  if (acc < 0.028) return
+  sAmp += ((props.state === 'thinking' ? 1 : 0) - sAmp) * (1 - Math.exp(-acc / 0.25))
+  sim.step(acc, sAmp, true)
+  acc = 0
+  draw()
+}
+function run(): void {
+  if (!els) return
+  const alive = !calm && (props.state === 'idle' || props.state === 'thinking')
+  if (alive) {
+    if (!loop) { last = performance.now(); acc = 0; loop = requestAnimationFrame(frame) }
+    return
+  }
+  if (loop) { cancelAnimationFrame(loop); loop = 0 }
+  sAmp = props.state === 'thinking' ? 1 : 0           // замершая иконка: один кадр без импульсов
+  sim.step(0, sAmp, false)
+  draw()
+}
+onMounted(() => { collect(); run() })
+watch(() => props.state, run)
+watch(hasLit, () => draw())
 onUnmounted(() => {
   timers.forEach(clearTimeout)
   clearTimeout(fxTimer)
   cancelAnimationFrame(raf)
+  cancelAnimationFrame(loop)
 })
 </script>
 
@@ -114,15 +189,15 @@ onUnmounted(() => {
         <path class="fold" d="M51 16C46 16 43 19 43 24M43 24C39 24 36 27 36 31M55 32C50 31 46 33 45 38M49 47C45 45 41 46 39 50M52 23C49 24 48 27 49 30M42 42C39 41 37 43 37 46M46 12C44 13 42 15 42 18" />
       </g>
       <g class="net">
-        <path v-for="(l, i) in links" :key="`w${i}`" class="wire" :d="d(l[0], l[1])" />
-        <path v-for="(l, i) in links" :key="`s${i}`" class="spark" :style="{ '--k': i }" :d="d(l[0], l[1])" pathLength="12" />
+        <path v-for="(_l, i) in links" :key="`w${i}`" class="wire" />
+        <g class="imp" fill="currentColor" stroke="none"><circle v-for="i in pool" :key="i" r="1" /></g>
       </g>
       <g class="nodes">
-        <circle v-for="(n, i) in nodes" :key="i" class="node" :class="{ tw: idleTwinkle.has(i) }" :style="{ '--d': delays[i] + 'ms', '--i': i }" :cx="n[0]" :cy="n[1]" r="1.7" fill="currentColor" stroke="none" />
-        <circle v-for="(n, i) in nodes" :key="`f${i}`" class="flash" :style="{ '--d': delays[i] + 'ms' }" :cx="n[0]" :cy="n[1]" r="1.7" fill="currentColor" stroke="none" />
+        <circle v-for="(n, i) in nodes" :key="i" class="node" :cx="n[0]" :cy="n[1]" r="1.7" fill="currentColor" stroke="none" />
+        <circle v-for="(n, i) in nodes" :key="`f${i}`" class="flash" :cx="n[0]" :cy="n[1]" r="1.7" fill="currentColor" stroke="none" />
       </g>
       <g class="hl">
-        <path v-for="(l, i) in links" :key="`h${i}`" class="wire-hl" :class="{ on: hlLink[i] }" :d="d(l[0], l[1])" />
+        <path v-for="(_l, i) in links" :key="`h${i}`" class="wire-hl" :class="{ on: hlLink[i] }" />
         <circle v-for="(n, i) in nodes" :key="`c${i}`" class="halo" :class="{ on: isOn(i) }" :cx="n[0]" :cy="n[1]" r="2.5" stroke="none" />
       </g>
     </g>
@@ -147,7 +222,6 @@ onUnmounted(() => {
 .crisp .cortex path { vector-effect: non-scaling-stroke; stroke-width: 1.6px; }
 .crisp .cut { vector-effect: non-scaling-stroke; stroke-width: 2px; }
 .crisp .wire { stroke-width: 0.5; }
-.crisp .spark { stroke-width: 0.9; }
 .crisp .wire-hl { stroke-width: 0.9; }
 .crisp .flash { filter: none; }
 .crisp .node { r: 1.3px; }
@@ -179,26 +253,18 @@ onUnmounted(() => {
 
 /* ждёт (и пока думает, чтобы фон не обрывался): едва заметное дыхание и редкие мерцания */
 .s-idle .body, .s-thinking .body { transform-origin: 32px 32px; animation: brain-breathe 7s var(--ease-in-out) infinite; }
-.s-idle .node.tw, .s-thinking .node.tw { animation: brain-twinkle 6s var(--ease-in-out) infinite; animation-delay: calc(var(--i) * 410ms); }
 
 /* думает: поверх ожидания нейроны вспыхивают волной со свечением, по связям бегут искры, мозг дышит чаще. Циклы идут, пока .fx, размах умножен на --amp */
-.wire { opacity: calc(0.12 + 0.22 * var(--amp)); stroke-width: 1; }
-.spark { opacity: calc(0.95 * var(--amp)); stroke-width: 1.8; stroke-dasharray: 2 10; }
+.wire { stroke-width: 1; opacity: 0.2; }
+.imp circle { opacity: 0; pointer-events: none; }
 .flash { opacity: 0; filter: drop-shadow(0 0 2.4px currentColor); pointer-events: none; }
 .pulse { transform-origin: 32px 32px; }
 .fx .pulse { animation: brain-pulse 2.6s var(--ease-in-out) infinite; }
-.fx .spark { animation: brain-spark 1.1s linear infinite; animation-delay: calc(var(--k) * 90ms); }
-.fx .flash { animation: brain-fire 1.3s var(--ease-in-out) infinite; animation-delay: var(--d); }
 
 @keyframes brain-breathe { 50% { transform: scale(1.012); } }
 @keyframes brain-pulse { 50% { transform: scale(calc(1 + 0.035 * var(--amp))); } }
-@keyframes brain-twinkle { 0%, 70%, 100% { opacity: 0.38; } 85% { opacity: 1; } }
-@keyframes brain-fire { 0%, 100% { opacity: 0; } 40% { opacity: var(--amp); } }
-@keyframes brain-spark { to { stroke-dashoffset: -12; } }
 
 @media (prefers-reduced-motion: reduce) {
-  .s-idle .body, .s-thinking .body, .s-idle .node.tw, .s-thinking .node.tw, .fx .pulse, .fx .spark, .fx .flash { animation: none; }
-  .flash { opacity: calc(0.8 * var(--amp)); }
-  .spark { opacity: 0; }
+  .s-idle .body, .s-thinking .body, .fx .pulse { animation: none; }
 }
 </style>
