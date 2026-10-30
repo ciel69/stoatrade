@@ -2,13 +2,16 @@
 import { AppHeader } from '@/widgets/app-header'
 import { AppNav } from '@/widgets/app-nav'
 import { EventCloud } from '@/widgets/event-cloud'
+import { StartDayButton } from '@/widgets/start-day'
 </script>
 
 <template>
   <div class="shell">
     <AppNav />
     <div class="col">
-      <AppHeader />
+      <AppHeader>
+        <template #actions><StartDayButton /></template>
+      </AppHeader>
       <RouterView />
     </div>
   </div>
