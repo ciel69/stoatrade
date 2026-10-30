@@ -155,14 +155,14 @@ class TestStep(RCase):
 
     def test_classifies_batch_and_writes_digest(self):
         items = self.fill(3)
-        self.mk(fn=lambda refs: reply(refs, syms=["ETH", "NOPE"], type="hack", imp=3, dir="down"))
+        self.mk(fn=lambda refs: reply(refs, syms=["ETH", "NOPE"], type="regulation", imp=3, dir="down"))
         self.assertEqual(self.rd.step(self.now), "ok")
         d = self.digest()
         self.assertEqual(d["schema"], "tb.digest/1")
         self.assertEqual(store.check_facts(d), [])
         self.assertEqual(sorted(d["items"]), sorted(i["ref"] for i in items))
         e = d["items"][items[0]["ref"]]
-        self.assertEqual((e["st"], e["type"], e["imp"], e["dir"], e["syms"], e["src"]), ("ok", "hack", 3, "down", ["ETH"], "coindesk"))
+        self.assertEqual((e["st"], e["type"], e["imp"], e["dir"], e["syms"], e["src"]), ("ok", "regulation", 3, "down", ["ETH"], "coindesk"))
         self.assertFalse(d["stale"])
         self.assertEqual(d["reader"]["ok_n"], 3)
         self.assertEqual(d["reader"]["pending"], 0)
@@ -366,6 +366,17 @@ class TestPolicy(RCase):
         iitems.ItemStore(self.root)._merge_seen({ref: {"theblock.co"}})
         self.rd.step(self.now + 1)
         self.assertEqual(self.digest()["items"][ref]["imp"], 5)
+
+    def test_hack_label_without_title_evidence_is_background(self):
+        it = add_item(self.root, "Bitcoin slides as traders brace for volatility this week")
+        self.mk(fn=lambda refs: reply(refs, type="hack", imp=3, dir="down", syms=["BTC"]))
+        self.rd.step(self.now)
+        e = self.digest()["items"][it["ref"]]
+        self.assertEqual((e["imp"], e["ir"]), (2, 3))              # метка модели «взлом» без подтверждения заголовком не закрывает вход
+
+    def test_hack_label_confirmed_by_title_keeps_imp3(self):
+        e = self.run_one(type="hack", imp=3, dir="down")           # в заголовке exploit/drains
+        self.assertEqual(e["imp"], 3)
 
     def test_rumor_capped_and_direction_unknown(self):
         e = self.run_one(type="rumor", imp=4, dir="up")

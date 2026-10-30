@@ -792,6 +792,11 @@ def _blackout_mode(b, c):
     """market.blackout.mode = warn|block: правило окна новостей, чтобы модель знала режим. warn только при режиме исполнителя paper и paper.blackout_mode=warn
     (tb.core.blackout.policy); live/testnet/нет данных = block."""
     mk = b.get("market")
+    if isinstance(mk, dict):                  # news_mode: как трактовать новость важностью 3 (paper: предупреждение, остальное: блок); окно календаря ниже
+        try:
+            mk["news_mode"] = blackout.policy(c.root, common.ident(c.health["data"].get("mode")))["mode"]
+        except Exception:
+            mk["news_mode"] = "block"
     bo = mk.get("blackout") if isinstance(mk, dict) else None
     if isinstance(bo, dict):
         try:

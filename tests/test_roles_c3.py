@@ -35,11 +35,11 @@ class RolesAndPrompts(unittest.TestCase):
     def test_versions_and_first_line(self):
         for rid in NEW_ROLES:
             r = self.reg.get(rid)
-            ver = {"morning_analyst": 2, "position_manager": 3}.get(rid, 1)       # v2: правило paper-блэкаута (blackout_mode=warn); position_manager v3: реакции на STALLED / FLOW_TURN сторожа
+            ver = {"morning_analyst": 3, "position_manager": 3}.get(rid, 1)       # v2: правило paper-блэкаута (blackout_mode=warn); position_manager v3: реакции на STALLED / FLOW_TURN сторожа
             self.assertEqual(r.version, ver, rid)
             self.assertTrue(r.prompt.startswith("# prompt v%d %s" % (ver, rid)), rid)
         self.assertEqual(self.reg.get("news_reader").version, 0)            # роль WP13b не тронута
-        self.assertTrue(roles_runtime.read_common(ROOT).startswith("# common v3"))
+        self.assertTrue(roles_runtime.read_common(ROOT).startswith("# common v4"))
 
     def test_prefix_stable_between_loads_and_calls(self):
         other = roles_runtime.load(ROOT)

@@ -17,6 +17,7 @@ import time
 
 from tb import paths
 from tb.intel import digest as dg
+from tb.intel import flash
 from tb.intel import items as iitems
 from tb.intel import store
 from tb.llm import schema as lschema
@@ -216,12 +217,22 @@ class Reader(object):
         return None, codes
 
     # ---- политика после читателя (уровень 3)
+    @staticmethod
+    def _hack_seen(row):
+        """Взлом подтверждён детерминированным разбором заголовка (flash.classify), а не только ярлыком модели."""
+        if not isinstance(row, dict):
+            return False
+        c = flash.classify(row.get("title"), row.get("snip"))
+        return bool(c and c[0] == "hack")
+
     def _effective(self, e, row):
         imp = e["ir"]
         if e.get("st") != "ok":
             return min(imp, 1)
         if e["type"] == "rumor":
             imp = min(imp, 2)
+        if e["type"] == "hack" and imp >= 3 and not self._hack_seen(row):      # маленькая модель часто метит падение цены словом «взлом»: без подтверждения правилами заголовка это фон
+            imp = 2
         if imp >= 4:
             official = e.get("src") in self.rc["official_srcs"]
             confirmed = bool(row and row.get("seen"))
