@@ -138,12 +138,22 @@ def _num(x):
     return x if isinstance(x, (int, float)) and not isinstance(x, bool) and x == x else None
 
 
+def _first(*xs):
+    """Первое число из списка (None, если чисел нет)."""
+    for x in xs:
+        n = _num(x)
+        if n is not None:
+            return n
+    return None
+
+
 def _position(vp, trade):
     tg = [{"price": _num(t.get("price")), "state": t.get("state")} for t in (vp.get("targets") or []) if _num(t.get("price")) is not None]
     calc = (trade or {}).get("calc") or {}
     return {"plan": vp.get("plan"), "sym": vp.get("sym"), "side": vp.get("side"), "mode": vp.get("mode"), "lev": _num(vp.get("lev")), "qty": _num(vp.get("qty")),
             "avg": _num(vp.get("avg")), "price": _num(vp.get("price")), "stale": bool(vp.get("price_stale")), "stop": _num(vp.get("cur_stop")), "stop0": _num(vp.get("initial_stop")),
-            "targets": tg, "r": _num(vp.get("r_now")), "upnl": _num(vp.get("upnl")), "risk": _num((trade or {}).get("risk_usdt")), "pnl_at_sl": _num(calc.get("pnl_at_sl")),
+            "targets": tg, "r": _first(calc.get("r_now"), vp.get("r_now")), "upnl": _first(calc.get("pnl"), vp.get("upnl")), "pnl_pct": _num(calc.get("pnl_pct_margin")),       # результат считает журнал сделок, как на старом дашборде: после комиссии входа, к реальной марже
+            "risk": _num((trade or {}).get("risk_usdt")), "pnl_at_sl": _num(calc.get("pnl_at_sl")),
             "held_s": _num(vp.get("held_s")), "hold_left_s": _num(vp.get("hold_left_s")), "liq": _num(vp.get("liq"))}
 
 
@@ -152,7 +162,7 @@ def _trade_position(t):
     c = t.get("calc") or {}
     return {"plan": t.get("plan_id"), "sym": t.get("sym"), "side": t.get("side"), "mode": t.get("mode"), "lev": _num(t.get("lev")), "qty": None, "avg": _num(t.get("entry")),
             "price": _num(c.get("price")), "stale": bool(c.get("price_stale")), "stop": _num(t.get("sl")), "stop0": _num(t.get("sl")), "targets": [{"price": _num(t.get("tp")), "state": "resting"}] if _num(t.get("tp")) else [],
-            "r": _num(c.get("r_now")), "upnl": _num(c.get("pnl")), "risk": _num(t.get("risk_usdt")), "pnl_at_sl": _num(c.get("pnl_at_sl")), "held_s": _num(t.get("held_s")), "hold_left_s": None, "liq": _num(c.get("liq_est"))}
+            "r": _num(c.get("r_now")), "upnl": _num(c.get("pnl")), "pnl_pct": _num(c.get("pnl_pct_margin")), "risk": _num(t.get("risk_usdt")), "pnl_at_sl": _num(c.get("pnl_at_sl")), "held_s": _num(t.get("held_s")), "hold_left_s": None, "liq": _num(c.get("liq_est"))}
 
 
 CURVE_POINTS = 300

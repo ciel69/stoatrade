@@ -4,7 +4,7 @@ import { route } from './route'
 
 const base: Position = {
   plan: 'PL-1', sym: 'ETH', side: 'short', mode: 'paper', lev: 10, qty: 1, avg: 100, price: 98, stale: false, stop: 104, stop0: 104,
-  targets: [{ price: 96, state: 'resting' }, { price: 92, state: 'resting' }], r: 0.5, upnl: 1, risk: 1, pnl_at_sl: -1, held_s: 10, hold_left_s: null, liq: null,
+  targets: [{ price: 96, state: 'resting' }, { price: 92, state: 'resting' }], r: 0.5, upnl: 1, pnl_pct: 2, risk: 1, pnl_at_sl: -1, held_s: 10, hold_left_s: null, liq: null,
 }
 
 describe('route', () => {

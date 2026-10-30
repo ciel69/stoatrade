@@ -23,7 +23,8 @@ const units = (x: number) => x * 100
 /** Смещение цены от входа в процентах в пользу позиции (минус: против неё). */
 const pct = (p: number | null | undefined) => (p != null && props.position.avg ? (sign.value * (p - props.position.avg) / props.position.avg) * 100 : null)
 const movePct = computed(() => pct(props.position.price))
-const roiPct = computed(() => (movePct.value != null && props.position.lev ? movePct.value * props.position.lev : null))
+/** К марже: из журнала сделок (после комиссии входа, как на старом дашборде); если журнала нет, грубо сдвиг цены × плечо. */
+const roiPct = computed(() => props.position.pnl_pct ?? (movePct.value != null && props.position.lev ? movePct.value * props.position.lev : null))
 const stopPct = computed(() => pct(props.position.stop))
 const takePct = computed(() => pct(farTake.value))
 </script>
@@ -35,7 +36,7 @@ const takePct = computed(() => pct(farTake.value))
       <UiChip>{{ position.side === 'long' ? 'лонг' : 'шорт' }}{{ position.lev ? ' ' + position.lev + '×' : '' }}</UiChip>
       <UiChip v-if="position.stale" tone="warn">цена устарела</UiChip>
       <span class="pnl" :class="tone">{{ signed(position.upnl) }} <small>USDT</small></span>
-      <span class="r" :class="tone" :title="'Доходность на маржу с учётом плеча; цена от входа: ' + signed(movePct) + '%'">{{ signed(roiPct ?? movePct, 1) }}%</span>
+      <span class="r" :class="tone" :title="'Результат к марже с учётом плеча и комиссии входа; цена от входа: ' + signed(movePct) + '%'">{{ signed(roiPct ?? movePct, 1) }}%</span>
     </div>
     <p class="sub">вход {{ price(position.avg) }} · сейчас {{ price(position.price) }} ({{ signed(movePct) }}%) · {{ signed(position.r, 2) }}R</p>
 

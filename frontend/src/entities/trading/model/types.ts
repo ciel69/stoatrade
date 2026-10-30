@@ -49,6 +49,8 @@ export interface Position {
   targets: Target[]
   r: number | null
   upnl: number | null
+  /** результат к марже, %: после комиссии входа, как в журнале сделок */
+  pnl_pct: number | null
   risk: number | null
   pnl_at_sl: number | null
   held_s: number | null
