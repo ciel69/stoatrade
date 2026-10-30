@@ -11,8 +11,6 @@ const MODE_OPTIONS: ReadonlyArray<{ value: TradingMode; label: string }> = [
   { value: 'all', label: 'все' },
 ]
 
-const TABS = [{ to: '/', label: 'Обзор' }, { to: '/decisions', label: 'Решения' }, { to: '/trades', label: 'Сделки' }] as const
-
 const trading = useTradingStore()
 const { link } = useLive()
 onMounted(() => trading.start())
@@ -26,10 +24,6 @@ const platform = computed(() => trading.snapshot?.platform ?? null)
 
 <template>
   <header class="bar">
-    <h1 class="logo">open-trader</h1>
-    <nav class="tabs" aria-label="Разделы">
-      <RouterLink v-for="t in TABS" :key="t.to" :to="t.to" class="tab">{{ t.label }}</RouterLink>
-    </nav>
     <UiSegment :model-value="trading.mode" :options="MODE_OPTIONS" label="Режим" @update:model-value="trading.setMode" />
     <span v-if="platform" class="plat" :class="{ off: platform.state !== 'running' }">{{ platform.state === 'running' ? `платформа: ${platform.mode}` : 'платформа остановлена' }}</span>
     <span class="grow" />
@@ -40,12 +34,8 @@ const platform = computed(() => trading.snapshot?.platform ?? null)
 
 <style scoped>
 .bar { display: flex; align-items: center; gap: var(--space-4); padding: var(--space-3) var(--space-5); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
-.logo { margin: 0; font-size: 17px; letter-spacing: -0.02em; }
-.tabs { display: flex; gap: var(--space-1); }
-.tab { padding: 5px 12px; border-radius: var(--radius-sm); color: var(--muted); font-size: 13px; text-decoration: none; transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease; }
-.tab.router-link-exact-active { background: var(--accent-bg); color: var(--accent); }
-@media (hover: hover) and (pointer: fine) {
-  .tab:not(.router-link-exact-active):hover { color: var(--text); }
+@media (max-width: 720px) {
+  .bar { padding-left: 58px; }        /* место под кнопку боковой колонки */
 }
 .plat { font-size: 12px; color: var(--muted); }
 .plat.off { color: var(--warn); }
