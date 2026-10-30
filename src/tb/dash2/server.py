@@ -3,7 +3,8 @@
 Один порт на 127.0.0.1: статика собранного фронта (`frontend/dist`, сборка `npm ci && npm run build` в `frontend/`) и WebSocket `/ws`. Старый дашборд (`./tb dash`, 8766) не затрагивается.
 Протокол (docs/FRONTEND_PLAN.md, раздел 4): сообщение {"topic","seq","ts","data"}; при подключении клиент получает `hello` и снимок каждой темы, дальше тема приходит только когда её содержимое
 изменилось (один общий цикл раз в TICK_S секунд на всех клиентов, а не опрос от каждого). Раз в HEARTBEAT_S секунд тема `link` (клиент по ней видит, что связь жива). Клиент -> сервер: {"op":"ping"} -> {"topic":"pong"}.
-Опроса нет: при обрыве клиент переподключается сам и получает свежие снимки. Команды управления сюда не приходят (только чтение; POST с CSRF остаётся за ctl старого сервера до переноса).
+Опроса нет: при обрыве клиент переподключается сам и получает свежие снимки. Команды управления (только старт и мягкая остановка дня в paper|testnet|observe) идут тем же сокетом
+операцией {"op":"ctl",...} через мост `tb.dash2.ctlbridge` (тот же конвейер ctl, CSRF соединения из hello, белый список, лимит частоты, аудит); live и всё опасное остаются за старым дашбордом.
 Защита: слушаем только 127.0.0.1, проверка Host и Origin, не больше MAX_CLIENTS сокетов, лимит размера входящего сообщения, никаких полей вне белых списков тем.
 """
 import argparse
@@ -16,7 +17,7 @@ import time
 from http import HTTPStatus
 
 from tb import paths
-from tb.dash2 import topics
+from tb.dash2 import ctlbridge, topics
 
 HOST = "127.0.0.1"
 DEFAULT_PORT = 8767
@@ -51,6 +52,11 @@ def safe_file(base, rel):
     return p
 
 
+def ctlweb_text(code):
+    from tb.dash import ctlweb
+    return ctlweb.ERR_TEXT.get(code, "ошибка")
+
+
 class Hub(object):
     """Состояние рассылки. Темы двух видов: общие (brain, events) и зависящие от режима клиента (home): последние строятся для каждого режима, который сейчас смотрит
     хотя бы один клиент, и уходят только тем клиентам, у кого этот режим выбран. Тяжёлые темы (home собирается около секунды) обновляются раз в HEAVY_S."""
@@ -62,6 +68,7 @@ class Hub(object):
         self.link_seq = 0
         self._heavy_at = {}             # (тема, режим) -> когда собирали
         self.stats = {"connects": 0, "messages": 0, "changes": 0}
+        self.bridge = ctlbridge.CtlBridge(root, clock=clock)
         topics._STATE_TTL = max(topics._STATE_TTL, 1.5)       # home и trades за один проход собираются из одного состояния
 
     # ---- сообщения
@@ -116,9 +123,9 @@ class Hub(object):
         broadcast(list(self.clients), msg)
         self.stats["messages"] += len(self.clients)
 
-    def snapshot_messages(self, mode):
+    def snapshot_messages(self, mode, ctl=None):
         out = [self._msg("hello", 0, {"topics": sorted(list(topics.TOPICS) + list(topics.MODE_TOPICS)), "tick_s": self.tick_s, "heartbeat_s": self.heartbeat_s,
-                                       "server_ts": round(self.clock(), 3), "mode": mode, "modes": list(topics.MODES)})]
+                                       "server_ts": round(self.clock(), 3), "mode": mode, "modes": list(topics.MODES), "ctl": ctl or {"enabled": False}})]
         out += [self.state[(n, None)]["msg"] for n in sorted(topics.TOPICS) if (n, None) in self.state]
         out += [self.state[(n, mode)]["msg"] for n in sorted(topics.MODE_TOPICS) if (n, mode) in self.state]
         return out
@@ -145,7 +152,7 @@ class Hub(object):
                     if (n, mode) not in self.state:
                         await self._rebuild(n, mode, force=True)
             sent = {k: v["seq"] for k, v in self.state.items()}
-            for m in self.snapshot_messages(mode):
+            for m in self.snapshot_messages(mode, self.bridge.open(ws)):
                 await ws.send(m)
             self.clients[ws] = mode                  # в рассылку только после снимка: иначе изменение темы обогнало бы hello
             for key in sorted(self.state, key=str):  # тема изменилась, пока шёл снимок: досылаем текущую
@@ -162,10 +169,43 @@ class Hub(object):
                     await ws.send(self._msg("pong", 0, {}))
                 elif m.get("op") == "mode" and m.get("mode") in topics.MODES:
                     await self.set_mode(ws, m["mode"])
+                elif m.get("op") == "ctl":
+                    await self.ctl_op(ws, m)
         except ConnectionClosed:                 # клиент закрыл вкладку или оборвал связь: не ошибка сервера
             pass
         finally:
             self.clients.pop(ws, None)
+            self.bridge.close(ws)
+
+    async def ctl_op(self, ws, m):
+        """Команда управления: проверки и постановка в очередь ctl в потоке (challenge ждёт ctl), ответ `ctl_result`; итог исполнения досылается отдельным сообщением."""
+        from websockets.exceptions import ConnectionClosed
+        res = await asyncio.to_thread(self.bridge.handle, ws, m)
+        accepted = res.pop("accepted_id", None)
+        try:
+            await ws.send(self._msg("ctl_result", 0, res))
+            if accepted:
+                asyncio.ensure_future(self._follow(ws, res["id"], accepted))
+        except ConnectionClosed:
+            pass
+
+    async def _follow(self, ws, rid, cmd_id):
+        """Ждёт итог команды в outbox ctl (файл, без участия клиента) и отправляет его тому же соединению."""
+        from websockets.exceptions import ConnectionClosed
+        end = self.clock() + ctlbridge.FOLLOW_S
+        final = None
+        while self.clock() < end and ws in self.clients:
+            final = await asyncio.to_thread(self.bridge.result_of, cmd_id)
+            if final:
+                break
+            await asyncio.sleep(ctlbridge.FOLLOW_POLL_S)
+        if final is None:
+            final = {"id": cmd_id, "status": "failed", "code": "E_CTL_DOWN", "msg": ctlweb_text("E_CTL_DOWN"), "data": None}
+        final["rid"] = rid
+        try:
+            await ws.send(self._msg("ctl_final", 0, final))
+        except ConnectionClosed:
+            pass
 
     async def set_mode(self, ws, mode):
         """Клиент переключил режим: свежая сборка home для него (если ещё не строилась) и снимок."""

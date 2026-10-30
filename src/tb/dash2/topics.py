@@ -339,7 +339,36 @@ def events(root=None, now=None):
     return {"last_seq": out[0]["seq"] if out else 0, "items": out}
 
 
-TOPICS = {"brain": brain, "events": events}
+def ctl(root=None, now=None):
+    """Состояние управления для кнопки старта дня и модалки: платформа, шаг запуска, проверки H1-H8 (справка), KILL, уровень риска, шаги текущего дня.
+    Без времён и возрастов (иначе тема менялась бы каждую секунду): `alive` и `stale` меняются только при смене состояния ctl."""
+    from tb.control import auth, client
+    now = time.time() if now is None else now
+    st = client.read_status(root, now, float(client.load_cfg(root).get("status_stale_s", 15)))
+    plat = st.get("platform") if isinstance(st.get("platform"), dict) else {}
+    kill = st.get("kill") if isinstance(st.get("kill"), dict) else None
+    risk = st.get("risk") if isinstance(st.get("risk"), dict) else {}
+    step = st.get("step") if isinstance(st.get("step"), dict) else None
+    banner = st.get("banner") if isinstance(st.get("banner"), dict) else None
+    day = None
+    try:
+        from tb.lifecycle import days
+        d = days.current(root)
+        if d:
+            day = {"day_id": d.get("day_id"), "state": d.get("state"), "mode": d.get("mode"),
+                   "steps": [{"name": s.get("name"), "phase": s.get("phase"), "ok": s.get("ok"), "code": s.get("code")} for s in (d.get("steps") or []) if isinstance(s, dict)][:24]}
+    except Exception:
+        day = None
+    return {"alive": bool((st.get("ctl") or {}).get("alive")) and not st.get("stale"), "configured": bool(auth.status().get("key")),
+            "platform": {k: plat.get(k) for k in ("state", "mode", "session", "health", "day_id", "trading", "observe")}, "step": ({k: step.get(k) for k in ("name", "i", "n")} if step else None),
+            "kill": ({"flatten": bool(kill.get("flatten")), "reason": str(kill.get("reason") or "")[:80]} if kill and kill.get("active") else None),
+            "risk": {"level": risk.get("level"), "name": risk.get("name")}, "busy": bool(st.get("pending")),
+            "checks": [{"id": c.get("id"), "name": str(c.get("name") or "")[:40], "sev": c.get("sev"), "ok": bool(c.get("ok")), "msg": str(c.get("msg") or "")[:160]}
+                       for c in (st.get("checks") or []) if isinstance(c, dict)][:16],
+            "banner": ({"level": banner.get("level"), "text": str(banner.get("text") or "")[:160]} if banner else None), "day": day}
+
+
+TOPICS = {"brain": brain, "ctl": ctl, "events": events}
 INTERVAL = {"decisions": 3.0, "models": 30.0}        # тема -> не чаще раза в N секунд (по умолчанию HEAVY_S сервера)
 MODE_TOPICS = {"home": home, "trades": trades, "decisions": decisions, "models": models}        # зависят от режима клиента: строятся для каждого режима, который сейчас смотрит хотя бы один клиент
 

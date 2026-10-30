@@ -200,10 +200,11 @@ class ServerTest(Fx, unittest.IsolatedAsyncioTestCase):
     async def test_snapshot_then_only_changes(self):
         self.hb()
         async with connect("ws://127.0.0.1:%d/ws" % self.port) as ws:
-            first = [await self.recv(ws) for _ in range(7)]
-            self.assertEqual([m["topic"] for m in first], ["hello", "brain", "events", "decisions", "home", "models", "trades"])
+            first = [await self.recv(ws) for _ in range(8)]
+            self.assertEqual([m["topic"] for m in first], ["hello", "brain", "ctl", "events", "decisions", "home", "models", "trades"])
             self.assertEqual(first[1]["data"]["status"], "idle")
-            self.assertEqual((first[0]["data"]["mode"], first[4]["data"]["mode"]), ("paper", "paper"))
+            self.assertEqual((first[0]["data"]["mode"], first[5]["data"]["mode"]), ("paper", "paper"))
+            self.assertIn("enabled", first[0]["data"]["ctl"])
             with self.assertRaises(asyncio.TimeoutError):                         # без изменений сервер молчит (опроса нет)
                 await self.recv(ws, 0.8)
             self.hb(inflight=2)
@@ -215,7 +216,7 @@ class ServerTest(Fx, unittest.IsolatedAsyncioTestCase):
     async def test_mode_switch_sends_home_for_that_mode_only(self):
         self.hb()
         async with connect("ws://127.0.0.1:%d/ws" % self.port) as a, connect("ws://127.0.0.1:%d/ws" % self.port) as b:
-            for _ in range(7):
+            for _ in range(8):
                 await self.recv(a)
                 await self.recv(b)
             await a.send(json.dumps({"op": "mode", "mode": "live"}))
