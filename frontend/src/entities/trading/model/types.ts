@@ -17,7 +17,6 @@ export interface Money {
   trades_today: number
   open_pnl: number | null
   equity: number | null
-  excluded: number
 }
 
 export interface LimitRow {

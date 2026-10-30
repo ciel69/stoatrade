@@ -134,11 +134,6 @@ def default_mode(root=None):
     return d.get("mode") if d.get("state") == "running" and d.get("mode") in ("paper", "live", "testnet") else "paper"
 
 
-def _excluded_ids(root):
-    d = _read_json(paths.state("exclude_trades.json", root=root))
-    return set(x for x in (d.get("ids") or []) if isinstance(x, str))
-
-
 def _num(x):
     return x if isinstance(x, (int, float)) and not isinstance(x, bool) and x == x else None
 
@@ -195,10 +190,10 @@ def _pending(rows, now):
     return {"total": len(out), "items": out[:PENDING_OUT]}
 
 
-def _curve(points, excl):
-    """Накопленный результат закрытых сделок режима: [[ts, накопленный, результат сделки, монета]]; сделки-артефакты (exclude_trades.json) не считаются.
+def _curve(points):
+    """Накопленный результат закрытых сделок режима: [[ts, накопленный, результат сделки, монета]]; считаются все сделки журнала, как на старом дашборде.
     Длинную историю обрезаем с хвоста, базу (сумму отрезанного) отдаём отдельно, чтобы кривая начиналась с правильного уровня."""
-    rows = [p for p in points or [] if isinstance(p, dict) and p.get("id") not in excl and _num(p.get("ts")) is not None]
+    rows = [p for p in points or [] if isinstance(p, dict) and _num(p.get("ts")) is not None]
     cum, out = 0.0, []
     for p in rows:
         cum += _num(p.get("pnl")) or 0.0
@@ -217,9 +212,8 @@ def home(root=None, now=None, mode=None):
     rr = s.get("risk_room") or {}
     rows = {r.get("id"): r for r in rr.get("rows") or [] if isinstance(r, dict)}
     daily = rows.get("daily") or {}
-    excl = _excluded_ids(root)
     start = ((s.get("summary") or {}).get("today") or {}).get("start") or 0
-    today = [t for t in s.get("history") or [] if (t.get("ts_close_epoch") or 0) >= start and t.get("id") not in excl]
+    today = [t for t in s.get("history") or [] if (t.get("ts_close_epoch") or 0) >= start]
     pnl_today = round(sum(_num(t.get("pnl_usdt")) or 0.0 for t in today), 4)
     trades = {t.get("id"): t for t in s.get("open_trades") or []}
     vps = (s.get("v2") or {}).get("positions") or []
@@ -239,11 +233,11 @@ def home(root=None, now=None, mode=None):
     return {"mode": mode, "modes": list(MODES),
             "platform": {"state": plat.get("state"), "mode": plat.get("mode"), "trading": plat.get("trading"), "level": status.get("level"), "items": items},
             "money": {"under_risk": _num(daily.get("open_risk")), "day_room": _num(daily.get("room")), "day_limit": _num(daily.get("limit")), "pnl_today": pnl_today, "trades_today": len(today),
-                       "open_pnl": _num(s.get("open_pnl")), "equity": _num((s.get("account") or {}).get("equity")), "excluded": len([t for t in s.get("history") or [] if t.get("id") in excl and (t.get("ts_close_epoch") or 0) >= start])},
+                       "open_pnl": _num(s.get("open_pnl")), "equity": _num((s.get("account") or {}).get("equity"))},
             "limits": [{"id": r.get("id"), "label": r.get("label"), "limit": _num(r.get("limit")), "used": _num(r.get("used")), "room": _num(r.get("room")), "unit": r.get("unit"), "level": r.get("level")}
                        for r in (rr.get("rows") or []) if isinstance(r, dict)],
             "limits_paper": bool(rr.get("paper")), "allowed": rr.get("allowed"), "positions": pos[:POSITIONS_OUT], "positions_total": len(pos),
-            "curve": _curve(s.get("curve"), excl), "plans": _plans(s.get("v2"), mode, now), "pending": _pending(s.get("pending"), now)}
+            "curve": _curve(s.get("curve")), "plans": _plans(s.get("v2"), mode, now), "pending": _pending(s.get("pending"), now)}
 
 
 # ---------------------------------------------------------------- events: лента для плавающего «облака» (шина событий, поля уже из белых списков)

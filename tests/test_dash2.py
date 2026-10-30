@@ -51,7 +51,7 @@ class HomeEventsTopics(Fx):
         w(self.root, "state/control/platform.json", json.dumps({"state": "stopped", "mode": "live"}))
         self.assertEqual(topics.default_mode(self.root), "paper")                                       # остановленная платформа: безопасный режим по умолчанию
 
-    def test_home_pnl_today_skips_excluded_artifact_trades(self):
+    def test_home_pnl_today_counts_all_trades_even_flagged_artifacts(self):
         today = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         rows = []
         for tid, pnl in (("T1", 1.5), ("T2", 9.0)):
@@ -60,9 +60,9 @@ class HomeEventsTopics(Fx):
         w(self.root, "state/trades.jsonl", "".join(json.dumps(r) + "\n" for r in rows))
         w(self.root, "state/exclude_trades.json", json.dumps({"ids": ["T2"]}))
         m = topics.build("home", self.root, None, "paper")["money"]
-        self.assertEqual((m["pnl_today"], m["trades_today"], m["excluded"]), (1.5, 1, 1))
+        self.assertEqual((m["pnl_today"], m["trades_today"]), (10.5, 2))        # артефакты принимаем как случившееся: как на старом дашборде, в UI-тестах нужны
 
-    def test_home_curve_cumulative_without_excluded_and_trimmed(self):
+    def test_home_curve_cumulative_counts_all_and_trims(self):
         now = time.time()
         rows = []
         for i, (tid, pnl) in enumerate((("T1", 1.0), ("T2", 9.0), ("T3", -0.4))):
@@ -72,15 +72,15 @@ class HomeEventsTopics(Fx):
         w(self.root, "state/trades.jsonl", "".join(json.dumps(r) + "\n" for r in rows))
         w(self.root, "state/exclude_trades.json", json.dumps({"ids": ["T2"]}))
         c = topics.build("home", self.root, None, "paper")["curve"]
-        self.assertEqual([p[1] for p in c["points"]], [1.0, 0.6])                  # артефактная сделка не входит в накопленное
-        self.assertEqual((c["base"], c["total"]), (0.0, 2))
+        self.assertEqual([p[1] for p in c["points"]], [1.0, 10.0, 9.6])
+        self.assertEqual((c["base"], c["total"]), (0.0, 3))
         old = topics.CURVE_POINTS
         topics.CURVE_POINTS = 1
         try:
             t = topics.build("home", self.root, None, "paper")["curve"]
         finally:
             topics.CURVE_POINTS = old
-        self.assertEqual(([p[1] for p in t["points"]], t["base"]), ([0.6], 1.0))      # хвост обрезан, база хранит сумму отрезанного
+        self.assertEqual(([p[1] for p in t["points"]], t["base"]), ([9.6], 10.0))      # хвост обрезан, база хранит сумму отрезанного
 
     def test_plans_and_pending_blocks_are_stable_and_filtered(self):
         now = 1000.0
