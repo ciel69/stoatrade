@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ThoughtBubble, assignRegions, pickThoughts, roleLabel, rolesOfRegion, useBrainStore } from '@/entities/brain'
 import { BRAIN_REGIONS, UiBrainIcon, regionOfNode, type BrainIconState } from '@/shared/ui'
 import { ageText, usd } from '@/shared/lib'
@@ -55,11 +55,15 @@ const calls = computed(() => brain.roles.reduce((s, r) => s + (r.today?.calls ??
 const regionMap = computed(() => assignRegions(brain.roles.map((r) => r.role)))
 const litRegion = computed(() => (hoverRole.value != null ? regionMap.value[hoverRole.value] ?? -1 : hoverNode.value >= 0 ? regionOfNode(hoverNode.value) : -1))
 const lit = computed(() => (litRegion.value >= 0 ? BRAIN_REGIONS[litRegion.value] : []))
-const litRoles = computed(() => (litRegion.value >= 0 ? new Set(rolesOfRegion(regionMap.value, litRegion.value)) : new Set<string>()))
+// строка роли подсвечивается одна (на какую навели); при наведении на нейрон подсвечиваются все роли его области
+const litRoles = computed(() => (hoverRole.value != null ? new Set([hoverRole.value]) : litRegion.value >= 0 ? new Set(rolesOfRegion(regionMap.value, litRegion.value)) : new Set<string>()))
 const rows = computed(() => brain.roles.map((r) => ({
   role: r.role, label: roleLabel(r.role), model: r.last?.profile ?? r.primary?.id ?? 'не назначена', last: r.last,
   calls: r.today?.calls ?? 0, usd: r.today?.usd ?? 0, errors: r.today?.errors ?? 0, fb: r.last?.fallback_from ?? null,
 })))
+if (new URLSearchParams(location.search).get('brain') === 'hl') {        // ?brain=hl: сразу подсветить первую роль (для скриншотов)
+  const stop = watch(rows, (r) => { if (r.length) { hoverRole.value = r[0].role; stop() } })
+}
 const fell = computed(() => brain.roles.filter((r) => r.last?.fallback_from).length)       // отвечал запасной профиль (сервер помечает fallback_from)
 </script>
 
@@ -142,11 +146,11 @@ const fell = computed(() => brain.roles.filter((r) => r.last?.fallback_from).len
 }
 
 /* роли поверх облака мыслей: тот же размер, панель не растёт; редкое открытие, поэтому короткий выезд, закрытие быстрее */
-.roles { position: absolute; inset: 0; overflow-y: auto; scrollbar-gutter: stable; background: var(--panel); border: 1px solid var(--line2); border-radius: var(--radius-sm); padding: var(--space-1) 0; }
-.rlist { list-style: none; margin: 0; padding: 0; }
-.role { padding: var(--space-2) var(--space-3); outline: none; transition: background-color var(--dur-fast) ease; }
-.role.lit, .role:focus-visible { background: var(--panel2); }
-.role:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+.roles { position: absolute; inset: 0; overflow-y: auto; scrollbar-gutter: stable; background: var(--panel); border: 1px solid var(--line2); border-radius: var(--radius-sm); padding: var(--space-2); }
+.rlist { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.role { padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm); outline: none; cursor: default; transition: background-color var(--dur-fast) ease; }
+.role.lit { background: var(--accent-bg); }
+.role:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .rtop { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; }
 .rname { font-size: 13px; }
 .rid { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

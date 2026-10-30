@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onUnmounted, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { BRAIN_NODES, nearestNode, waveOrder } from './brain-regions'
 /**
  * Нарисованный мозг (вид спереди): два полушария, борозды коры, 16 нейронов и связи между ними, включая мостик между полушариями. Один SVG, одна толщина линии.
@@ -27,10 +27,10 @@ const delays = [0, 380, 140, 620, 250, 500, 90, 700, 310, 60, 560, 200, 430, 680
 const idleTwinkle = new Set([2, 7, 10, 13])
 
 /*
- * Интерактив (interactive): мозг тянется к курсору и подсвечивает ближайшие нейроны кольцами; fire() запускает волну нейронов от места нажатия; lit подсвечивает заданные
- * нейроны (область роли). Назначение: обратная связь и пространственная связь с панелью ролей. Всё через transition по transform и opacity, кольца отдельные
- * от нейронов, чтобы не спорить с фоновыми анимациями состояний. Наведение работает только с точным указателем (на touch есть тап), при prefers-reduced-motion
- * нет наклона, а волна зажигает нейроны разом.
+ * Интерактив (interactive): курсор над нейроном сообщает наверх его номер (область коры), lit подсвечивает нейроны области роли, fire() запускает волну от места нажатия.
+ * Подсветка одна и лаконичная: нейроны области и связи между ними заливаются акцентным цветом, остальной мозг приглушается. Назначение: пространственная связь
+ * с панелью ролей. Всё через transition по opacity и transform (масштаб от 0.6, не от нуля); слой подсветки отдельный от фоновых анимаций состояний.
+ * Наведение работает только с точным указателем (на touch есть тап), при prefers-reduced-motion волна зажигает нейроны разом.
  */
 const FADE_MS = 450
 const amp = ref(0)                 // доля эффектов «думает» сейчас, 0..1
@@ -52,8 +52,6 @@ watch(() => props.state, (s) => {
 const svg = ref<SVGSVGElement | null>(null)
 const canHover = typeof matchMedia === 'function' && matchMedia('(hover: hover) and (pointer: fine)').matches
 const calm = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
-const lean = ref({ x: 0, y: 0 })
-const near = ref<number[]>([])
 const fired = ref<number[]>([])
 let overNode = -1
 let timers: ReturnType<typeof setTimeout>[] = []
@@ -62,19 +60,18 @@ const toBox = (ev: MouseEvent): [number, number] => {
   const r = svg.value!.getBoundingClientRect()
   return [((ev.clientX - r.left) / r.width) * 64, ((ev.clientY - r.top) / r.height) * 64]
 }
-const isOn = (i: number) => near.value.includes(i) || fired.value.includes(i) || props.lit.includes(i)
+const isOn = (i: number) => fired.value.includes(i) || props.lit.includes(i)
+const hasLit = computed(() => props.lit.length > 0)
+/** Связи, у которых оба конца в подсвеченной области. */
+const hlLink = computed(() => links.map(([a, b]) => props.lit.includes(a) && props.lit.includes(b)))
 
 function onMove(ev: PointerEvent): void {
   if (!props.interactive || !canHover || ev.pointerType === 'touch' || !svg.value) return
   const [x, y] = toBox(ev)
-  if (!calm) lean.value = { x: Math.max(-1, Math.min(1, (x - 32) / 32)) * 1.6, y: Math.max(-1, Math.min(1, (y - 32) / 32)) * 1.6 }
-  near.value = BRAIN_NODES.map(([nx, ny], i) => (Math.hypot(nx - x, ny - y) <= 12 ? i : -1)).filter((i) => i >= 0)
-  const n = nearestNode(x, y, 7)
+  const n = nearestNode(x, y, 9)
   if (n !== overNode) { overNode = n; emit('node', n) }
 }
 function onLeave(): void {
-  lean.value = { x: 0, y: 0 }
-  near.value = []
   if (overNode !== -1) { overNode = -1; emit('node', -1) }
 }
 
@@ -105,9 +102,8 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <svg ref="svg" class="brain" :class="[`s-${state}`, { live: interactive, fx }]" :style="{ '--amp': amp }" :width="size" :height="size" viewBox="0 0 64 64" role="img" :aria-label="label ?? 'мозг'" fill="none" stroke="currentColor"
+  <svg ref="svg" class="brain" :class="[`s-${state}`, { live: interactive, fx, 'has-lit': hasLit }]" :style="{ '--amp': amp }" :width="size" :height="size" viewBox="0 0 64 64" role="img" :aria-label="label ?? 'мозг'" fill="none" stroke="currentColor"
        stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" @pointermove="onMove" @pointerleave="onLeave">
-    <g class="lean" :style="{ transform: `translate(${lean.x}px, ${lean.y}px)` }">
     <g class="pulse">
     <g class="body">
       <g class="cortex">
@@ -125,10 +121,10 @@ onUnmounted(() => {
         <circle v-for="(n, i) in nodes" :key="i" class="node" :class="{ tw: idleTwinkle.has(i) }" :style="{ '--d': delays[i] + 'ms', '--i': i }" :cx="n[0]" :cy="n[1]" r="1.7" fill="currentColor" stroke="none" />
         <circle v-for="(n, i) in nodes" :key="`f${i}`" class="flash" :style="{ '--d': delays[i] + 'ms' }" :cx="n[0]" :cy="n[1]" r="1.7" fill="currentColor" stroke="none" />
       </g>
-      <g class="rings">
-        <circle v-for="(n, i) in nodes" :key="i" class="ring" :class="{ on: isOn(i) }" :cx="n[0]" :cy="n[1]" r="3.6" stroke-width="1" />
+      <g class="hl">
+        <path v-for="(l, i) in links" :key="`h${i}`" class="wire-hl" :class="{ on: hlLink[i] }" :d="d(l[0], l[1])" />
+        <circle v-for="(n, i) in nodes" :key="`c${i}`" class="halo" :class="{ on: isOn(i) }" :cx="n[0]" :cy="n[1]" r="2.5" stroke="none" />
       </g>
-    </g>
     </g>
     </g>
     <path v-if="state === 'down'" class="cut" d="M10 54L54 10" />
@@ -147,12 +143,16 @@ onUnmounted(() => {
 .s-down .body { opacity: 0.55; }
 .cut { stroke-width: 2.4; }
 
-/* интерактив: наклон к курсору и кольца вокруг нейронов; transitions, чтобы быстрые движения мыши перенацеливали движение, а не перезапускали его */
-.lean { transition: transform var(--dur-move) var(--ease-out); }
-.ring { opacity: 0; transition: opacity var(--dur-fast) var(--ease-out); pointer-events: none; }
-.ring.on { opacity: 0.85; }
+/* подсветка области: нейроны и связи области акцентным цветом, остальной мозг приглушён; transitions, чтобы быстрые движения мыши перенацеливали движение, а не перезапускали его */
+.cortex, .net, .nodes { transition: opacity var(--dur-enter) var(--ease-out); }
+.has-lit .cortex, .has-lit .net, .has-lit .nodes { opacity: 0.45; }
+.halo, .wire-hl { pointer-events: none; opacity: 0; transition: opacity var(--dur-enter) var(--ease-out), transform var(--dur-enter) var(--ease-out); }
+.halo { fill: var(--accent); transform-box: fill-box; transform-origin: center; transform: scale(0.6); }
+.halo.on { opacity: 1; transform: scale(1); }
+.wire-hl { stroke: var(--accent); stroke-width: 1.6; }
+.wire-hl.on { opacity: 0.95; }
 @media (prefers-reduced-motion: reduce) {
-  .lean { transition: none; }
+  .halo { transform: none; }
 }
 
 .mid, .fold { opacity: 0.5; }
