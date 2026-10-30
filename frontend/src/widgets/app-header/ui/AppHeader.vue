@@ -26,7 +26,6 @@ const platform = computed(() => trading.snapshot?.platform ?? null)
     <UiSegment :model-value="trading.mode" :options="MODE_OPTIONS" label="Режим" @update:model-value="trading.setMode" />
     <span v-if="platform" class="plat" :class="{ off: platform.state !== 'running' }">{{ platform.state === 'running' ? `платформа: ${platform.mode}` : 'платформа остановлена' }}</span>
     <span class="grow" />
-    <slot name="actions" />
     <span v-for="i in items" :key="i.id" class="chipline"><UiStatusDot :state="dotOf(i.level)" :label="i.label" /> {{ i.label.toLowerCase() }} {{ i.value }}</span>
     <span class="chipline" role="status"><UiStatusDot :state="dot" :label="linkText" /> {{ linkText }}</span>
   </header>

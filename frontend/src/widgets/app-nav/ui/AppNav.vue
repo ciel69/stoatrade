@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { UiBrainIcon } from '@/shared/ui'
+import { UiLogo } from '@/shared/ui'
 import { NAV_GROUPS } from '../model/nav'
 
 /**
@@ -13,7 +13,7 @@ const KEY = 'tb.nav.collapsed'
 const read = (): boolean => {
   try { return localStorage.getItem(KEY) === '1' } catch { return false }
 }
-const collapsed = ref(read())
+const collapsed = ref(new URLSearchParams(location.search).get('nav') === 'min' || read())        // ?nav=min: свёрнутая колонка сразу (для скриншотов)
 const drawer = ref(false)               // узкий экран: колонка выдвинута
 const route = useRoute()
 const closeBtn = ref<HTMLButtonElement | null>(null)
@@ -39,12 +39,15 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
 
   <aside id="app-nav" class="nav" :class="{ collapsed, drawer }" aria-label="Разделы">
     <div class="brand">
-      <UiBrainIcon :size="30" label="" />
+      <UiLogo :size="30" />
       <span class="name">open-trader</span>
       <button v-if="drawer" ref="closeBtn" type="button" class="icon-btn close" aria-label="Закрыть разделы" @click="drawer = false">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
       </button>
     </div>
+
+    <!-- действие над разделами (старт торговли): приходит из app, в свёрнутой колонке получает collapsed и рисуется значком -->
+    <div class="action"><slot name="action" :collapsed="collapsed && !drawer" /></div>
 
     <nav class="groups">
       <div v-for="g in NAV_GROUPS" :key="g.id" class="group">
@@ -69,10 +72,12 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
   padding: 20px 12px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 20px; box-shadow: var(--lift); overflow: hidden;
   transition: width var(--dur-enter) var(--ease-out);
 }
-.nav.collapsed { width: 72px; }
+.nav.collapsed { width: 74px; }        /* 74 = рамка 2 + поля 24 + пункт 48 (плитка 32 + поля по 8) */
 .brand { display: flex; align-items: center; gap: 10px; min-height: 34px; padding: 0 8px; }
 .brand :deep(svg) { flex: none; }
 .name { font-size: 15px; font-weight: 650; letter-spacing: -0.01em; white-space: nowrap; transition: opacity var(--dur-enter) var(--ease-out); }
+.action { display: grid; }
+.action:empty { display: none; }
 .groups { display: grid; gap: var(--space-4); flex: 1 1 auto; align-content: start; overflow-y: auto; overflow-x: hidden; }
 .group { display: grid; gap: 4px; }
 .cap { margin: 0 0 var(--space-1); padding: 0 var(--space-3); font-size: 11px; color: var(--muted); white-space: nowrap; height: 14px; transition: opacity var(--dur-enter) var(--ease-out); }
@@ -86,7 +91,10 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
   .item:not(.router-link-exact-active):hover { color: var(--text); background: var(--panel2); }
   .icon-btn:hover { color: var(--text); }
 }
-.nav.collapsed .name, .nav.collapsed .label { opacity: 0; }
+/* свёрнутая: подписи не только невидимы, но и не занимают места, иначе пункт шире колонки и его рамка обрезается */
+.nav.collapsed .name, .nav.collapsed .label { opacity: 0; width: 0; overflow: hidden; }
+.nav.collapsed .brand, .nav.collapsed .item { gap: 0; }
+.nav.collapsed .brand { justify-content: center; padding: 0; }
 .nav.collapsed .cap { opacity: 0; }
 .icon-btn { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; background: transparent; border: 0; border-radius: var(--radius-sm); color: var(--muted); cursor: pointer; transition: color var(--dur-fast) ease; }
 .fold { align-self: flex-end; }

@@ -7,11 +7,11 @@ import { StartDayButton } from '@/widgets/start-day'
 
 <template>
   <div class="shell">
-    <AppNav />
+    <AppNav>
+      <template #action="{ collapsed }"><StartDayButton :compact="collapsed" /></template>
+    </AppNav>
     <div class="col">
-      <AppHeader>
-        <template #actions><StartDayButton /></template>
-      </AppHeader>
+      <AppHeader />
       <RouterView />
     </div>
   </div>

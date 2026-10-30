@@ -7,8 +7,18 @@ import StartDayModal from './StartDayModal.vue'
  * Кнопка управления днём в шапке: «Старт торговли» когда день не идёт, «Запуск…» и «День идёт» по состоянию платформы (тема ctl); недоступна, если ctl не отвечает
  * или управление выключено, и объясняет почему. Нажатие открывает модалку (запуск, ход запуска, остановка дня). Команды только paper, testnet, observe.
  */
+/** compact: колонка свёрнута, остаётся значок состояния; название и причина в подсказке и для скринридера. */
+defineProps<{ compact?: boolean }>()
 const control = useControlStore()
 const open = ref(false)
+const ICON = {
+  start: 'M8 5.5v13l10.5-6.5z',
+  starting: 'M8 5.5v13l10.5-6.5z',
+  running: 'M5 12.5l4.5 4.5L19 7.5',
+  closing: 'M8 5.5v13l10.5-6.5z',
+  blocked: 'M7 7h10v10H7z',
+  unavailable: 'M6 12h12',
+} as const
 onMounted(() => {
   control.start()
   const q = new URLSearchParams(location.search)
@@ -31,8 +41,10 @@ function toggle(): void {
 </script>
 
 <template>
-  <button type="button" class="start" :class="`k-${btn.kind}`" :aria-disabled="disabled" :aria-haspopup="'dialog'" :title="btn.why ?? undefined" @click="toggle">
-    <i class="dot" aria-hidden="true" />{{ LABEL[btn.kind] }}
+  <button type="button" class="start" :class="[`k-${btn.kind}`, { compact }]" :aria-disabled="disabled" :aria-haspopup="'dialog'" :aria-label="compact ? LABEL[btn.kind] : undefined"
+          :title="compact ? (btn.why ? `${LABEL[btn.kind]}: ${btn.why}` : LABEL[btn.kind]) : (btn.why ?? undefined)" @click="toggle">
+    <svg class="ico" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="ICON[btn.kind]" /></svg>
+    <span v-if="!compact" class="text">{{ LABEL[btn.kind] }}</span>
   </button>
   <Teleport to="body">
     <Transition name="sd">
@@ -42,10 +54,13 @@ function toggle(): void {
 </template>
 
 <style scoped>
-.start { display: inline-flex; align-items: center; gap: var(--space-2); padding: 5px 14px; background: var(--accent-bg); color: var(--accent); border: 1px solid var(--accent); border-radius: var(--radius-sm); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; transition: background-color var(--dur-fast) ease, color var(--dur-fast) ease, border-color var(--dur-fast) ease, transform 120ms var(--ease-out); }
+/* кнопка в боковой колонке: на всю ширину, высота пункта меню; свёрнутая: значок по центру */
+.start { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; height: 44px; padding: 0 12px; background: var(--accent-bg); color: var(--accent); border: 1px solid var(--accent); border-radius: 12px; font: inherit; font-size: 14px; font-weight: 650; white-space: nowrap; cursor: pointer; transition: background-color var(--dur-fast) ease, color var(--dur-fast) ease, border-color var(--dur-fast) ease, transform 120ms var(--ease-out); }
+.start.compact { padding: 0; }
 .start:active { transform: scale(0.97); }
-.dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
-.k-starting .dot, .k-closing .dot { animation: st-pulse 1.2s var(--ease-in-out) infinite; }
+.ico { flex: none; }
+.text { overflow: hidden; text-overflow: ellipsis; }
+.k-starting .ico, .k-closing .ico { animation: st-pulse 1.2s var(--ease-in-out) infinite; }
 .k-running { background: transparent; color: var(--pos); border-color: var(--pos); }
 .k-blocked { background: transparent; color: var(--neg); border-color: var(--neg); }
 .k-unavailable { background: transparent; color: var(--muted); border-color: var(--line2); cursor: not-allowed; font-weight: 400; }
@@ -56,7 +71,7 @@ function toggle(): void {
 }
 .start:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) {
-  .k-starting .dot, .k-closing .dot { animation: none; }
+  .k-starting .ico, .k-closing .ico { animation: none; }
   .start:active { transform: none; }
 }
 </style>

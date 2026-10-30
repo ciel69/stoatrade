@@ -4,6 +4,7 @@ export { BRAIN_NODES, BRAIN_REGIONS, REGION_COUNT, nearestNode, regionOfNode, wa
 export { default as UiCard } from './UiCard.vue'
 export { default as UiChip } from './UiChip.vue'
 export type { ChipTone } from './UiChip.vue'
+export { default as UiLogo } from './UiLogo.vue'
 export { default as UiMeter } from './UiMeter.vue'
 export { default as UiSegment } from './UiSegment.vue'
 export { default as UiStatusDot } from './UiStatusDot.vue'
