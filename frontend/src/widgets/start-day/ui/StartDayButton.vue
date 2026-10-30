@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useControlStore } from '@/entities/control'
+import { UiNeuralField, type NeuralPoint } from '@/shared/ui'
 import StartDayModal from './StartDayModal.vue'
 
 /**
@@ -33,8 +34,15 @@ const btn = computed(() => control.button)
 const LABEL = { start: 'Старт торговли', starting: 'Запуск…', running: 'День идёт', closing: 'Завершение…', blocked: 'Остановлено', unavailable: 'Старт недоступен' } as const
 const disabled = computed(() => btn.value.kind === 'unavailable' || btn.value.kind === 'blocked')
 
-function toggle(): void {
+/** Живая сеть на кнопке: во время запуска и закрытия думает (частые каскады), в остальные дни тихо живёт; на недоступной и остановленной замирает. */
+const field = ref<InstanceType<typeof UiNeuralField> | null>(null)
+const NODES: NeuralPoint[] = [[10, 16], [24, 34], [40, 13], [60, 37], [84, 7], [116, 38], [140, 9], [160, 35], [176, 14], [190, 31]]       // широкая кнопка 200×44: нейроны к краям, середина свободна под подпись
+const NODES_COMPACT: NeuralPoint[] = [[9, 12], [24, 6], [39, 12], [8, 34], [24, 42], [40, 35]]                                              // квадрат 48×48
+const fieldState = computed<'idle' | 'thinking' | 'still'>(() => (disabled.value ? 'still' : btn.value.kind === 'starting' || btn.value.kind === 'closing' ? 'thinking' : 'idle'))
+
+function toggle(ev?: MouseEvent): void {
   if (disabled.value) return
+  field.value?.burst(ev)
   if (!open.value && (control.phase === 'done' || control.phase === 'failed')) control.reset()      // новое открытие показывает текущее состояние, а не прошлый итог
   open.value = !open.value
 }
@@ -42,9 +50,13 @@ function toggle(): void {
 
 <template>
   <button type="button" class="start" :class="[`k-${btn.kind}`, { compact }]" :aria-disabled="disabled" :aria-haspopup="'dialog'" :aria-label="compact ? LABEL[btn.kind] : undefined"
-          :title="compact ? (btn.why ? `${LABEL[btn.kind]}: ${btn.why}` : LABEL[btn.kind]) : (btn.why ?? undefined)" @click="toggle">
-    <svg class="ico" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="ICON[btn.kind]" /></svg>
-    <span v-if="!compact" class="text">{{ LABEL[btn.kind] }}</span>
+          :title="compact ? (btn.why ? `${LABEL[btn.kind]}: ${btn.why}` : LABEL[btn.kind]) : (btn.why ?? undefined)" @click="toggle" @pointermove="field?.pointer($event)" @pointerleave="field?.pointer(null)">
+    <UiNeuralField :key="compact ? 'c' : 'w'" ref="field" class="net" :nodes="compact ? NODES_COMPACT : NODES" :width="compact ? 48 : 200" :height="compact ? 48 : 44" :scale="compact ? 1.1 : 2.2"
+                   :link-max="compact ? 22 : 46" :max-deg="3" :state="fieldState" :dot="compact ? 1 : 1.25" :ink="1.9" />
+    <span class="face">
+      <svg class="ico" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="ICON[btn.kind]" /></svg>
+      <span v-if="!compact" class="text">{{ LABEL[btn.kind] }}</span>
+    </span>
   </button>
   <Teleport to="body">
     <Transition name="sd">
@@ -57,8 +69,15 @@ function toggle(): void {
 /* кнопка в боковой колонке: на всю ширину, высота пункта меню; свёрнутая: значок по центру */
 /* главное действие панели: сплошная акцентная кнопка (как «Старт» на старом дашборде); идущий день, остановка и недоступность спокойнее: тон по состоянию, без заливки */
 .start { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; height: 44px; padding: 0 12px; background: var(--accent); color: var(--bg); border: 1px solid transparent; border-radius: 12px; box-shadow: 0 1px 0 rgba(255, 255, 255, 0.12) inset, 0 4px 14px color-mix(in srgb, var(--accent) 32%, transparent); font: inherit; font-size: 14px; font-weight: 650; white-space: nowrap; cursor: pointer; transition: background-color var(--dur-fast) ease, color var(--dur-fast) ease, border-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease, filter var(--dur-fast) ease, transform 120ms var(--ease-out); }
+.start { position: relative; overflow: hidden; isolation: isolate; }
 .start.compact { width: 48px; padding: 0; }
 .start:active { transform: scale(0.97); }
+/* живая сеть за подписью: светлые нейроны и импульсы на заливке, цвет по состоянию кнопки */
+.net { position: absolute; inset: 0; z-index: -1; color: color-mix(in srgb, #fff 78%, var(--accent)); }
+.k-running .net { color: var(--pos); }
+.k-blocked .net { color: var(--neg); }
+.k-unavailable .net { color: var(--muted); opacity: 0.5; }
+.face { display: flex; align-items: center; justify-content: center; gap: 10px; min-width: 0; }
 .ico { flex: none; }
 .text { overflow: hidden; text-overflow: ellipsis; }
 .k-starting .ico, .k-closing .ico { animation: st-pulse 1.2s var(--ease-in-out) infinite; }

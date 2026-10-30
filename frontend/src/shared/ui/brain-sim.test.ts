@@ -57,6 +57,18 @@ describe('BrainSim', () => {
     run(b, 3, 0)
     expect(Math.abs(b.x[3] - a.x[3])).toBeLessThan(1.6)        // свободное блуждание само расходится по времени, но не на величину притяжения
   })
+  it('своя раскладка (кнопка): связи только в пределах linkMax, импульсы и каскады идут как у мозга', () => {
+    const nodes: Array<[number, number]> = [[10, 16], [24, 34], [40, 13], [60, 37], [84, 7], [116, 38], [140, 9], [160, 35]]
+    const sim = new BrainSim(3, nodes, { scale: 2.2, linkMax: 46, maxDeg: 3 })
+    expect(sim.links.length).toBeGreaterThan(5)
+    for (const [a, b] of sim.links) expect(Math.hypot(nodes[a][0] - nodes[b][0], nodes[a][1] - nodes[b][1])).toBeLessThanOrEqual(46)
+    let max = 0
+    run(sim, 20, 1, () => { max = Math.max(max, sim.pulses.length) })
+    expect(max).toBeGreaterThan(1)
+    sim.setPointer([60, 20])
+    run(sim, 2, 0)
+    expect(sim.x.every(Number.isFinite)).toBe(true)
+  })
   it('нейроны остаются близко к своим местам', () => {
     const sim = new BrainSim(2)
     const x0 = [...sim.x]
