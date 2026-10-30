@@ -64,6 +64,51 @@ export interface Curve {
   total: number
 }
 
+/** План, ожидающий входа (ближайшие по расстоянию до триггера). eta_at: момент закрытия свечи, которой ждёт условие (с). */
+export interface NearPlan {
+  id: string
+  sym: string
+  side: 'long' | 'short' | null
+  mode: string | null
+  col: 'waiting' | 'watching'
+  text: string
+  dist_pct: number | null
+  eta_at: number | null
+  entry_state: string | null
+  blocked_why: string | null
+  net_rr: number | null
+  risk: number | null
+}
+
+export interface PlansBlock {
+  counts: { waiting: number; watching: number; in_trade: number; closed: number }
+  total: number
+  near: NearPlan[]
+}
+
+/** Ждущий лимитный вход. dist_pct: на сколько процентов лимит отстоит от текущей цены (минус: лимит ниже цены). expires_at: когда заявка истечёт (с). */
+export interface PendingOrder {
+  id: string
+  sym: string
+  side: 'long' | 'short'
+  mode: string | null
+  price: number | null
+  cur: number | null
+  stale: boolean
+  dist_pct: number | null
+  sl: number | null
+  tp: number | null
+  risk: number | null
+  lev: number | null
+  ttl_min: number | null
+  expires_at: number | null
+}
+
+export interface PendingBlock {
+  total: number
+  items: PendingOrder[]
+}
+
 export interface HomeSnapshot {
   mode: TradingMode
   modes: TradingMode[]
@@ -75,4 +120,6 @@ export interface HomeSnapshot {
   positions: Position[]
   positions_total: number
   curve?: Curve
+  plans?: PlansBlock
+  pending?: PendingBlock
 }

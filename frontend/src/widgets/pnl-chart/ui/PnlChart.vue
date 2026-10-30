@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { buildSeries, nearest, niceTicks, useTradingStore, type CurveRange } from '@/entities/trading'
+import { buildSeries, nearest, niceTicks, smoothPath, useTradingStore, type CurveRange } from '@/entities/trading'
 import { UiSegment } from '@/shared/ui'
 import { fixed, signed } from '@/shared/lib'
 
 /**
- * Накопленный результат закрытых сделок выбранного режима. Форма: линия-ступенька (баланс меняется в момент закрытия сделки, между ними он постоянен), одна серия,
+ * Накопленный результат закрытых сделок выбранного режима. Форма: плавная линия через накопленное значение после каждой сделки (монотонная интерполяция: проходит через все точки и не выдумывает выбросов), одна серия,
  * поэтому без легенды: название блока говорит, что нарисовано. Ось одна, нулевая линия всегда в кадре. Наведение и фокус: вертикальная линия привязана к ближайшей сделке,
  * в подсказке накопленное значение и сама сделка. Те же числа есть в таблице под графиком.
  */
@@ -42,16 +42,11 @@ const geo = computed(() => {
   const ph = H - M.t - M.b
   const x = (t: number) => M.l + ((t - s.t0) / (s.t1 - s.t0 || 1)) * pw
   const y = (v: number) => M.t + (1 - (v - lo) / (hi - lo)) * ph
-  let line = `M${x(s.t0).toFixed(1)} ${y(s.start).toFixed(1)}`
-  let prev = y(s.start)
-  for (const p of s.points) {
-    line += `L${x(p.ts).toFixed(1)} ${prev.toFixed(1)}L${x(p.ts).toFixed(1)} ${y(p.cum).toFixed(1)}`
-    prev = y(p.cum)
-  }
-  line += `L${x(s.t1).toFixed(1)} ${prev.toFixed(1)}`
-  const zero = y(0)
-  const area = `${line}L${x(s.t1).toFixed(1)} ${zero.toFixed(1)}L${x(s.t0).toFixed(1)} ${zero.toFixed(1)}Z`
-  return { x, y, line, area, zero, ticks: niceTicks(lo, hi, 4), endX: x(s.t1), endY: prev, pw }
+  const pts: Array<[number, number]> = [[x(s.t0), y(s.start)], ...s.points.map((p): [number, number] => [x(p.ts), y(p.cum)]), [x(s.t1), y(s.last)]]
+  const line = smoothPath(pts)
+  const bottom = H - M.b
+  const area = `${line}L${x(s.t1).toFixed(1)} ${bottom}L${x(s.t0).toFixed(1)} ${bottom}Z`
+  return { x, y, line, area, ticks: niceTicks(lo, hi, 3), endX: x(s.t1), endY: y(s.last), pw }
 })
 
 const dayFmt = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short' })
@@ -107,6 +102,12 @@ const rows = computed(() => (series.value ? [...series.value.points].reverse().s
           <text :x="M.l" :y="H - 6" class="tick" text-anchor="start">{{ edge(series.t0) }}</text>
           <text :x="W - M.r" :y="H - 6" class="tick" text-anchor="end">{{ edge(series.t1) }}</text>
         </g>
+        <defs>
+          <linearGradient id="pnl-fill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="var(--accent)" stop-opacity="0.28" />
+            <stop offset="1" stop-color="var(--accent)" stop-opacity="0" />
+          </linearGradient>
+        </defs>
         <path class="area" :d="geo.area" />
         <path class="line" :d="geo.line" />
         <circle class="end" :cx="geo.endX" :cy="geo.endY" r="4" />
@@ -152,11 +153,11 @@ const rows = computed(() => (series.value ? [...series.value.points].reverse().s
 .plot { position: relative; }
 svg { display: block; touch-action: pan-y; outline: none; }
 svg:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
-.grid line { stroke: var(--line); stroke-width: 1; }
-.grid line.zero { stroke: var(--line2); }
+.grid line { stroke: var(--line); stroke-width: 1; opacity: 0.6; }
+.grid line.zero { stroke: var(--line2); opacity: 1; }
 .tick { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
-.area { fill: var(--accent); opacity: 0.1; }
+.area { fill: url(#pnl-fill); }
 .end { fill: var(--accent); stroke: var(--panel); stroke-width: 2; }
 .cross { stroke: var(--muted); stroke-width: 1; }
 .empty { margin: 0; height: 100%; display: grid; place-items: center; color: var(--muted); font-size: 13px; }

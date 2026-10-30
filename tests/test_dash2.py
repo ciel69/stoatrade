@@ -82,6 +82,21 @@ class HomeEventsTopics(Fx):
             topics.CURVE_POINTS = old
         self.assertEqual(([p[1] for p in t["points"]], t["base"]), ([0.6], 1.0))      # хвост обрезан, база хранит сумму отрезанного
 
+    def test_plans_and_pending_blocks_are_stable_and_filtered(self):
+        now = 1000.0
+        v2 = {"plans": {"cards": [
+            {"id": "A", "sym": "SOL", "side": "long", "mode": "paper", "col": "watching", "trigger": {"text": "цена ≥ 100", "dist_pct": 2.0, "eta_s": 61}, "net_rr": 2.5, "risk_usdt": 0.3},
+            {"id": "B", "sym": "ETH", "side": "short", "mode": "paper", "col": "waiting", "trigger": {"text": "лимит стоит", "dist_pct": 0.2, "eta_s": None}},
+            {"id": "C", "sym": "BTC", "side": "long", "mode": "live", "col": "waiting", "trigger": {"dist_pct": 0.1}},
+            {"id": "D", "sym": "XRP", "side": "long", "mode": "paper", "col": "in_trade", "trigger": {}}]}}
+        p = topics._plans(v2, "paper", now)
+        self.assertEqual(p["counts"], {"waiting": 1, "watching": 1, "in_trade": 1, "closed": 0})
+        self.assertEqual([x["id"] for x in p["near"]], ["B", "A"])                      # ближайшие к входу первыми, чужой режим не виден
+        self.assertEqual(p["near"][1]["eta_at"], 1060)                                   # момент, а не остаток: тема не меняется со временем
+        self.assertEqual(topics._plans(v2, "paper", now + 1)["near"][1]["eta_at"], 1060)
+        pend = topics._pending([{"id": "L1", "sym": "SOL", "side": "long", "price": 99.0, "cur": 100.0, "dist_pct": -1.0, "left_s": 600.0, "ttl_min": 15}], now)
+        self.assertEqual((pend["total"], pend["items"][0]["expires_at"], pend["items"][0]["dist_pct"]), (1, 1600, -1.0))
+
     def test_events_whitelisted_newest_first(self):
         from tb.core import bus
         bus.emit("kill", {"state": "on", "flatten": False}, root=self.root)

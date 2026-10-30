@@ -52,6 +52,38 @@ export function niceTicks(lo: number, hi: number, count = 4): number[] {
   return out
 }
 
+/** Плавная линия через точки (монотонная кубическая интерполяция): проходит через каждую точку и не делает выбросов выше или ниже соседних, поэтому не рисует прибыль или просадку, которых не было.
+ *  Точки с одинаковым x схлопываются (остаётся последняя). */
+export function smoothPath(input: Array<[number, number]>): string {
+  const pts: Array<[number, number]> = []
+  for (const p of input) {
+    if (pts.length && Math.abs(pts[pts.length - 1][0] - p[0]) < 1e-6) pts[pts.length - 1] = p
+    else pts.push(p)
+  }
+  const n = pts.length
+  if (!n) return ''
+  const f = (v: number) => v.toFixed(1)
+  if (n === 1) return `M${f(pts[0][0])} ${f(pts[0][1])}`
+  const sign = (v: number) => (v < 0 ? -1 : 1)
+  const h = (i: number) => pts[i + 1][0] - pts[i][0]
+  const s = (i: number) => (pts[i + 1][1] - pts[i][1]) / h(i)
+  const t: number[] = []
+  for (let i = 1; i < n - 1; i++) {
+    const s0 = s(i - 1)
+    const s1 = s(i)
+    const p = (s0 * h(i) + s1 * h(i - 1)) / (h(i - 1) + h(i))
+    t[i] = (sign(s0) + sign(s1)) * Math.min(Math.abs(s0), Math.abs(s1), 0.5 * Math.abs(p)) || 0
+  }
+  t[0] = n > 2 ? (3 * s(0) - t[1]) / 2 : s(0)
+  t[n - 1] = n > 2 ? (3 * s(n - 2) - t[n - 2]) / 2 : s(n - 2)
+  let d = `M${f(pts[0][0])} ${f(pts[0][1])}`
+  for (let i = 0; i < n - 1; i++) {
+    const dx = h(i) / 3
+    d += `C${f(pts[i][0] + dx)} ${f(pts[i][1] + dx * t[i])} ${f(pts[i + 1][0] - dx)} ${f(pts[i + 1][1] - dx * t[i + 1])} ${f(pts[i + 1][0])} ${f(pts[i + 1][1])}`
+  }
+  return d
+}
+
 /** Номер ближайшей по времени точки к моменту t (-1, если точек нет). */
 export function nearest(points: CurvePoint[], t: number): number {
   let best = -1

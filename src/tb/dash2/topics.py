@@ -161,6 +161,38 @@ def _trade_position(t):
 
 
 CURVE_POINTS = 300
+PLANS_OUT = 5
+PENDING_OUT = 6
+
+
+def _plans(v2, mode, now):
+    """Планы в работе для режима: счётчики колонок доски и ближайшие к входу. Ожидание свечи отдаём моментом (eta_at, округлён до 5 с), а не остатком: остаток менялся бы каждую секунду и тема не молчала бы."""
+    cards = [c for c in ((v2 or {}).get("plans") or {}).get("cards") or [] if isinstance(c, dict) and (mode == "all" or c.get("mode") == mode)]
+    counts = {k: 0 for k in ("waiting", "watching", "in_trade", "closed")}
+    for c in cards:
+        if c.get("col") in counts:
+            counts[c["col"]] += 1
+    near = [c for c in cards if c.get("col") in ("waiting", "watching")]
+    near.sort(key=lambda c: (_num((c.get("trigger") or {}).get("dist_pct")) is None, _num((c.get("trigger") or {}).get("dist_pct")) or 0.0))
+    out = []
+    for c in near[:PLANS_OUT]:
+        t = c.get("trigger") or {}
+        eta = _num(t.get("eta_s"))
+        out.append({"id": c.get("id"), "sym": c.get("sym"), "side": c.get("side"), "mode": c.get("mode"), "col": c.get("col"), "text": t.get("text") or c.get("entry_text") or "",
+                    "dist_pct": _num(t.get("dist_pct")), "eta_at": round((now + eta) / 5.0) * 5 if eta is not None else None, "entry_state": c.get("entry_state"),
+                    "blocked_why": c.get("blocked_why"), "net_rr": _num(c.get("net_rr")), "risk": _num(c.get("risk_usdt"))})
+    return {"counts": counts, "total": len(cards), "near": out}
+
+
+def _pending(rows, now):
+    """Ждущие лимитные входы; срок жизни отдаём моментом (expires_at), по той же причине, что и eta_at."""
+    out = []
+    for r in rows or []:
+        left = _num(r.get("left_s"))
+        out.append({"id": r.get("id"), "sym": r.get("sym"), "side": r.get("side"), "mode": r.get("mode"), "price": _num(r.get("price")), "cur": _num(r.get("cur")), "stale": bool(r.get("price_stale")),
+                    "dist_pct": _num(r.get("dist_pct")), "sl": _num(r.get("sl")), "tp": _num(r.get("tp")), "risk": _num(r.get("risk_usdt")), "lev": _num(r.get("lev")),
+                    "ttl_min": _num(r.get("ttl_min")), "expires_at": round(now + left) if left is not None else None})
+    return {"total": len(out), "items": out[:PENDING_OUT]}
 
 
 def _curve(points, excl):
@@ -211,7 +243,7 @@ def home(root=None, now=None, mode=None):
             "limits": [{"id": r.get("id"), "label": r.get("label"), "limit": _num(r.get("limit")), "used": _num(r.get("used")), "room": _num(r.get("room")), "unit": r.get("unit"), "level": r.get("level")}
                        for r in (rr.get("rows") or []) if isinstance(r, dict)],
             "limits_paper": bool(rr.get("paper")), "allowed": rr.get("allowed"), "positions": pos[:POSITIONS_OUT], "positions_total": len(pos),
-            "curve": _curve(s.get("curve"), excl)}
+            "curve": _curve(s.get("curve"), excl), "plans": _plans(s.get("v2"), mode, now), "pending": _pending(s.get("pending"), now)}
 
 
 # ---------------------------------------------------------------- events: лента для плавающего «облака» (шина событий, поля уже из белых списков)

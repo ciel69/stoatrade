@@ -2,6 +2,8 @@
 import { BrainPanel } from '@/widgets/brain-panel'
 import { LimitsStrip } from '@/widgets/limits-strip'
 import { MoneyStrip } from '@/widgets/money-strip'
+import { PendingBoard } from '@/widgets/pending-board'
+import { PlansBoard } from '@/widgets/plans-board'
 import { PnlChart } from '@/widgets/pnl-chart'
 import { PositionsBoard } from '@/widgets/positions-board'
 </script>
@@ -15,7 +17,11 @@ import { PositionsBoard } from '@/widgets/positions-board'
         <PositionsBoard />
         <PnlChart />
       </div>
-      <BrainPanel />
+      <div class="col">
+        <BrainPanel />
+        <PlansBoard />
+        <PendingBoard />
+      </div>
     </div>
   </main>
 </template>

@@ -39,6 +39,14 @@ export function usd(x: number | null | undefined): string {
   return `$${x < 1 ? x.toFixed(4) : x.toFixed(2)}`
 }
 
+/** Обратный отсчёт: 0:42, 12:05; от часа «1 ч 20 мин». Ноль и отрицательное: «0:00». */
+export function countdown(seconds: number | null | undefined): string {
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds)) return '–'
+  const s = Math.max(0, Math.floor(seconds))
+  if (s >= 3600) return duration(s)
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+}
+
 /** Длительность: 45 с, 12 мин, 2 ч 10 мин. */
 export function duration(seconds: number | null | undefined): string {
   if (typeof seconds !== 'number' || !Number.isFinite(seconds)) return '–'
