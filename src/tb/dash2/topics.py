@@ -166,7 +166,58 @@ def _trade_position(t):
 
 
 CURVE_POINTS = 300
+TRADES_OUT = 150
 PLANS_OUT = 5
+_STATE_TTL = 0.0                # сервер ставит > 0: темы home и trades делят одну сборку состояния (около секунды работы) вместо двух
+_state_cache = {}
+
+
+def _state(root, mode, now):
+    """Полное состояние старого дашборда для режима; при _STATE_TTL > 0 сборка повторно используется несколько секунд."""
+    from tb.dash import model
+    if _STATE_TTL <= 0:
+        return model.build_state(root, mode, "all", now)
+    key = (root, mode)
+    hit = _state_cache.get(key)
+    if hit and time.monotonic() - hit[0] < _STATE_TTL:
+        return hit[1]
+    s = model.build_state(root, mode, "all", now)
+    _state_cache[key] = (time.monotonic(), s)
+    return s
+
+
+def _txt(x, n):
+    return x[:n] if isinstance(x, str) and x else None
+
+
+def _trade_card(t):
+    p = t.get("path") if isinstance(t.get("path"), dict) else None
+    return {"id": t.get("id"), "sym": t.get("sym"), "side": t.get("side"), "lev": _num(t.get("lev")), "mode": t.get("mode"), "venue": t.get("venue"), "stype": _txt(t.get("stype"), 16),
+            "pnl": _num(t.get("pnl_usdt")), "pct": _num(t.get("pnl_pct_margin")), "move_pct": _num(t.get("move_pct")), "r": _num(t.get("r")),
+            "entry": _num(t.get("entry")), "exit": _num(t.get("exit")), "reason": _txt(t.get("reason"), 16), "ts_open": _num(t.get("ts_open_epoch")), "ts_close": _num(t.get("ts_close_epoch")),
+            "margin": _num(t.get("margin")), "fees": _num(t.get("fees_usdt")), "funding": _num(t.get("funding_usdt")), "risk": _num(t.get("risk_usdt")),
+            "sl0": _num(t.get("sl0")), "sl": _num(t.get("sl")),
+            "path": {k: _num(p.get(k)) for k in ("mae_pct", "mfe_pct", "mae_r", "mfe_r", "mfe_to_tp", "path_coverage")} if p else None,
+            "err": [x[:40] for x in (t.get("err") or []) if isinstance(x, str)][:6], "rule_followed": _txt(t.get("rule_followed"), 12),
+            "tags": [x[:30] for x in (t.get("tags") or []) if isinstance(x, str)][:8],
+            "lesson": _txt(t.get("lesson"), 600), "thesis": _txt(t.get("thesis"), 600), "note": _txt(t.get("note"), 300),
+            "plan_id": _txt(t.get("plan_id"), 40), "exp": _txt(t.get("exp"), 40), "var": _txt(t.get("var"), 40), "setup": _txt(t.get("setup"), 40), "hyp": _txt(t.get("hyp"), 40),
+            "adds": len(t.get("adds") or []), "parts": len(t.get("parts") or []), "realized_parts": _num(t.get("realized_parts"))}
+
+
+def trades(root=None, now=None, mode=None):
+    """Закрытые сделки режима (новые первыми), причины выхода и теги ошибок из разбора. Кривая для графиков берётся из темы home."""
+    now = time.time() if now is None else now
+    mode = mode if mode in MODES else default_mode(root)
+    s = _state(root, mode, now)
+    bd = s.get("breakdown") or {}
+    groups = lambda k: [{"name": g.get("name"), "n": g.get("n"), "pnl": _num(g.get("pnl"))} for g in bd.get(k) or [] if isinstance(g, dict)]
+    errs = groups("err")
+    return {"mode": mode, "total": s.get("history_total") or 0, "items": [_trade_card(t) for t in (s.get("history") or [])[:TRADES_OUT]],
+            "reasons": [g for g in groups("reason") if g["name"] != "-"], "errs": [g for g in errs if g["name"] != "(без разбора)"],
+            "unreviewed": sum(g["n"] or 0 for g in errs if g["name"] == "(без разбора)")}
+
+
 PENDING_OUT = 6
 
 
@@ -214,10 +265,9 @@ def _curve(points):
 
 
 def home(root=None, now=None, mode=None):
-    from tb.dash import model
     now = time.time() if now is None else now
     mode = mode if mode in MODES else default_mode(root)
-    s = model.build_state(root, mode, "all", now)
+    s = _state(root, mode, now)
     plat = _read_json(paths.control_dir("platform.json", root=root))
     rr = s.get("risk_room") or {}
     rows = {r.get("id"): r for r in rr.get("rows") or [] if isinstance(r, dict)}
@@ -262,7 +312,7 @@ def events(root=None, now=None):
 
 
 TOPICS = {"brain": brain, "events": events}
-MODE_TOPICS = {"home": home}          # зависят от режима клиента: строятся для каждого режима, который сейчас смотрит хотя бы один клиент
+MODE_TOPICS = {"home": home, "trades": trades}         # зависят от режима клиента: строятся для каждого режима, который сейчас смотрит хотя бы один клиент
 
 
 def build(topic, root=None, now=None, mode=None):

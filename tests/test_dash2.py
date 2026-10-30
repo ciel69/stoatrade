@@ -97,6 +97,21 @@ class HomeEventsTopics(Fx):
         pend = topics._pending([{"id": "L1", "sym": "SOL", "side": "long", "price": 99.0, "cur": 100.0, "dist_pct": -1.0, "left_s": 600.0, "ttl_min": 15}], now)
         self.assertEqual((pend["total"], pend["items"][0]["expires_at"], pend["items"][0]["dist_pct"]), (1, 1600, -1.0))
 
+    def test_trades_topic_cards_reasons_and_review(self):
+        now = time.time()
+        rows = []
+        for i, (tid, pnl, reason) in enumerate((("T1", 1.0, "tp"), ("T2", -0.5, "sl"), ("T3", -0.2, "sl"))):
+            ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 3600 * (3 - i)))
+            rows.append({"ev": "open", "id": tid, "ts": ts, "ts_open": ts, "sym": "SOL", "side": "long", "mode": "paper", "entry": 100.0, "sl": 99.0, "margin": 4.0, "lev": 10, "risk_usdt": 0.5, "venue": "bybit"})
+            rows.append({"ev": "close", "id": tid, "ts_close": ts, "exit": 101.0, "pnl_usdt": pnl, "reason": reason, "err": ["late_entry"] if tid == "T2" else []})
+        w(self.root, "state/trades.jsonl", "".join(json.dumps(r) + "\n" for r in rows))
+        t = topics.build("trades", self.root, None, "paper")
+        self.assertEqual((t["total"], [c["id"] for c in t["items"]]), (3, ["T3", "T2", "T1"]))          # новые первыми
+        self.assertEqual({g["name"]: g["n"] for g in t["reasons"]}, {"sl": 2, "tp": 1})
+        self.assertEqual(([g["name"] for g in t["errs"]], t["unreviewed"]), (["late_entry"], 2))
+        self.assertEqual(topics.build("trades", self.root, None, "live")["items"], [])               # другой режим: чужих сделок нет
+        self.assertAlmostEqual(t["items"][2]["pct"], 25.0, places=3)                                  # +1.0 к марже 4.0
+
     def test_events_whitelisted_newest_first(self):
         from tb.core import bus
         bus.emit("kill", {"state": "on", "flatten": False}, root=self.root)
@@ -171,8 +186,8 @@ class ServerTest(Fx, unittest.IsolatedAsyncioTestCase):
     async def test_snapshot_then_only_changes(self):
         self.hb()
         async with connect("ws://127.0.0.1:%d/ws" % self.port) as ws:
-            first = [await self.recv(ws) for _ in range(4)]
-            self.assertEqual([m["topic"] for m in first], ["hello", "brain", "events", "home"])
+            first = [await self.recv(ws) for _ in range(5)]
+            self.assertEqual([m["topic"] for m in first], ["hello", "brain", "events", "home", "trades"])
             self.assertEqual(first[1]["data"]["status"], "idle")
             self.assertEqual((first[0]["data"]["mode"], first[3]["data"]["mode"]), ("paper", "paper"))
             with self.assertRaises(asyncio.TimeoutError):                         # без изменений сервер молчит (опроса нет)
@@ -186,12 +201,12 @@ class ServerTest(Fx, unittest.IsolatedAsyncioTestCase):
     async def test_mode_switch_sends_home_for_that_mode_only(self):
         self.hb()
         async with connect("ws://127.0.0.1:%d/ws" % self.port) as a, connect("ws://127.0.0.1:%d/ws" % self.port) as b:
-            for _ in range(4):
+            for _ in range(5):
                 await self.recv(a)
                 await self.recv(b)
             await a.send(json.dumps({"op": "mode", "mode": "live"}))
-            m = await self.recv(a)
-            self.assertEqual((m["topic"], m["data"]["mode"]), ("home", "live"))
+            got = [await self.recv(a) for _ in range(2)]
+            self.assertEqual(sorted((m["topic"], m["data"]["mode"]) for m in got), [("home", "live"), ("trades", "live")])
             await a.send(json.dumps({"op": "mode", "mode": "bogus"}))      # неизвестный режим игнорируется
             with self.assertRaises(asyncio.TimeoutError):
                 await self.recv(a, 0.5)

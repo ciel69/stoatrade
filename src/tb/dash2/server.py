@@ -62,6 +62,7 @@ class Hub(object):
         self.link_seq = 0
         self._heavy_at = {}             # (тема, режим) -> когда собирали
         self.stats = {"connects": 0, "messages": 0, "changes": 0}
+        topics._STATE_TTL = max(topics._STATE_TTL, 1.5)       # home и trades за один проход собираются из одного состояния
 
     # ---- сообщения
     def _msg(self, topic, seq, data):

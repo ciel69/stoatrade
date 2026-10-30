@@ -1,6 +1,7 @@
 export { useTradingStore } from './model/store'
-export type { HomeSnapshot, LimitRow, Money, NearPlan, PendingBlock, PendingOrder, PlansBlock, PlatformItem, Position, Target, TradingMode } from './model/types'
+export type { HomeSnapshot, LimitRow, Money, NearPlan, PendingBlock, PendingOrder, PlansBlock, PlatformItem, Position, Target, TradeCard, TradeGroup, TradesSnapshot, TradingMode } from './model/types'
 export { route } from './lib/route'
 export { buildSeries, nearest, niceTicks, smoothPath } from './lib/curve'
 export type { CurvePoint, CurveRange, Series } from './lib/curve'
 export { default as PositionRow } from './ui/PositionRow.vue'
+export { default as TradeCardView } from './ui/TradeCardView.vue'

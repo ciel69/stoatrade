@@ -1,12 +1,13 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { useLive, type LiveMessage } from '@/shared/api'
-import type { HomeSnapshot, TradingMode } from './types'
+import type { HomeSnapshot, TradesSnapshot, TradingMode } from './types'
 
 const MODES: TradingMode[] = ['paper', 'live', 'testnet', 'all']
 
 export const useTradingStore = defineStore('trading', () => {
   const snapshot = ref<HomeSnapshot | null>(null)
+  const trades = ref<TradesSnapshot | null>(null)
   /** Выбранный режим. null: пока не выбран вручную, берём режим платформы из hello сервера. */
   const chosen = ref<TradingMode | null>(null)
   const serverMode = ref<TradingMode>('paper')
@@ -22,6 +23,12 @@ export const useTradingStore = defineStore('trading', () => {
     snapshot.value = data
   }
 
+  function applyTrades(m: LiveMessage): void {
+    const data = m.data as TradesSnapshot
+    if (data.mode !== mode.value) return
+    trades.value = data
+  }
+
   function applyHello(m: LiveMessage): void {
     const d = m.data as { mode?: TradingMode }
     if (d.mode && MODES.includes(d.mode)) serverMode.value = d.mode
@@ -35,6 +42,7 @@ export const useTradingStore = defineStore('trading', () => {
   function setMode(next: TradingMode): void {
     if (!MODES.includes(next) || next === mode.value) return
     chosen.value = next
+    trades.value = null
     snapshot.value = null                          // чужие цифры другого режима не показываем, пока не пришёл снимок
     useLive().socket.send({ op: 'mode', mode: next })
   }
@@ -45,7 +53,8 @@ export const useTradingStore = defineStore('trading', () => {
     const { socket } = useLive()
     socket.subscribe('hello', applyHello)
     socket.subscribe('home', applyHome)
+    socket.subscribe('trades', applyTrades)
   }
 
-  return { snapshot, mode, positions, limits, setMode, applyHome, applyHello, start }
+  return { snapshot, trades, mode, positions, limits, setMode, applyHome, applyTrades, applyHello, start }
 })

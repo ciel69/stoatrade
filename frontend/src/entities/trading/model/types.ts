@@ -110,6 +110,63 @@ export interface PendingBlock {
   items: PendingOrder[]
 }
 
+/** Закрытая сделка из журнала (тема `trades`, src/tb/dash2/topics.py). pnl: USDT после комиссий, pct: к марже, r: в рисках. */
+export interface TradeCard {
+  id: string
+  sym: string | null
+  side: 'long' | 'short' | null
+  lev: number | null
+  mode: string | null
+  venue: string | null
+  stype: string | null
+  pnl: number | null
+  pct: number | null
+  move_pct: number | null
+  r: number | null
+  entry: number | null
+  exit: number | null
+  reason: string | null
+  ts_open: number | null
+  ts_close: number | null
+  margin: number | null
+  fees: number | null
+  funding: number | null
+  risk: number | null
+  sl0: number | null
+  sl: number | null
+  path: { mae_pct: number | null; mfe_pct: number | null; mae_r: number | null; mfe_r: number | null; mfe_to_tp: number | null; path_coverage: number | null } | null
+  err: string[]
+  rule_followed: string | null
+  tags: string[]
+  lesson: string | null
+  thesis: string | null
+  note: string | null
+  plan_id: string | null
+  exp: string | null
+  var: string | null
+  setup: string | null
+  hyp: string | null
+  adds: number
+  parts: number
+  realized_parts: number | null
+}
+
+export interface TradeGroup {
+  name: string
+  n: number
+  pnl: number | null
+}
+
+export interface TradesSnapshot {
+  mode: TradingMode
+  /** всего закрытых сделок в журнале режима (в items самые свежие) */
+  total: number
+  items: TradeCard[]
+  reasons: TradeGroup[]
+  errs: TradeGroup[]
+  unreviewed: number
+}
+
 export interface HomeSnapshot {
   mode: TradingMode
   modes: TradingMode[]
