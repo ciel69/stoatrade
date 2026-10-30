@@ -55,19 +55,20 @@ function toggle(): void {
 
 <style scoped>
 /* кнопка в боковой колонке: на всю ширину, высота пункта меню; свёрнутая: значок по центру */
-.start { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; height: 44px; padding: 0 12px; background: var(--accent-bg); color: var(--accent); border: 1px solid var(--accent); border-radius: 12px; font: inherit; font-size: 14px; font-weight: 650; white-space: nowrap; cursor: pointer; transition: background-color var(--dur-fast) ease, color var(--dur-fast) ease, border-color var(--dur-fast) ease, transform 120ms var(--ease-out); }
-.start.compact { padding: 0; }
+/* главное действие панели: сплошная акцентная кнопка (как «Старт» на старом дашборде); идущий день, остановка и недоступность спокойнее: тон по состоянию, без заливки */
+.start { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; height: 44px; padding: 0 12px; background: var(--accent); color: var(--bg); border: 1px solid transparent; border-radius: 12px; box-shadow: 0 1px 0 rgba(255, 255, 255, 0.12) inset, 0 4px 14px color-mix(in srgb, var(--accent) 32%, transparent); font: inherit; font-size: 14px; font-weight: 650; white-space: nowrap; cursor: pointer; transition: background-color var(--dur-fast) ease, color var(--dur-fast) ease, border-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease, filter var(--dur-fast) ease, transform 120ms var(--ease-out); }
+.start.compact { width: 48px; padding: 0; }
 .start:active { transform: scale(0.97); }
 .ico { flex: none; }
 .text { overflow: hidden; text-overflow: ellipsis; }
 .k-starting .ico, .k-closing .ico { animation: st-pulse 1.2s var(--ease-in-out) infinite; }
-.k-running { background: transparent; color: var(--pos); border-color: var(--pos); }
-.k-blocked { background: transparent; color: var(--neg); border-color: var(--neg); }
-.k-unavailable { background: transparent; color: var(--muted); border-color: var(--line2); cursor: not-allowed; font-weight: 400; }
+.k-running { background: color-mix(in srgb, var(--pos) 14%, var(--panel)); color: var(--pos); border-color: color-mix(in srgb, var(--pos) 40%, transparent); box-shadow: none; }
+.k-blocked { background: color-mix(in srgb, var(--neg) 12%, var(--panel)); color: var(--neg); border-color: color-mix(in srgb, var(--neg) 40%, transparent); box-shadow: none; }
+.k-unavailable { background: var(--panel2); color: var(--muted); border-color: var(--line2); box-shadow: none; cursor: not-allowed; font-weight: 400; }
 @keyframes st-pulse { 50% { opacity: 0.3; } }
 @media (hover: hover) and (pointer: fine) {
-  .k-start:hover, .k-starting:hover, .k-closing:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
-  .k-running:hover { background: color-mix(in srgb, var(--pos) 12%, transparent); }
+  .k-start:hover, .k-starting:hover, .k-closing:hover { filter: brightness(1.08); }
+  .k-running:hover { background: color-mix(in srgb, var(--pos) 22%, var(--panel)); }
 }
 .start:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) {

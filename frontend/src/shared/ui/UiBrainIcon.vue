@@ -16,7 +16,7 @@ import { BRAIN_NODES, nearestNode, waveOrder } from './brain-regions'
  * а дыхание «думает» это отдельная группа над дыханием «ждёт»: фоновые анимации ожидания не вырываются и не перезапускаются при смене состояния.
  */
 export type BrainIconState = 'idle' | 'thinking' | 'protect' | 'down'
-const props = withDefaults(defineProps<{ state?: BrainIconState; size?: number; label?: string; interactive?: boolean; lit?: readonly number[] }>(), { state: 'idle', size: 88, interactive: false, lit: () => [] })
+const props = withDefaults(defineProps<{ state?: BrainIconState; size?: number; label?: string; interactive?: boolean; lit?: readonly number[]; crisp?: boolean }>(), { state: 'idle', size: 88, interactive: false, lit: () => [], crisp: false })
 const emit = defineEmits<{ node: [index: number] }>()
 
 const nodes = BRAIN_NODES
@@ -102,7 +102,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <svg ref="svg" class="brain" :class="[`s-${state}`, { live: interactive, fx, 'has-lit': hasLit }]" :style="{ '--amp': amp }" :width="size" :height="size" viewBox="0 0 64 64" role="img" :aria-label="label ?? 'мозг'" fill="none" stroke="currentColor"
+  <svg ref="svg" class="brain" :class="[`s-${state}`, { live: interactive, fx, 'has-lit': hasLit, crisp }]" :style="{ '--amp': amp }" :width="size" :height="size" viewBox="0 0 64 64" role="img" :aria-label="label ?? 'мозг'" fill="none" stroke="currentColor"
        stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" @pointermove="onMove" @pointerleave="onLeave">
     <g class="pulse">
     <g class="body">
@@ -142,6 +142,17 @@ onUnmounted(() => {
 .s-down { color: var(--neg); }
 .s-down .body { opacity: 0.55; }
 .cut { stroke-width: 2.4; }
+
+/* крупный размер (окно запуска): контур остаётся тонким и чётким при любом масштабе (не растёт вместе с рисунком), связи тоньше, свечение без размытия */
+.crisp .cortex path { vector-effect: non-scaling-stroke; stroke-width: 1.6px; }
+.crisp .cut { vector-effect: non-scaling-stroke; stroke-width: 2px; }
+.crisp .wire { stroke-width: 0.5; }
+.crisp .spark { stroke-width: 0.9; }
+.crisp .wire-hl { stroke-width: 0.9; }
+.crisp .flash { filter: none; }
+.crisp .node { r: 1.3px; }
+.crisp .halo { r: 1.9px; }
+.crisp .mid, .crisp .fold { opacity: 0.55; }
 
 /* подсветка области: нейроны и связи области акцентным цветом, остальной мозг приглушён; transitions, чтобы быстрые движения мыши перенацеливали движение, а не перезапускали его */
 .cortex, .net, .nodes { transition: opacity var(--dur-enter) var(--ease-out); }

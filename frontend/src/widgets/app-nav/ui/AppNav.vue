@@ -72,13 +72,15 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
   padding: 20px 12px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 20px; box-shadow: var(--lift); overflow: hidden;
   transition: width var(--dur-enter) var(--ease-out);
 }
-.nav.collapsed { width: 74px; }        /* 74 = рамка 2 + поля 24 + пункт 48 (плитка 32 + поля по 8) */
+.nav.collapsed { width: 80px; }        /* пункт 48 (плитка 32 + поля по 8) в содержимом 54 (80 - рамка 2 - поля 24): по 3 px запаса с каждой стороны, чтобы рамка и фокус не резались */
+.nav.collapsed .action, .nav.collapsed .group { justify-items: center; }
+.nav.collapsed .item { width: 48px; box-sizing: border-box; }
 .brand { display: flex; align-items: center; gap: 10px; min-height: 34px; padding: 0 8px; }
 .brand :deep(svg) { flex: none; }
 .name { font-size: 15px; font-weight: 650; letter-spacing: -0.01em; white-space: nowrap; transition: opacity var(--dur-enter) var(--ease-out); }
 .action { display: grid; }
 .action:empty { display: none; }
-.groups { display: grid; gap: var(--space-4); flex: 1 1 auto; align-content: start; overflow-y: auto; overflow-x: hidden; }
+.groups { display: grid; gap: var(--space-4); flex: 1 1 auto; align-content: start; overflow-y: auto; overflow-x: hidden; padding: 3px; margin: -3px; }        /* поле под обводку фокуса: иначе её режет overflow */
 .group { display: grid; gap: 4px; }
 .cap { margin: 0 0 var(--space-1); padding: 0 var(--space-3); font-size: 11px; color: var(--muted); white-space: nowrap; height: 14px; transition: opacity var(--dur-enter) var(--ease-out); }
 .item { --zc: var(--muted); display: flex; align-items: center; gap: 12px; padding: 8px; border-radius: 12px; color: var(--muted); font-size: 14px; font-weight: 600; text-decoration: none; white-space: nowrap; transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease; }
