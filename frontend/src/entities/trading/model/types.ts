@@ -79,6 +79,25 @@ export interface NearPlan {
   blocked_why: string | null
   net_rr: number | null
   risk: number | null
+  status: string | null                       // draft (не взведён) или armed
+  setup: string | null
+  thesis: string
+  entry_text: string
+  missing: string[]                           // условия входа, которые ещё не выполнены
+  met_n: number
+  leaf_n: number
+  seq: { done: number; total: number } | null
+  level: number | null                        // уровень ближайшего условия
+  price: number | null
+  kind: string | null                         // вид ближайшего условия: price_beyond, candle_close, candle_reject, price_in_zone, ...
+  dir: 'above' | 'below' | null
+  beyond: boolean | null                      // цена уже по нужную сторону уровня
+  tf: string | null                           // таймфрейм свечной проверки
+  ttl_at: number | null                       // когда план истечёт (с)
+  hold: string | null
+  hold_reason: string | null
+  stop: number | null
+  target: number | null
 }
 
 export interface PlansBlock {

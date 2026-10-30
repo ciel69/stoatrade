@@ -262,9 +262,17 @@ def _plans(v2, mode, now):
     for c in near[:PLANS_OUT]:
         t = c.get("trigger") or {}
         eta = _num(t.get("eta_s"))
+        ttl = _num(c.get("ttl_left_s"))
+        tgs = [x for x in (c.get("targets") or []) if isinstance(x, dict) and _num(x.get("price")) is not None]
         out.append({"id": c.get("id"), "sym": c.get("sym"), "side": c.get("side"), "mode": c.get("mode"), "col": c.get("col"), "text": t.get("text") or c.get("entry_text") or "",
                     "dist_pct": _num(t.get("dist_pct")), "eta_at": round((now + eta) / 5.0) * 5 if eta is not None else None, "entry_state": c.get("entry_state"),
-                    "blocked_why": c.get("blocked_why"), "net_rr": _num(c.get("net_rr")), "risk": _num(c.get("risk_usdt"))})
+                    "blocked_why": c.get("blocked_why"), "net_rr": _num(c.get("net_rr")), "risk": _num(c.get("risk_usdt")),
+                    # что именно ждёт план: условия, что из них выполнено, уровень и сторона, на каком таймфрейме проверка, когда план истечёт (моментом, как eta_at)
+                    "status": c.get("status"), "setup": c.get("setup"), "thesis": (c.get("thesis") or "")[:160], "entry_text": c.get("entry_text") or "",
+                    "missing": [str(x)[:90] for x in (t.get("missing") or [])[:4]], "met_n": int(_num(t.get("met_n")) or 0), "leaf_n": int(_num(t.get("leaf_n")) or 0),
+                    "seq": t.get("seq") if isinstance(t.get("seq"), dict) else None, "level": _num(t.get("level")), "price": _num(c.get("price")), "kind": t.get("kind"),
+                    "dir": t.get("dir"), "beyond": t.get("beyond"), "tf": t.get("eta_tf"), "ttl_at": round((now + ttl) / 30.0) * 30 if ttl is not None else None,
+                    "hold": c.get("hold"), "hold_reason": c.get("hold_reason"), "stop": _num(c.get("stop")), "target": _num(tgs[0]["price"]) if tgs else None})
     return {"counts": counts, "total": len(cards), "near": out}
 
 

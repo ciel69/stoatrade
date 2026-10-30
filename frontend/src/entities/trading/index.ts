@@ -3,6 +3,8 @@ export type { DecisionDay, DecisionItem, DecisionsSnapshot, ModelRow, ModelsPeri
 export { route } from './lib/route'
 export { actorKey, filterDecisions, humanAction, isFail, planShort } from './lib/decisions'
 export type { ActorFilter, DecisionFilter } from './lib/decisions'
+export { planWait } from './lib/plan-wait'
+export type { PlanWait } from './lib/plan-wait'
 export { buildSeries, nearest, niceTicks, smoothPath } from './lib/curve'
 export type { CurvePoint, CurveRange, Series } from './lib/curve'
 export { default as PositionRow } from './ui/PositionRow.vue'

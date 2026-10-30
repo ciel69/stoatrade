@@ -94,6 +94,14 @@ class HomeEventsTopics(Fx):
         self.assertEqual([x["id"] for x in p["near"]], ["B", "A"])                      # ближайшие к входу первыми, чужой режим не виден
         self.assertEqual(p["near"][1]["eta_at"], 1060)                                   # момент, а не остаток: тема не меняется со временем
         self.assertEqual(topics._plans(v2, "paper", now + 1)["near"][1]["eta_at"], 1060)
+        full = {"plans": {"cards": [{"id": "E", "sym": "SOL", "side": "short", "mode": "paper", "col": "waiting", "status": "armed", "setup": "level_reject", "price": 143.5, "ttl_left_s": 7213.0,
+                                     "stop": 146.0, "targets": [{"id": "t1", "price": 140.0}], "hold": None,
+                                     "trigger": {"text": "5м закрытие выше 144", "dist_pct": 0.35, "eta_s": 61, "missing": ["5м закрытие выше 144", "объём 5м ≥ x2 медианы"], "met_n": 1, "leaf_n": 3,
+                                                 "seq": None, "level": 144.0, "kind": "candle_close", "dir": "above", "beyond": False, "eta_tf": "5м"}}]}}
+        e = topics._plans(full, "paper", now)["near"][0]
+        self.assertEqual((e["missing"], e["met_n"], e["leaf_n"], e["tf"], e["level"], e["kind"], e["stop"], e["target"], e["setup"]),
+                         (["5м закрытие выше 144", "объём 5м ≥ x2 медианы"], 1, 3, "5м", 144.0, "candle_close", 146.0, 140.0, "level_reject"))
+        self.assertEqual(e["ttl_at"], 8220)                                              # срок жизни плана моментом (округлён до 30 с), а не остатком
         pend = topics._pending([{"id": "L1", "sym": "SOL", "side": "long", "price": 99.0, "cur": 100.0, "dist_pct": -1.0, "left_s": 600.0, "ttl_min": 15}], now)
         self.assertEqual((pend["total"], pend["items"][0]["expires_at"], pend["items"][0]["dist_pct"]), (1, 1600, -1.0))
 
