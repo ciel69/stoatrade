@@ -46,7 +46,7 @@ const blocked = (p: NearPlan) => (p.blocked_why ? `вход заблокиров
         </div>
       </li>
     </ul>
-    <p v-else-if="block" class="empty">{{ active ? 'Ждущих входа планов нет.' : 'Активных планов нет.' }}</p>
+    <p v-else-if="block" class="empty">{{ active ? 'Планов, которые ждут входа, нет.' : 'Активных планов нет.' }}</p>
     <div v-else class="skel" aria-busy="true" />
   </section>
 </template>
