@@ -57,6 +57,13 @@ export interface Position {
   liq: number | null
 }
 
+/** Накопленный результат закрытых сделок: [время закрытия (с), накопленный, результат сделки, монета]; base: накопленный до первой отданной точки (длинная история обрезана). */
+export interface Curve {
+  base: number
+  points: Array<[number, number, number, string | null]>
+  total: number
+}
+
 export interface HomeSnapshot {
   mode: TradingMode
   modes: TradingMode[]
@@ -67,4 +74,5 @@ export interface HomeSnapshot {
   allowed: boolean | null
   positions: Position[]
   positions_total: number
+  curve?: Curve
 }

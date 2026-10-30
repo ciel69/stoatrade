@@ -62,6 +62,26 @@ class HomeEventsTopics(Fx):
         m = topics.build("home", self.root, None, "paper")["money"]
         self.assertEqual((m["pnl_today"], m["trades_today"], m["excluded"]), (1.5, 1, 1))
 
+    def test_home_curve_cumulative_without_excluded_and_trimmed(self):
+        now = time.time()
+        rows = []
+        for i, (tid, pnl) in enumerate((("T1", 1.0), ("T2", 9.0), ("T3", -0.4))):
+            ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 3600 * (3 - i)))
+            rows.append({"ev": "open", "id": tid, "ts": ts, "sym": "SOL", "side": "long", "mode": "paper", "entry": 100.0, "sl": 99.0, "risk_usdt": 1.0, "venue": "bybit"})
+            rows.append({"ev": "close", "id": tid, "ts_close": ts, "pnl_usdt": pnl, "reason": "tp"})
+        w(self.root, "state/trades.jsonl", "".join(json.dumps(r) + "\n" for r in rows))
+        w(self.root, "state/exclude_trades.json", json.dumps({"ids": ["T2"]}))
+        c = topics.build("home", self.root, None, "paper")["curve"]
+        self.assertEqual([p[1] for p in c["points"]], [1.0, 0.6])                  # артефактная сделка не входит в накопленное
+        self.assertEqual((c["base"], c["total"]), (0.0, 2))
+        old = topics.CURVE_POINTS
+        topics.CURVE_POINTS = 1
+        try:
+            t = topics.build("home", self.root, None, "paper")["curve"]
+        finally:
+            topics.CURVE_POINTS = old
+        self.assertEqual(([p[1] for p in t["points"]], t["base"]), ([0.6], 1.0))      # хвост обрезан, база хранит сумму отрезанного
+
     def test_events_whitelisted_newest_first(self):
         from tb.core import bus
         bus.emit("kill", {"state": "on", "flatten": False}, root=self.root)

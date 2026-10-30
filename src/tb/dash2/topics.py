@@ -160,6 +160,22 @@ def _trade_position(t):
             "r": _num(c.get("r_now")), "upnl": _num(c.get("pnl")), "risk": _num(t.get("risk_usdt")), "pnl_at_sl": _num(c.get("pnl_at_sl")), "held_s": _num(t.get("held_s")), "hold_left_s": None, "liq": _num(c.get("liq_est"))}
 
 
+CURVE_POINTS = 300
+
+
+def _curve(points, excl):
+    """Накопленный результат закрытых сделок режима: [[ts, накопленный, результат сделки, монета]]; сделки-артефакты (exclude_trades.json) не считаются.
+    Длинную историю обрезаем с хвоста, базу (сумму отрезанного) отдаём отдельно, чтобы кривая начиналась с правильного уровня."""
+    rows = [p for p in points or [] if isinstance(p, dict) and p.get("id") not in excl and _num(p.get("ts")) is not None]
+    cum, out = 0.0, []
+    for p in rows:
+        cum += _num(p.get("pnl")) or 0.0
+        out.append([p["ts"], round(cum, 4), _num(p.get("pnl")) or 0.0, p.get("sym")])
+    cut = max(0, len(out) - CURVE_POINTS)
+    base = out[cut - 1][1] if cut else 0.0
+    return {"base": base, "points": out[cut:], "total": len(out)}
+
+
 def home(root=None, now=None, mode=None):
     from tb.dash import model
     now = time.time() if now is None else now
@@ -194,7 +210,8 @@ def home(root=None, now=None, mode=None):
                        "open_pnl": _num(s.get("open_pnl")), "equity": _num((s.get("account") or {}).get("equity")), "excluded": len([t for t in s.get("history") or [] if t.get("id") in excl and (t.get("ts_close_epoch") or 0) >= start])},
             "limits": [{"id": r.get("id"), "label": r.get("label"), "limit": _num(r.get("limit")), "used": _num(r.get("used")), "room": _num(r.get("room")), "unit": r.get("unit"), "level": r.get("level")}
                        for r in (rr.get("rows") or []) if isinstance(r, dict)],
-            "limits_paper": bool(rr.get("paper")), "allowed": rr.get("allowed"), "positions": pos[:POSITIONS_OUT], "positions_total": len(pos)}
+            "limits_paper": bool(rr.get("paper")), "allowed": rr.get("allowed"), "positions": pos[:POSITIONS_OUT], "positions_total": len(pos),
+            "curve": _curve(s.get("curve"), excl)}
 
 
 # ---------------------------------------------------------------- events: лента для плавающего «облака» (шина событий, поля уже из белых списков)
