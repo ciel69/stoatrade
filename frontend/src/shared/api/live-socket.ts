@@ -60,6 +60,13 @@ export class LiveSocket {
     return () => this.stateHandlers.delete(handler)
   }
 
+  /** Отправить команду серверу ({"op": ...}). false: сокет не открыт (команда не буферизуется; состояние после переподключения восстанавливает вызывающий по onState). */
+  send(payload: unknown): boolean {
+    if (!this.ws || this.state !== 'open') return false
+    this.ws.send(JSON.stringify(payload))
+    return true
+  }
+
   start(): void {
     if (!this.stopped) return
     this.stopped = false

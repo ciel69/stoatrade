@@ -1,4 +1,5 @@
 export { useBrainStore } from './model/store'
 export type { ActiveModel, BrainSnapshot, BrainStatus, DecisionRow, ModelRef, RoleRow } from './model/types'
-export { default as BrainStatusBadge } from './ui/BrainStatus.vue'
-export { default as DecisionItem } from './ui/DecisionItem.vue'
+export { FADE_S, MAX_THOUGHTS, pickThoughts } from './lib/thoughts'
+export type { Thought } from './lib/thoughts'
+export { default as ThoughtBubble } from './ui/ThoughtBubble.vue'

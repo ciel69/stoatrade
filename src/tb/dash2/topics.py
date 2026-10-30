@@ -123,9 +123,97 @@ def brain(root=None, now=None):
             "budget": hb.get("budget"), "errors": hb.get("errors"), "active": active, "roles": roles, "decisions": _recent_decisions(root)}
 
 
-TOPICS = {"brain": brain}
+# ---------------------------------------------------------------- home: деньги, лимиты, позиции, платформа (зависит от режима paper|live|testnet|all)
+MODES = ("paper", "live", "testnet", "all")
+POSITIONS_OUT = 8
 
 
-def build(topic, root=None, now=None):
+def default_mode(root=None):
+    """Режим по умолчанию = режим, в котором сейчас работает платформа (state/control/platform.json); платформа остановлена или режим незнаком -> paper."""
+    d = _read_json(paths.control_dir("platform.json", root=root))
+    return d.get("mode") if d.get("state") == "running" and d.get("mode") in ("paper", "live", "testnet") else "paper"
+
+
+def _excluded_ids(root):
+    d = _read_json(paths.state("exclude_trades.json", root=root))
+    return set(x for x in (d.get("ids") or []) if isinstance(x, str))
+
+
+def _num(x):
+    return x if isinstance(x, (int, float)) and not isinstance(x, bool) and x == x else None
+
+
+def _position(vp, trade):
+    tg = [{"price": _num(t.get("price")), "state": t.get("state")} for t in (vp.get("targets") or []) if _num(t.get("price")) is not None]
+    calc = (trade or {}).get("calc") or {}
+    return {"plan": vp.get("plan"), "sym": vp.get("sym"), "side": vp.get("side"), "mode": vp.get("mode"), "lev": _num(vp.get("lev")), "qty": _num(vp.get("qty")),
+            "avg": _num(vp.get("avg")), "price": _num(vp.get("price")), "stale": bool(vp.get("price_stale")), "stop": _num(vp.get("cur_stop")), "stop0": _num(vp.get("initial_stop")),
+            "targets": tg, "r": _num(vp.get("r_now")), "upnl": _num(vp.get("upnl")), "risk": _num((trade or {}).get("risk_usdt")), "pnl_at_sl": _num(calc.get("pnl_at_sl")),
+            "held_s": _num(vp.get("held_s")), "hold_left_s": _num(vp.get("hold_left_s")), "liq": _num(vp.get("liq"))}
+
+
+def _trade_position(t):
+    """Позиция из журнала сделок, если исполнитель плана её не показал (live без плана v2)."""
+    c = t.get("calc") or {}
+    return {"plan": t.get("plan_id"), "sym": t.get("sym"), "side": t.get("side"), "mode": t.get("mode"), "lev": _num(t.get("lev")), "qty": None, "avg": _num(t.get("entry")),
+            "price": _num(c.get("price")), "stale": bool(c.get("price_stale")), "stop": _num(t.get("sl")), "stop0": _num(t.get("sl")), "targets": [{"price": _num(t.get("tp")), "state": "resting"}] if _num(t.get("tp")) else [],
+            "r": _num(c.get("r_now")), "upnl": _num(c.get("pnl")), "risk": _num(t.get("risk_usdt")), "pnl_at_sl": _num(c.get("pnl_at_sl")), "held_s": _num(t.get("held_s")), "hold_left_s": None, "liq": _num(c.get("liq_est"))}
+
+
+def home(root=None, now=None, mode=None):
     from tb.dash import model
+    now = time.time() if now is None else now
+    mode = mode if mode in MODES else default_mode(root)
+    s = model.build_state(root, mode, "all", now)
+    plat = _read_json(paths.control_dir("platform.json", root=root))
+    rr = s.get("risk_room") or {}
+    rows = {r.get("id"): r for r in rr.get("rows") or [] if isinstance(r, dict)}
+    daily = rows.get("daily") or {}
+    excl = _excluded_ids(root)
+    start = ((s.get("summary") or {}).get("today") or {}).get("start") or 0
+    today = [t for t in s.get("history") or [] if (t.get("ts_close_epoch") or 0) >= start and t.get("id") not in excl]
+    pnl_today = round(sum(_num(t.get("pnl_usdt")) or 0.0 for t in today), 4)
+    trades = {t.get("id"): t for t in s.get("open_trades") or []}
+    vps = (s.get("v2") or {}).get("positions") or []
+    pos, seen = [], set()
+    for vp in vps:
+        if mode in ("all", vp.get("mode")):
+            pos.append(_position(vp, trades.get(vp.get("journal_id"))))
+            seen.add(vp.get("journal_id"))
+    for t in s.get("open_trades") or []:
+        if t.get("id") not in seen:
+            pos.append(_trade_position(t))
+    pos.sort(key=lambda p: -(p.get("risk") or 0.0))
+    status = s.get("status") or {}
+    strip = ((s.get("v2") or {}).get("strip") or {}).get("items") or []
+    items = [{"id": i.get("id"), "label": i.get("label"), "level": i.get("level"), "value": i.get("value")}
+             for i in list(strip) + list(status.get("items") or []) if i.get("id") in ("exec", "net", "scanner", "feed", "context", "session")]
+    return {"mode": mode, "modes": list(MODES),
+            "platform": {"state": plat.get("state"), "mode": plat.get("mode"), "trading": plat.get("trading"), "level": status.get("level"), "items": items},
+            "money": {"under_risk": _num(daily.get("open_risk")), "day_room": _num(daily.get("room")), "day_limit": _num(daily.get("limit")), "pnl_today": pnl_today, "trades_today": len(today),
+                       "open_pnl": _num(s.get("open_pnl")), "equity": _num((s.get("account") or {}).get("equity")), "excluded": len([t for t in s.get("history") or [] if t.get("id") in excl and (t.get("ts_close_epoch") or 0) >= start])},
+            "limits": [{"id": r.get("id"), "label": r.get("label"), "limit": _num(r.get("limit")), "used": _num(r.get("used")), "room": _num(r.get("room")), "unit": r.get("unit"), "level": r.get("level")}
+                       for r in (rr.get("rows") or []) if isinstance(r, dict)],
+            "limits_paper": bool(rr.get("paper")), "allowed": rr.get("allowed"), "positions": pos[:POSITIONS_OUT], "positions_total": len(pos)}
+
+
+# ---------------------------------------------------------------- events: лента для плавающего «облака» (шина событий, поля уже из белых списков)
+EVENTS_OUT = 40
+
+
+def events(root=None, now=None):
+    from tb.core import bus
+    rows = bus.read_tail(EVENTS_OUT, root=root)
+    out = [{"seq": e.get("seq"), "ts": e.get("ts"), "type": e.get("type"), "pri": e.get("pri"), "plan": e.get("plan"), "sym": e.get("sym"), "d": e.get("d") or {}} for e in reversed(rows)]
+    return {"last_seq": out[0]["seq"] if out else 0, "items": out}
+
+
+TOPICS = {"brain": brain, "events": events}
+MODE_TOPICS = {"home": home}          # зависят от режима клиента: строятся для каждого режима, который сейчас смотрит хотя бы один клиент
+
+
+def build(topic, root=None, now=None, mode=None):
+    from tb.dash import model
+    if topic in MODE_TOPICS:
+        return model.scrub(MODE_TOPICS[topic](root, now, mode))
     return model.scrub(TOPICS[topic](root, now))

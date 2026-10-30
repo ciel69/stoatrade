@@ -23,6 +23,7 @@ DEFAULT_PORT = 8767
 MAX_CLIENTS = 5
 TICK_S = 1.0
 HEARTBEAT_S = 15.0
+HEAVY_S = 2.0           # home собирается около секунды: обновляем не чаще раза в 2 с
 DEV_ORIGINS = ("http://127.0.0.1:5173", "http://localhost:5173")      # Vite dev server (npm run dev)
 CTYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml",
           ".json": "application/json; charset=utf-8", ".woff2": "font/woff2", ".png": "image/png", ".ico": "image/x-icon", ".map": "application/json"}
@@ -51,46 +52,75 @@ def safe_file(base, rel):
 
 
 class Hub(object):
-    def __init__(self, root=None, port=DEFAULT_PORT, tick_s=TICK_S, heartbeat_s=HEARTBEAT_S, max_clients=MAX_CLIENTS, clock=time.time):
-        self.root, self.port, self.tick_s, self.heartbeat_s, self.max_clients, self.clock = root, port, tick_s, heartbeat_s, max_clients, clock
-        self.clients = set()
-        self.state = {}                 # тема -> {"seq", "json", "msg"}
+    """Состояние рассылки. Темы двух видов: общие (brain, events) и зависящие от режима клиента (home): последние строятся для каждого режима, который сейчас смотрит
+    хотя бы один клиент, и уходят только тем клиентам, у кого этот режим выбран. Тяжёлые темы (home собирается около секунды) обновляются раз в HEAVY_S."""
+
+    def __init__(self, root=None, port=DEFAULT_PORT, tick_s=TICK_S, heartbeat_s=HEARTBEAT_S, max_clients=MAX_CLIENTS, clock=time.time, heavy_s=HEAVY_S):
+        self.root, self.port, self.tick_s, self.heartbeat_s, self.max_clients, self.clock, self.heavy_s = root, port, tick_s, heartbeat_s, max_clients, clock, heavy_s
+        self.clients = {}               # соединение -> режим
+        self.state = {}                 # (тема, режим|None) -> {"seq", "json", "msg"}
         self.link_seq = 0
+        self._heavy_at = {}             # (тема, режим) -> когда собирали
         self.stats = {"connects": 0, "messages": 0, "changes": 0}
 
     # ---- сообщения
     def _msg(self, topic, seq, data):
         return json.dumps({"topic": topic, "seq": seq, "ts": round(self.clock(), 3), "data": data}, ensure_ascii=False, separators=(",", ":"))
 
-    async def refresh(self):
-        """Пересобирает темы (в потоке: чтение файлов) и рассылает только изменившиеся. -> список изменившихся тем."""
+    def modes_in_use(self):
+        return set(self.clients.values()) | {topics.default_mode(self.root)}
+
+    async def _rebuild(self, topic, mode, force=False):
+        key = (topic, mode)
+        if topic in topics.MODE_TOPICS and not force and self.clock() - self._heavy_at.get(key, 0.0) < self.heavy_s and key in self.state:
+            return False
+        self._heavy_at[key] = self.clock()
+        try:
+            data = await asyncio.to_thread(topics.build, topic, self.root, None, mode)
+        except Exception as e:           # одна сломанная тема не должна ронять цикл
+            data = {"error": type(e).__name__}
+        text = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        cur = self.state.get(key)
+        if cur is not None and cur["json"] == text:
+            return False
+        seq = 1 if cur is None else cur["seq"] + 1
+        self.state[key] = {"seq": seq, "json": text, "msg": self._msg(topic, seq, data)}
+        return True
+
+    async def refresh(self, force=False):
+        """Пересобирает темы (в потоке: чтение файлов) и рассылает только изменившиеся. -> список изменившихся (тема, режим)."""
         changed = []
         for name in topics.TOPICS:
-            try:
-                data = await asyncio.to_thread(topics.build, name, self.root, None)
-            except Exception as e:           # одна сломанная тема не должна ронять цикл
-                data = {"error": type(e).__name__}
-            text = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-            cur = self.state.get(name)
-            if cur is not None and cur["json"] == text:
-                continue
-            seq = 1 if cur is None else cur["seq"] + 1
-            self.state[name] = {"seq": seq, "json": text, "msg": self._msg(name, seq, data)}
-            changed.append(name)
+            if await self._rebuild(name, None, force):
+                changed.append((name, None))
+        for name in topics.MODE_TOPICS:
+            for mode in sorted(self.modes_in_use()):
+                if await self._rebuild(name, mode, force):
+                    changed.append((name, mode))
         if changed:
             self.stats["changes"] += len(changed)
-            self.broadcast([self.state[n]["msg"] for n in changed])
+            for key in changed:
+                self.send_topic(key)
         return changed
 
-    def broadcast(self, msgs):
+    def send_topic(self, key):
         from websockets import broadcast
-        for m in msgs:
-            broadcast(self.clients, m)
-            self.stats["messages"] += len(self.clients)
+        msg = self.state[key]["msg"]
+        targets = [ws for ws, mode in self.clients.items() if key[1] is None or key[1] == mode]
+        broadcast(targets, msg)
+        self.stats["messages"] += len(targets)
 
-    def snapshot_messages(self):
-        return [self._msg("hello", 0, {"topics": sorted(topics.TOPICS), "tick_s": self.tick_s, "heartbeat_s": self.heartbeat_s, "server_ts": round(self.clock(), 3)})] + \
-               [self.state[n]["msg"] for n in sorted(self.state)]
+    def broadcast_all(self, msg):
+        from websockets import broadcast
+        broadcast(list(self.clients), msg)
+        self.stats["messages"] += len(self.clients)
+
+    def snapshot_messages(self, mode):
+        out = [self._msg("hello", 0, {"topics": sorted(list(topics.TOPICS) + list(topics.MODE_TOPICS)), "tick_s": self.tick_s, "heartbeat_s": self.heartbeat_s,
+                                       "server_ts": round(self.clock(), 3), "mode": mode, "modes": list(topics.MODES)})]
+        out += [self.state[(n, None)]["msg"] for n in sorted(topics.TOPICS) if (n, None) in self.state]
+        out += [self.state[(n, mode)]["msg"] for n in sorted(topics.MODE_TOPICS) if (n, mode) in self.state]
+        return out
 
     async def loop(self):
         last_hb = self.clock()
@@ -99,7 +129,7 @@ class Hub(object):
             if self.clock() - last_hb >= self.heartbeat_s:
                 last_hb = self.clock()
                 self.link_seq += 1
-                self.broadcast([self._msg("link", self.link_seq, {"clients": len(self.clients)})])
+                self.broadcast_all(self._msg("link", self.link_seq, {"clients": len(self.clients)}))
             await asyncio.sleep(self.tick_s)
 
     # ---- соединения
@@ -107,26 +137,43 @@ class Hub(object):
         from websockets.exceptions import ConnectionClosed
         self.stats["connects"] += 1
         try:
-            if not self.state:
-                await self.refresh()
-            sent = {n: self.state[n]["seq"] for n in self.state}
-            for m in self.snapshot_messages():
+            mode = topics.default_mode(self.root)
+            if not all((n, None) in self.state for n in topics.TOPICS) or any((n, mode) not in self.state for n in topics.MODE_TOPICS):
+                await self.refresh(force=False)
+                for n in topics.MODE_TOPICS:
+                    if (n, mode) not in self.state:
+                        await self._rebuild(n, mode, force=True)
+            sent = {k: v["seq"] for k, v in self.state.items()}
+            for m in self.snapshot_messages(mode):
                 await ws.send(m)
-            self.clients.add(ws)                 # в рассылку только после снимка: иначе изменение темы обогнало бы hello
-            for n in sorted(self.state):         # тема изменилась, пока шёл снимок: досылаем текущую
-                if self.state[n]["seq"] != sent.get(n):
-                    await ws.send(self.state[n]["msg"])
+            self.clients[ws] = mode                  # в рассылку только после снимка: иначе изменение темы обогнало бы hello
+            for key in sorted(self.state, key=str):  # тема изменилась, пока шёл снимок: досылаем текущую
+                if (key[1] is None or key[1] == mode) and self.state[key]["seq"] != sent.get(key):
+                    await ws.send(self.state[key]["msg"])
             async for raw in ws:
                 try:
                     m = json.loads(raw)
                 except (ValueError, TypeError):
                     continue
-                if isinstance(m, dict) and m.get("op") == "ping":
+                if not isinstance(m, dict):
+                    continue
+                if m.get("op") == "ping":
                     await ws.send(self._msg("pong", 0, {}))
+                elif m.get("op") == "mode" and m.get("mode") in topics.MODES:
+                    await self.set_mode(ws, m["mode"])
         except ConnectionClosed:                 # клиент закрыл вкладку или оборвал связь: не ошибка сервера
             pass
         finally:
-            self.clients.discard(ws)
+            self.clients.pop(ws, None)
+
+    async def set_mode(self, ws, mode):
+        """Клиент переключил режим: свежая сборка home для него (если ещё не строилась) и снимок."""
+        self.clients[ws] = mode
+        for n in topics.MODE_TOPICS:
+            if (n, mode) not in self.state:
+                await self._rebuild(n, mode, force=True)
+            if (n, mode) in self.state:
+                await ws.send(self.state[(n, mode)]["msg"])
 
     def process_request(self, connection, request):
         from websockets.datastructures import Headers
