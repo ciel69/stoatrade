@@ -208,8 +208,8 @@ class ServerTest(Fx, unittest.IsolatedAsyncioTestCase):
     async def test_snapshot_then_only_changes(self):
         self.hb()
         async with connect("ws://127.0.0.1:%d/ws" % self.port) as ws:
-            first = [await self.recv(ws) for _ in range(8)]
-            self.assertEqual([m["topic"] for m in first], ["hello", "brain", "ctl", "events", "decisions", "home", "models", "trades"])
+            first = [await self.recv(ws) for _ in range(9)]
+            self.assertEqual([m["topic"] for m in first], ["hello", "brain", "ctl", "events", "decisions", "home", "models", "plans", "trades"])
             self.assertEqual(first[1]["data"]["status"], "idle")
             self.assertEqual((first[0]["data"]["mode"], first[5]["data"]["mode"]), ("paper", "paper"))
             self.assertIn("enabled", first[0]["data"]["ctl"])
@@ -224,17 +224,47 @@ class ServerTest(Fx, unittest.IsolatedAsyncioTestCase):
     async def test_mode_switch_sends_home_for_that_mode_only(self):
         self.hb()
         async with connect("ws://127.0.0.1:%d/ws" % self.port) as a, connect("ws://127.0.0.1:%d/ws" % self.port) as b:
-            for _ in range(8):
+            for _ in range(9):
                 await self.recv(a)
                 await self.recv(b)
             await a.send(json.dumps({"op": "mode", "mode": "live"}))
-            got = [await self.recv(a) for _ in range(4)]
-            self.assertEqual(sorted((m["topic"], m["data"]["mode"]) for m in got), [("decisions", "live"), ("home", "live"), ("models", "live"), ("trades", "live")])
+            got = [await self.recv(a) for _ in range(5)]
+            self.assertEqual(sorted((m["topic"], m["data"]["mode"]) for m in got), [("decisions", "live"), ("home", "live"), ("models", "live"), ("plans", "live"), ("trades", "live")])
             await a.send(json.dumps({"op": "mode", "mode": "bogus"}))      # неизвестный режим игнорируется
             with self.assertRaises(asyncio.TimeoutError):
                 await self.recv(a, 0.5)
             with self.assertRaises(asyncio.TimeoutError):                         # второй клиент остался на paper и ничего не получил
                 await self.recv(b, 0.5)
+
+    async def test_plan_detail_op_answers_only_asker_and_rejects_bad_id(self):
+        self.hb()
+        async with connect("ws://127.0.0.1:%d/ws" % self.port) as a, connect("ws://127.0.0.1:%d/ws" % self.port) as b:
+            for _ in range(9):
+                await self.recv(a)
+                await self.recv(b)
+            await a.send(json.dumps({"op": "plan", "id": "../../etc/passwd"}))
+            m = await self.recv(a)
+            self.assertEqual((m["topic"], m["data"]["ok"]), ("plan_detail", False))
+            await a.send(json.dumps({"op": "plan", "id": "PL-NOPE"}))
+            m = await self.recv(a)
+            self.assertEqual((m["topic"], m["data"]["ok"], m["data"]["id"]), ("plan_detail", False, "PL-NOPE"))
+            with self.assertRaises(asyncio.TimeoutError):
+                await self.recv(b, 0.5)
+
+    def test_plans_topic_lists_all_cards_in_order_with_counts(self):
+        now = 1000.0
+        cards = [{"id": "A", "sym": "SOL", "side": "long", "mode": "paper", "col": "waiting", "status": "armed", "trigger": {"dist_pct": 0.2}},
+                 {"id": "B", "sym": "ETH", "side": "short", "mode": "paper", "col": "closed", "status": "closed", "close_reason": "tp", "close_pnl": 0.42, "ts_closed": 900.0, "trigger": {}},
+                 {"id": "C", "sym": "BTC", "side": "long", "mode": "live", "col": "waiting", "trigger": {}}]
+        orig = topics._state
+        topics._state = lambda root, mode, now: {"v2": {"plans": {"cards": cards}}}
+        try:
+            p = topics.plans(None, now, "paper")
+        finally:
+            topics._state = orig
+        self.assertEqual((p["mode"], p["counts"], p["total"]), ("paper", {"waiting": 1, "watching": 0, "in_trade": 0, "closed": 1}, 2))
+        self.assertEqual([x["id"] for x in p["items"]], ["A", "B"])
+        self.assertEqual((p["items"][1]["close_reason"], p["items"][1]["close_pnl"], p["items"][1]["ts_closed"]), ("tp", 0.42, 900.0))
 
     async def test_bad_origin_and_bad_host_rejected(self):
         with self.assertRaises(Exception):

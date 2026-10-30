@@ -5,7 +5,9 @@ import { planWait } from './plan-wait'
 const plan = (o: Partial<NearPlan> = {}): NearPlan => ({
   id: 'PL-1', sym: 'SOL', side: 'short', mode: 'paper', col: 'waiting', text: '', dist_pct: 0.4, eta_at: null, entry_state: null, blocked_why: null, net_rr: 2, risk: 0.3,
   status: 'armed', setup: 'level_reject', thesis: '', entry_text: '', missing: [], met_n: 0, leaf_n: 1, seq: null, level: 144, price: 143.5, kind: 'price_beyond', dir: 'above',
-  beyond: false, tf: null, ttl_at: null, hold: null, hold_reason: null, stop: 146, target: 140, targets: [140], leverage: null, chase_bps: null, chase_max_bps: null, ...o,
+  beyond: false, tf: null, ttl_at: null, hold: null, hold_reason: null, stop: 146, target: 140, targets: [140], leverage: null, chase_bps: null, chase_max_bps: null,
+  rev: 1, exp: null, var: null, hyp: null, src: null, parent: null, session_type: null, created_by: null, ts_created: null, ts_armed: null, ts_entered: null, ts_closed: null,
+  close_reason: null, close_pnl: null, warnings: [], ...o,
 })
 const NOW = 1000
 

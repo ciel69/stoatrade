@@ -168,6 +168,7 @@ def _trade_position(t):
 CURVE_POINTS = 300
 TRADES_OUT = 150
 PLANS_OUT = 5
+PLANS_PAGE_OUT = 120
 _STATE_TTL = 0.0                # сервер ставит > 0: темы home и trades делят одну сборку состояния (около секунды работы) вместо двух
 _state_cache = {}
 
@@ -258,23 +259,49 @@ def _plans(v2, mode, now):
             counts[c["col"]] += 1
     near = [c for c in cards if c.get("col") in ("waiting", "watching")]
     near.sort(key=lambda c: (_num((c.get("trigger") or {}).get("dist_pct")) is None, _num((c.get("trigger") or {}).get("dist_pct")) or 0.0))
-    out = []
-    for c in near[:PLANS_OUT]:
-        t = c.get("trigger") or {}
-        eta = _num(t.get("eta_s"))
-        ttl = _num(c.get("ttl_left_s"))
-        tgs = [x for x in (c.get("targets") or []) if isinstance(x, dict) and _num(x.get("price")) is not None]
-        out.append({"id": c.get("id"), "sym": c.get("sym"), "side": c.get("side"), "mode": c.get("mode"), "col": c.get("col"), "text": t.get("text") or c.get("entry_text") or "",
-                    "dist_pct": _num(t.get("dist_pct")), "eta_at": round((now + eta) / 5.0) * 5 if eta is not None else None, "entry_state": c.get("entry_state"),
-                    "blocked_why": c.get("blocked_why"), "net_rr": _num(c.get("net_rr")), "risk": _num(c.get("risk_usdt")),
-                    # что именно ждёт план: условия, что из них выполнено, уровень и сторона, на каком таймфрейме проверка, когда план истечёт (моментом, как eta_at)
-                    "status": c.get("status"), "setup": c.get("setup"), "thesis": (c.get("thesis") or "")[:160], "entry_text": c.get("entry_text") or "",
-                    "missing": [str(x)[:90] for x in (t.get("missing") or [])[:4]], "met_n": int(_num(t.get("met_n")) or 0), "leaf_n": int(_num(t.get("leaf_n")) or 0),
-                    "seq": t.get("seq") if isinstance(t.get("seq"), dict) else None, "level": _num(t.get("level")), "price": _num(c.get("price")), "kind": t.get("kind"),
-                    "dir": t.get("dir"), "beyond": t.get("beyond"), "tf": t.get("eta_tf"), "ttl_at": round((now + ttl) / 30.0) * 30 if ttl is not None else None,
-                    "hold": c.get("hold"), "hold_reason": c.get("hold_reason"), "stop": _num(c.get("stop")), "target": _num(tgs[0]["price"]) if tgs else None, "targets": [_num(x["price"]) for x in tgs[:4]],
-                    "leverage": _num(c.get("leverage")), "chase_bps": _num(c.get("chase_bps")), "chase_max_bps": _num(c.get("chase_max_bps"))})
-    return {"counts": counts, "total": len(cards), "near": out}
+    return {"counts": counts, "total": len(cards), "near": [_plan_row(c, now) for c in near[:PLANS_OUT]]}
+
+
+def _plan_row(c, now):
+    """Строка плана для карточки: что именно ждёт план (условия, уровень, сторона, таймфрейм проверки), стоп и цели, срок (моментом, как eta_at) и итог закрытого плана."""
+    t = c.get("trigger") or {}
+    eta = _num(t.get("eta_s"))
+    ttl = _num(c.get("ttl_left_s"))
+    tgs = [x for x in (c.get("targets") or []) if isinstance(x, dict) and _num(x.get("price")) is not None]
+    return {"id": c.get("id"), "sym": c.get("sym"), "side": c.get("side"), "mode": c.get("mode"), "col": c.get("col"), "text": t.get("text") or c.get("entry_text") or "",
+            "dist_pct": _num(t.get("dist_pct")), "eta_at": round((now + eta) / 5.0) * 5 if eta is not None else None, "entry_state": c.get("entry_state"),
+            "blocked_why": c.get("blocked_why"), "net_rr": _num(c.get("net_rr")), "risk": _num(c.get("risk_usdt")),
+            "status": c.get("status"), "setup": c.get("setup"), "thesis": (c.get("thesis") or "")[:160], "entry_text": c.get("entry_text") or "",
+            "missing": [str(x)[:90] for x in (t.get("missing") or [])[:4]], "met_n": int(_num(t.get("met_n")) or 0), "leaf_n": int(_num(t.get("leaf_n")) or 0),
+            "seq": t.get("seq") if isinstance(t.get("seq"), dict) else None, "level": _num(t.get("level")), "price": _num(c.get("price")), "kind": t.get("kind"),
+            "dir": t.get("dir"), "beyond": t.get("beyond"), "tf": t.get("eta_tf"), "ttl_at": round((now + ttl) / 30.0) * 30 if ttl is not None else None,
+            "hold": c.get("hold"), "hold_reason": c.get("hold_reason"), "stop": _num(c.get("stop")), "target": _num(tgs[0]["price"]) if tgs else None, "targets": [_num(x["price"]) for x in tgs[:4]],
+            "leverage": _num(c.get("leverage")), "chase_bps": _num(c.get("chase_bps")), "chase_max_bps": _num(c.get("chase_max_bps")),
+            "rev": c.get("rev"), "exp": c.get("exp"), "var": c.get("var"), "hyp": c.get("hyp"), "src": c.get("src"), "parent": c.get("parent"), "session_type": c.get("session_type"),
+            "created_by": c.get("created_by"), "ts_created": c.get("ts_created"), "ts_armed": c.get("ts_armed"), "ts_entered": c.get("ts_entered"), "ts_closed": c.get("ts_closed"),
+            "close_reason": c.get("close_reason"), "close_pnl": _num(c.get("close_pnl")), "warnings": list(c.get("warnings") or [])[:6]}
+
+
+def plans(root=None, now=None, mode=None):
+    """Страница «Планы»: все планы режима (ближайшие к входу первыми, затем в сделке, затем закрытые за сутки) и счётчики колонок."""
+    now = time.time() if now is None else now
+    mode = mode if mode in MODES else default_mode(root)
+    v2 = _state(root, mode, now).get("v2")
+    cards = [c for c in ((v2 or {}).get("plans") or {}).get("cards") or [] if isinstance(c, dict) and (mode == "all" or c.get("mode") == mode)]
+    counts = {k: 0 for k in ("waiting", "watching", "in_trade", "closed")}
+    for c in cards:
+        if c.get("col") in counts:
+            counts[c["col"]] += 1
+    return {"mode": mode, "counts": counts, "total": len(cards), "items": [_plan_row(c, now) for c in cards[:PLANS_PAGE_OUT]]}
+
+
+def plan_detail(root, pid, now=None):
+    """Подробности одного плана по запросу клиента (ревизии с различиями, решения, события, spec и runtime): -> {"id","ok","data"|"error"}."""
+    from tb.dash import model, model2
+    code, data = model2.plan_detail(root, pid, now)
+    if code != 200:
+        return {"id": pid if isinstance(pid, str) else None, "ok": False, "error": str((data or {}).get("error") or "error")[:60]}
+    return {"id": pid, "ok": True, "data": model.scrub(data)}
 
 
 def _pending(rows, now):
@@ -379,7 +406,7 @@ def ctl(root=None, now=None):
 
 TOPICS = {"brain": brain, "ctl": ctl, "events": events}
 INTERVAL = {"decisions": 3.0, "models": 30.0}        # тема -> не чаще раза в N секунд (по умолчанию HEAVY_S сервера)
-MODE_TOPICS = {"home": home, "trades": trades, "decisions": decisions, "models": models}        # зависят от режима клиента: строятся для каждого режима, который сейчас смотрит хотя бы один клиент
+MODE_TOPICS = {"home": home, "trades": trades, "decisions": decisions, "models": models, "plans": plans}        # зависят от режима клиента: строятся для каждого режима, который сейчас смотрит хотя бы один клиент
 
 
 def build(topic, root=None, now=None, mode=None):

@@ -71,7 +71,7 @@ export interface NearPlan {
   sym: string
   side: 'long' | 'short' | null
   mode: string | null
-  col: 'waiting' | 'watching'
+  col: 'waiting' | 'watching' | 'in_trade' | 'closed'
   text: string
   dist_pct: number | null
   eta_at: number | null
@@ -102,12 +102,104 @@ export interface NearPlan {
   leverage: number | null
   chase_bps: number | null                    // насколько цена ушла дальше уровня (б.п.), если вход ждёт отката
   chase_max_bps: number | null
+  rev: number | null
+  exp: string | null
+  var: string | null
+  hyp: string | null
+  src: string | null
+  parent: string | null
+  session_type: string | null
+  created_by: string | null
+  ts_created: number | null
+  ts_armed: number | null
+  ts_entered: number | null
+  ts_closed: number | null
+  close_reason: string | null
+  close_pnl: number | null
+  warnings: string[]
 }
 
 export interface PlansBlock {
   counts: { waiting: number; watching: number; in_trade: number; closed: number }
   total: number
   near: NearPlan[]
+}
+
+/** Страница «Планы»: все планы режима. Порядок задаёт сервер: ближайшие к входу, в сделке, закрытые за сутки. */
+export interface PlansSnapshot {
+  mode: TradingMode
+  counts: PlansBlock['counts']
+  total: number
+  items: NearPlan[]
+}
+
+export interface PlanRev {
+  rev: number
+  ts: string
+  why: string
+  by: string
+  changes: string[]
+}
+
+export interface PlanTarget {
+  id: string
+  price: number | null
+  frac: number | null
+  state: string | null
+}
+
+/** Карточка плана из подробностей: то, что нужно панели, остальные поля сервера игнорируются. */
+export interface PlanCardFull {
+  id: string
+  sym: string
+  side: 'long' | 'short' | null
+  mode: string | null
+  status: string
+  col: NearPlan['col']
+  rev: number
+  rev_applied: number | null
+  thesis: string
+  entry_text: string
+  setup: string | null
+  exp: string | null
+  var: string | null
+  hyp: string | null
+  src: string | null
+  parent: string | null
+  session_type: string | null
+  created_by: string | null
+  stop: number | null
+  targets: PlanTarget[]
+  risk_usdt: number | null
+  net_rr: number | null
+  leverage: number | null
+  margin: number | null
+  warnings: string[]
+  hold: string | null
+  hold_reason: string | null
+  ts_created: number | null
+  ts_armed: number | null
+  ts_entered: number | null
+  ts_closed: number | null
+  close_reason: string | null
+  close_pnl: number | null
+}
+
+export interface PlanDetail {
+  id: string
+  card: PlanCardFull
+  spec: Record<string, unknown>
+  runtime: Record<string, unknown>
+  revs: PlanRev[]
+  decisions: DecisionItem[]
+}
+
+/** Ответ сервера на запрос подробностей плана. */
+export interface PlanDetailReply {
+  id: string | null
+  ok: boolean
+  data?: PlanDetail
+  error?: string
 }
 
 /** Ждущий лимитный вход. dist_pct: на сколько процентов лимит отстоит от текущей цены (минус: лимит ниже цены). expires_at: когда заявка истечёт (с). */

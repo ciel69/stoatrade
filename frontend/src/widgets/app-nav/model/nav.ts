@@ -22,6 +22,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: '/', label: 'Обзор', icon: 'M3 11l9-8 9 8M5 9.5V20h5v-6h4v6h5V9.5', zone: 'now' },
       { to: '/decisions', label: 'Решения', icon: 'M4 6h16M4 12h10M4 18h6M17 14l2.5 2.5L23 12', zone: 'brain' },
+      { to: '/plans', label: 'Планы', icon: 'M5 4h14v16H5zM9 9h6M9 13h6M9 17h3', zone: 'trades' },
       { to: '/trades', label: 'Сделки', icon: 'M4 20V10m6 10V4m6 16v-7m4 7H2', zone: 'trades' },
     ],
   },

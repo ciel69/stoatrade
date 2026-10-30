@@ -171,11 +171,21 @@ class Hub(object):
                     await self.set_mode(ws, m["mode"])
                 elif m.get("op") == "ctl":
                     await self.ctl_op(ws, m)
+                elif m.get("op") == "plan":
+                    await self.plan_op(ws, m)
         except ConnectionClosed:                 # клиент закрыл вкладку или оборвал связь: не ошибка сервера
             pass
         finally:
             self.clients.pop(ws, None)
             self.bridge.close(ws)
+
+    async def plan_op(self, ws, m):
+        """Подробности плана по запросу (чтение): ответ `plan_detail` только этому соединению. Идентификатор проверяется в model2.plan_detail."""
+        res = await asyncio.to_thread(topics.plan_detail, self.root, m.get("id"), None)
+        try:
+            await ws.send(self._msg("plan_detail", 0, res))
+        except Exception:                    # соединение закрылось, пока читали план
+            pass
 
     async def ctl_op(self, ws, m):
         """Команда управления: проверки и постановка в очередь ctl в потоке (challenge ждёт ctl), ответ `ctl_result`; итог исполнения досылается отдельным сообщением."""

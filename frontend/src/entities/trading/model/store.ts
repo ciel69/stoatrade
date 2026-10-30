@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { useLive, type LiveMessage } from '@/shared/api'
-import type { DecisionsSnapshot, HomeSnapshot, ModelsSnapshot, TradesSnapshot, TradingMode } from './types'
+import type { DecisionsSnapshot, HomeSnapshot, ModelsSnapshot, PlanDetailReply, PlansSnapshot, TradesSnapshot, TradingMode } from './types'
 
 const MODES: TradingMode[] = ['paper', 'live', 'testnet', 'all']
 
@@ -10,6 +10,9 @@ export const useTradingStore = defineStore('trading', () => {
   const trades = ref<TradesSnapshot | null>(null)
   const decisions = ref<DecisionsSnapshot | null>(null)
   const models = ref<ModelsSnapshot | null>(null)
+  const plans = ref<PlansSnapshot | null>(null)
+  /** Подробности планов, запрошенные панелью (по идентификатору плана). */
+  const planDetail = ref<Record<string, PlanDetailReply>>({})
   /** Выбранный режим. null: пока не выбран вручную, берём режим платформы из hello сервера. */
   const chosen = ref<TradingMode | null>(null)
   const serverMode = ref<TradingMode>('paper')
@@ -41,6 +44,21 @@ export const useTradingStore = defineStore('trading', () => {
     if (data.mode === mode.value) models.value = data
   }
 
+  function applyPlans(m: LiveMessage): void {
+    const data = m.data as PlansSnapshot
+    if (data.mode === mode.value) plans.value = data
+  }
+
+  function applyPlanDetail(m: LiveMessage): void {
+    const d = m.data as PlanDetailReply
+    if (d && typeof d.id === 'string') planDetail.value = { ...planDetail.value, [d.id]: d }
+  }
+
+  /** Запросить подробности плана (ответ придёт сообщением plan_detail). false: сокет не открыт. */
+  function requestPlan(id: string): boolean {
+    return useLive().socket.send({ op: 'plan', id })
+  }
+
   function applyHello(m: LiveMessage): void {
     const d = m.data as { mode?: TradingMode }
     if (d.mode && MODES.includes(d.mode)) serverMode.value = d.mode
@@ -57,7 +75,9 @@ export const useTradingStore = defineStore('trading', () => {
     trades.value = null
     decisions.value = null
     models.value = null
-    snapshot.value = null                         // чужие цифры другого режима не показываем, пока не пришёл снимок
+    plans.value = null
+    planDetail.value = {}
+    snapshot.value = null                        // чужие цифры другого режима не показываем, пока не пришёл снимок
     useLive().socket.send({ op: 'mode', mode: next })
   }
 
@@ -70,7 +90,9 @@ export const useTradingStore = defineStore('trading', () => {
     socket.subscribe('trades', applyTrades)
     socket.subscribe('decisions', applyDecisions)
     socket.subscribe('models', applyModels)
+    socket.subscribe('plans', applyPlans)
+    socket.subscribe('plan_detail', applyPlanDetail)
   }
 
-  return { snapshot, trades, decisions, models, mode, positions, limits, setMode, applyHome, applyTrades, applyDecisions, applyModels, applyHello, start }
+  return { snapshot, trades, decisions, models, plans, planDetail, mode, positions, limits, setMode, requestPlan, applyHome, applyTrades, applyDecisions, applyModels, applyPlans, applyPlanDetail, applyHello, start }
 })
