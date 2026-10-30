@@ -1,5 +1,6 @@
 export { default as UiBrainIcon } from './UiBrainIcon.vue'
 export type { BrainIconState } from './UiBrainIcon.vue'
+export { BRAIN_NODES, BRAIN_REGIONS, REGION_COUNT, nearestNode, regionOfNode, waveOrder } from './brain-regions'
 export { default as UiCard } from './UiCard.vue'
 export { default as UiChip } from './UiChip.vue'
 export type { ChipTone } from './UiChip.vue'

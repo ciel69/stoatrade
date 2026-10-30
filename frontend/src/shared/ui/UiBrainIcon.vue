@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { onUnmounted, ref, watch } from 'vue'
+import { BRAIN_NODES, nearestNode, waveOrder } from './brain-regions'
 /**
  * Нарисованный мозг (вид спереди): два полушария, борозды коры, 16 нейронов и связи между ними, включая мостик между полушариями. Один SVG, одна толщина линии.
  * Анимация (навык animate), назначение: показать состояние.
@@ -7,23 +9,106 @@
  *  - только защита (янтарный) и не работает (красный, перечёркнут): без движения.
  * Движется только opacity и transform, искры идут штрихом по линии (stroke-dashoffset, линейное движение); всё на CSS, вне основного потока. При prefers-reduced-motion
  * движения нет: в «думает» нейроны и связи горят ровно.
+ *
+ * Вход в «думает» и выход из него без скачка: интенсивность всех эффектов «думает» это одно зарегистрированное число --amp (0..1), которое плавно переходит
+ * (transition 450 мс, ease-out) вместо того, чтобы обрывать анимацию. Циклы вспышек, искр и дыхания не снимаются, пока --amp не дошло до нуля: они продолжают идти, но их
+ * размах (непрозрачность вспышек и искр, масштаб дыхания, свечение) умножен на --amp, поэтому гаснут по-плавному. Вспышки это отдельные кружки-наложения поверх нейронов,
+ * а дыхание «думает» это отдельная группа над дыханием «ждёт»: фоновые анимации ожидания не вырываются и не перезапускаются при смене состояния.
  */
 export type BrainIconState = 'idle' | 'thinking' | 'protect' | 'down'
-withDefaults(defineProps<{ state?: BrainIconState; size?: number; label?: string }>(), { state: 'idle', size: 88 })
+const props = withDefaults(defineProps<{ state?: BrainIconState; size?: number; label?: string; interactive?: boolean; lit?: readonly number[] }>(), { state: 'idle', size: 88, interactive: false, lit: () => [] })
+const emit = defineEmits<{ node: [index: number] }>()
 
-// 0..7 левое полушарие, 8..15 зеркально в правом
-const left: Array<[number, number]> = [[19, 20], [26, 27], [15, 29], [22, 36], [12, 38], [27, 42], [19, 46], [25, 52]]
-const nodes: Array<[number, number]> = [...left, ...left.map(([x, y]): [number, number] => [64 - x, y])]
+const nodes = BRAIN_NODES
 const pairs: Array<[number, number]> = [[0, 1], [1, 3], [2, 3], [3, 5], [4, 6], [6, 5], [5, 7], [2, 1]]
 const links: Array<[number, number]> = [...pairs, ...pairs.map(([a, b]): [number, number] => [a + 8, b + 8]), [1, 9], [3, 11], [5, 13], [7, 15]]
 const d = (a: number, b: number) => `M${nodes[a][0]} ${nodes[a][1]}L${nodes[b][0]} ${nodes[b][1]}`
 const delays = [0, 380, 140, 620, 250, 500, 90, 700, 310, 60, 560, 200, 430, 680, 160, 520]       // порядок вспышек: не по кругу, как у живой сети
 const idleTwinkle = new Set([2, 7, 10, 13])
+
+/*
+ * Интерактив (interactive): мозг тянется к курсору и подсвечивает ближайшие нейроны кольцами; fire() запускает волну нейронов от места нажатия; lit подсвечивает заданные
+ * нейроны (область роли). Назначение: обратная связь и пространственная связь с панелью ролей. Всё через transition по transform и opacity, кольца отдельные
+ * от нейронов, чтобы не спорить с фоновыми анимациями состояний. Наведение работает только с точным указателем (на touch есть тап), при prefers-reduced-motion
+ * нет наклона, а волна зажигает нейроны разом.
+ */
+const FADE_MS = 450
+const amp = ref(0)                 // доля эффектов «думает» сейчас, 0..1
+const fx = ref(false)              // циклы эффектов запущены (остаются, пока amp не дойдёт до нуля)
+let fxTimer: ReturnType<typeof setTimeout> | undefined
+let raf = 0
+watch(() => props.state, (s) => {
+  clearTimeout(fxTimer)
+  cancelAnimationFrame(raf)
+  if (s === 'thinking') {
+    fx.value = true
+    raf = requestAnimationFrame(() => { raf = requestAnimationFrame(() => { amp.value = 1 }) })      // кадр с amp 0 успевает отрисоваться: нарастание плавное, а не скачок
+  } else {
+    amp.value = 0
+    fxTimer = setTimeout(() => { fx.value = false }, FADE_MS + 150)
+  }
+}, { immediate: true })
+
+const svg = ref<SVGSVGElement | null>(null)
+const canHover = typeof matchMedia === 'function' && matchMedia('(hover: hover) and (pointer: fine)').matches
+const calm = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
+const lean = ref({ x: 0, y: 0 })
+const near = ref<number[]>([])
+const fired = ref<number[]>([])
+let overNode = -1
+let timers: ReturnType<typeof setTimeout>[] = []
+
+const toBox = (ev: MouseEvent): [number, number] => {
+  const r = svg.value!.getBoundingClientRect()
+  return [((ev.clientX - r.left) / r.width) * 64, ((ev.clientY - r.top) / r.height) * 64]
+}
+const isOn = (i: number) => near.value.includes(i) || fired.value.includes(i) || props.lit.includes(i)
+
+function onMove(ev: PointerEvent): void {
+  if (!props.interactive || !canHover || ev.pointerType === 'touch' || !svg.value) return
+  const [x, y] = toBox(ev)
+  if (!calm) lean.value = { x: Math.max(-1, Math.min(1, (x - 32) / 32)) * 1.6, y: Math.max(-1, Math.min(1, (y - 32) / 32)) * 1.6 }
+  near.value = BRAIN_NODES.map(([nx, ny], i) => (Math.hypot(nx - x, ny - y) <= 12 ? i : -1)).filter((i) => i >= 0)
+  const n = nearestNode(x, y, 7)
+  if (n !== overNode) { overNode = n; emit('node', n) }
+}
+function onLeave(): void {
+  lean.value = { x: 0, y: 0 }
+  near.value = []
+  if (overNode !== -1) { overNode = -1; emit('node', -1) }
+}
+
+/** Импульс по сети: нейроны вспыхивают волной от точки нажатия (по умолчанию от центра). */
+function fire(ev?: MouseEvent): void {
+  if (!svg.value) return
+  timers.forEach(clearTimeout)
+  timers = []
+  const [x, y] = ev && ev.clientX ? toBox(ev) : [32, 32]
+  const order = waveOrder(x, y)
+  if (calm) {
+    fired.value = order
+    timers.push(setTimeout(() => (fired.value = []), 500))
+    return
+  }
+  fired.value = []
+  order.forEach((n, k) => {
+    timers.push(setTimeout(() => (fired.value = [...fired.value, n]), k * 40))
+    timers.push(setTimeout(() => (fired.value = fired.value.filter((i) => i !== n)), k * 40 + 340))
+  })
+}
+defineExpose({ fire })
+onUnmounted(() => {
+  timers.forEach(clearTimeout)
+  clearTimeout(fxTimer)
+  cancelAnimationFrame(raf)
+})
 </script>
 
 <template>
-  <svg class="brain" :class="`s-${state}`" :width="size" :height="size" viewBox="0 0 64 64" role="img" :aria-label="label ?? 'мозг'" fill="none" stroke="currentColor"
-       stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+  <svg ref="svg" class="brain" :class="[`s-${state}`, { live: interactive, fx }]" :style="{ '--amp': amp }" :width="size" :height="size" viewBox="0 0 64 64" role="img" :aria-label="label ?? 'мозг'" fill="none" stroke="currentColor"
+       stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" @pointermove="onMove" @pointerleave="onLeave">
+    <g class="lean" :style="{ transform: `translate(${lean.x}px, ${lean.y}px)` }">
+    <g class="pulse">
     <g class="body">
       <g class="cortex">
         <path d="M32 10C25 5 15 7 13 16C7 18 5 27 9 32C6 38 9 46 15 47C17 54 26 57 32 54" />
@@ -38,7 +123,13 @@ const idleTwinkle = new Set([2, 7, 10, 13])
       </g>
       <g class="nodes">
         <circle v-for="(n, i) in nodes" :key="i" class="node" :class="{ tw: idleTwinkle.has(i) }" :style="{ '--d': delays[i] + 'ms', '--i': i }" :cx="n[0]" :cy="n[1]" r="1.7" fill="currentColor" stroke="none" />
+        <circle v-for="(n, i) in nodes" :key="`f${i}`" class="flash" :style="{ '--d': delays[i] + 'ms' }" :cx="n[0]" :cy="n[1]" r="1.7" fill="currentColor" stroke="none" />
       </g>
+      <g class="rings">
+        <circle v-for="(n, i) in nodes" :key="i" class="ring" :class="{ on: isOn(i) }" :cx="n[0]" :cy="n[1]" r="3.6" stroke-width="1" />
+      </g>
+    </g>
+    </g>
     </g>
     <path v-if="state === 'down'" class="cut" d="M10 54L54 10" />
   </svg>
@@ -56,29 +147,47 @@ const idleTwinkle = new Set([2, 7, 10, 13])
 .s-down .body { opacity: 0.55; }
 .cut { stroke-width: 2.4; }
 
+/* интерактив: наклон к курсору и кольца вокруг нейронов; transitions, чтобы быстрые движения мыши перенацеливали движение, а не перезапускали его */
+.lean { transition: transform var(--dur-move) var(--ease-out); }
+.ring { opacity: 0; transition: opacity var(--dur-fast) var(--ease-out); pointer-events: none; }
+.ring.on { opacity: 0.85; }
+@media (prefers-reduced-motion: reduce) {
+  .lean { transition: none; }
+}
+
 .mid, .fold { opacity: 0.5; }
-.wire { opacity: 0.12; stroke-width: 1; transition: opacity var(--dur-fast) ease; }
-.spark { opacity: 0; stroke-width: 1.8; stroke-dasharray: 2 10; }
 .node { opacity: 0.38; }
 
-/* ждёт: едва заметное дыхание и редкие мерцания */
-.s-idle .body { transform-origin: 32px 32px; animation: brain-breathe 7s var(--ease-in-out) infinite; }
-.s-idle .node.tw { animation: brain-twinkle 6s var(--ease-in-out) infinite; animation-delay: calc(var(--i) * 410ms); }
+/* --amp: доля эффектов «думает» (0..1); число зарегистрировано, поэтому плавно переходит и все зависящие от него значения вместе с ним (вход и выход без скачка) */
+@property --amp {
+  syntax: '<number>';
+  inherits: true;
+  initial-value: 0;
+}
+.brain { transition: color var(--dur-fast) ease, --amp 450ms var(--ease-out); }
 
-/* думает: нейроны вспыхивают волной со свечением, по связям бегут искры */
-.s-thinking .body { transform-origin: 32px 32px; animation: brain-breathe 2.6s var(--ease-in-out) infinite; }
-.s-thinking .wire { opacity: 0.34; }
-.s-thinking .spark { opacity: 0.95; animation: brain-spark 1.1s linear infinite; animation-delay: calc(var(--k) * 90ms); }
-.s-thinking .node { filter: drop-shadow(0 0 2.4px currentColor); animation: brain-fire 1.3s var(--ease-in-out) infinite; animation-delay: var(--d); }
+/* ждёт (и пока думает, чтобы фон не обрывался): едва заметное дыхание и редкие мерцания */
+.s-idle .body, .s-thinking .body { transform-origin: 32px 32px; animation: brain-breathe 7s var(--ease-in-out) infinite; }
+.s-idle .node.tw, .s-thinking .node.tw { animation: brain-twinkle 6s var(--ease-in-out) infinite; animation-delay: calc(var(--i) * 410ms); }
 
-@keyframes brain-breathe { 50% { transform: scale(1.035); } }
+/* думает: поверх ожидания нейроны вспыхивают волной со свечением, по связям бегут искры, мозг дышит чаще. Циклы идут, пока .fx, размах умножен на --amp */
+.wire { opacity: calc(0.12 + 0.22 * var(--amp)); stroke-width: 1; }
+.spark { opacity: calc(0.95 * var(--amp)); stroke-width: 1.8; stroke-dasharray: 2 10; }
+.flash { opacity: 0; filter: drop-shadow(0 0 2.4px currentColor); pointer-events: none; }
+.pulse { transform-origin: 32px 32px; }
+.fx .pulse { animation: brain-pulse 2.6s var(--ease-in-out) infinite; }
+.fx .spark { animation: brain-spark 1.1s linear infinite; animation-delay: calc(var(--k) * 90ms); }
+.fx .flash { animation: brain-fire 1.3s var(--ease-in-out) infinite; animation-delay: var(--d); }
+
+@keyframes brain-breathe { 50% { transform: scale(1.012); } }
+@keyframes brain-pulse { 50% { transform: scale(calc(1 + 0.035 * var(--amp))); } }
 @keyframes brain-twinkle { 0%, 70%, 100% { opacity: 0.38; } 85% { opacity: 1; } }
-@keyframes brain-fire { 0%, 100% { opacity: 0.22; } 40% { opacity: 1; } }
+@keyframes brain-fire { 0%, 100% { opacity: 0; } 40% { opacity: var(--amp); } }
 @keyframes brain-spark { to { stroke-dashoffset: -12; } }
 
 @media (prefers-reduced-motion: reduce) {
-  .s-idle .body, .s-thinking .body, .s-idle .node.tw, .s-thinking .node, .s-thinking .spark { animation: none; }
-  .s-thinking .node { opacity: 1; }
-  .s-thinking .spark { opacity: 0; }
+  .s-idle .body, .s-thinking .body, .s-idle .node.tw, .s-thinking .node.tw, .fx .pulse, .fx .spark, .fx .flash { animation: none; }
+  .flash { opacity: calc(0.8 * var(--amp)); }
+  .spark { opacity: 0; }
 }
 </style>
