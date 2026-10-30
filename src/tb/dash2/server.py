@@ -73,7 +73,7 @@ class Hub(object):
 
     async def _rebuild(self, topic, mode, force=False):
         key = (topic, mode)
-        if topic in topics.MODE_TOPICS and not force and self.clock() - self._heavy_at.get(key, 0.0) < self.heavy_s and key in self.state:
+        if topic in topics.MODE_TOPICS and not force and self.clock() - self._heavy_at.get(key, 0.0) < max(self.heavy_s, topics.INTERVAL.get(topic, 0.0)) and key in self.state:
             return False
         self._heavy_at[key] = self.clock()
         try:

@@ -11,7 +11,7 @@ const MODE_OPTIONS: ReadonlyArray<{ value: TradingMode; label: string }> = [
   { value: 'all', label: 'все' },
 ]
 
-const TABS = [{ to: '/', label: 'Обзор' }, { to: '/trades', label: 'Сделки' }] as const
+const TABS = [{ to: '/', label: 'Обзор' }, { to: '/decisions', label: 'Решения' }, { to: '/trades', label: 'Сделки' }] as const
 
 const trading = useTradingStore()
 const { link } = useLive()

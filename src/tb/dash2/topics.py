@@ -219,6 +219,34 @@ def trades(root=None, now=None, mode=None):
 
 
 PENDING_OUT = 6
+DECISIONS_OUT = 120
+
+
+def decisions(root=None, now=None, mode=None):
+    """Лента решений режима (новые сверху): строки уже безопасные (model2.decision_row: тексты обрезаны, секретные ключи вырезаны). Записи без плана видны в любом режиме."""
+    from tb.dash import model2
+    mode = mode if mode in MODES else default_mode(root)
+    items, _ = model2.read_plans(root)
+    pm = {}
+    for it in items:
+        m = it["spec"].get("mode")
+        pm[it["id"]] = m if m in ("live", "paper") else ("paper" if it["rt"].get("paper") else "live")
+    want = {"paper": "paper", "live": "live", "testnet": "live"}.get(mode)
+    rows = [model2.decision_row(r, pm) for r in model2.read_decisions(root)]
+    rows = [d for d in rows if want is None or d["mode"] in (None, want)]
+    rows.sort(key=lambda d: -d["seq"])
+    return {"mode": mode, "total": len(rows), "items": rows[:DECISIONS_OUT], "plans": sorted({d["plan"] for d in rows if d["plan"]})[-60:], "day": model2.decisions_day(rows, time.time() if now is None else now)}
+
+
+MODEL_DAYS = (1, 7, 30)
+
+
+def models(root=None, now=None, mode=None):
+    """Результат по моделям (сделки с тегом model.* и расход на вызовы) за 1, 7 и 30 суток: период клиент выбирает сам. Собирается редко (см. INTERVAL)."""
+    from tb.llm import dashapi
+    now = time.time() if now is None else now
+    mode = mode if mode in MODES else default_mode(root)
+    return {"mode": mode, "periods": {str(d): dashapi.models_perf(root, now, d, mode) for d in MODEL_DAYS}}
 
 
 def _plans(v2, mode, now):
@@ -312,7 +340,8 @@ def events(root=None, now=None):
 
 
 TOPICS = {"brain": brain, "events": events}
-MODE_TOPICS = {"home": home, "trades": trades}         # зависят от режима клиента: строятся для каждого режима, который сейчас смотрит хотя бы один клиент
+INTERVAL = {"decisions": 3.0, "models": 30.0}        # тема -> не чаще раза в N секунд (по умолчанию HEAVY_S сервера)
+MODE_TOPICS = {"home": home, "trades": trades, "decisions": decisions, "models": models}        # зависят от режима клиента: строятся для каждого режима, который сейчас смотрит хотя бы один клиент
 
 
 def build(topic, root=None, now=None, mode=None):

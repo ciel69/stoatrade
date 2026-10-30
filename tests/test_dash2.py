@@ -112,6 +112,20 @@ class HomeEventsTopics(Fx):
         self.assertEqual(topics.build("trades", self.root, None, "live")["items"], [])               # другой режим: чужих сделок нет
         self.assertAlmostEqual(t["items"][2]["pct"], 25.0, places=3)                                  # +1.0 к марже 4.0
 
+    def test_decisions_topic_filters_by_mode_and_models_periods(self):
+        rows = [{"seq": 1, "t": time.time() - 30, "ts": "2026-10-30T10:00:00Z", "actor": "brain:entry_scout", "what": "note", "kind": "note", "plan": None, "why": "без плана"},
+                {"seq": 2, "t": time.time() - 20, "ts": "2026-10-30T10:00:10Z", "actor": "exec", "what": "move_stop", "kind": "cmd", "plan": "PL-1030-SOL-01", "why": "стоп подтянут",
+                 "args": {"prev": 99.0, "to": 100.0}, "res": {"ok": True}}]
+        w(self.root, "state/decisions.jsonl", "".join(json.dumps(r) + "\n" for r in rows))
+        w(self.root, "state/plans/PL-1030-SOL-01/spec.json", json.dumps({"symbol": "SOL", "side": "long", "mode": "paper"}))
+        d = topics.build("decisions", self.root, None, "paper")
+        self.assertEqual([x["seq"] for x in d["items"]], [2, 1])                         # новые сверху, запись без плана видна
+        self.assertEqual(d["items"][0]["mode"], "paper")
+        live = topics.build("decisions", self.root, None, "live")
+        self.assertEqual([x["seq"] for x in live["items"]], [1])                         # план paper в режиме live не виден
+        m = topics.build("models", self.root, None, "paper")
+        self.assertEqual(sorted(m["periods"]), ["1", "30", "7"])
+
     def test_events_whitelisted_newest_first(self):
         from tb.core import bus
         bus.emit("kill", {"state": "on", "flatten": False}, root=self.root)
@@ -186,10 +200,10 @@ class ServerTest(Fx, unittest.IsolatedAsyncioTestCase):
     async def test_snapshot_then_only_changes(self):
         self.hb()
         async with connect("ws://127.0.0.1:%d/ws" % self.port) as ws:
-            first = [await self.recv(ws) for _ in range(5)]
-            self.assertEqual([m["topic"] for m in first], ["hello", "brain", "events", "home", "trades"])
+            first = [await self.recv(ws) for _ in range(7)]
+            self.assertEqual([m["topic"] for m in first], ["hello", "brain", "events", "decisions", "home", "models", "trades"])
             self.assertEqual(first[1]["data"]["status"], "idle")
-            self.assertEqual((first[0]["data"]["mode"], first[3]["data"]["mode"]), ("paper", "paper"))
+            self.assertEqual((first[0]["data"]["mode"], first[4]["data"]["mode"]), ("paper", "paper"))
             with self.assertRaises(asyncio.TimeoutError):                         # без изменений сервер молчит (опроса нет)
                 await self.recv(ws, 0.8)
             self.hb(inflight=2)
@@ -201,12 +215,12 @@ class ServerTest(Fx, unittest.IsolatedAsyncioTestCase):
     async def test_mode_switch_sends_home_for_that_mode_only(self):
         self.hb()
         async with connect("ws://127.0.0.1:%d/ws" % self.port) as a, connect("ws://127.0.0.1:%d/ws" % self.port) as b:
-            for _ in range(5):
+            for _ in range(7):
                 await self.recv(a)
                 await self.recv(b)
             await a.send(json.dumps({"op": "mode", "mode": "live"}))
-            got = [await self.recv(a) for _ in range(2)]
-            self.assertEqual(sorted((m["topic"], m["data"]["mode"]) for m in got), [("home", "live"), ("trades", "live")])
+            got = [await self.recv(a) for _ in range(4)]
+            self.assertEqual(sorted((m["topic"], m["data"]["mode"]) for m in got), [("decisions", "live"), ("home", "live"), ("models", "live"), ("trades", "live")])
             await a.send(json.dumps({"op": "mode", "mode": "bogus"}))      # неизвестный режим игнорируется
             with self.assertRaises(asyncio.TimeoutError):
                 await self.recv(a, 0.5)

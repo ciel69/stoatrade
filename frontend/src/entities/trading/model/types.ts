@@ -167,6 +167,83 @@ export interface TradesSnapshot {
   unreviewed: number
 }
 
+/** Запись ленты решений (тема `decisions`, model2.decision_row). Тексты уже обрезаны и очищены сервером; args, basis и res плоские: ключ -> число, строка, булево. */
+export interface DecisionItem {
+  seq: number
+  ts: string
+  t: number | null
+  actor: string
+  plan: string | null
+  rev: number | null
+  kind: string
+  what: string
+  action: string
+  why: string
+  args: Record<string, unknown>
+  basis: Record<string, unknown>
+  res: Record<string, unknown>
+  ok: boolean | null
+  code: string | null
+  denied: boolean
+  noop: boolean
+  idle: boolean
+  px: number | null
+  r: number | null
+  brief_id: string | null
+  link_id: string | null
+  action_id: string | null
+  exch_ms: number | null
+  h: string
+  mode: string | null
+}
+
+export interface DecisionDay {
+  n: number
+  brain: number
+  rejects: number
+  auto: number
+  skips: number
+  protect: number
+  reject_codes: Array<{ code: string; n: number }>
+}
+
+export interface DecisionsSnapshot {
+  mode: TradingMode
+  total: number
+  items: DecisionItem[]
+  plans: string[]
+  day: DecisionDay | null
+}
+
+export interface ModelRow {
+  id: string
+  calls: number
+  usd: number
+  err_rate: number | null
+  fmt_err_rate: number | null
+  lat_p50_ms: number | null
+  n: number
+  wins: number
+  pnl: number
+  avg_r: number | null
+  net: number
+  pnl_per_100_calls: number | null
+  pnl_per_usd: number | null
+  reliable: boolean
+}
+
+export interface ModelsPeriod {
+  days: number
+  min_n: number
+  rows: ModelRow[]
+  note: string
+}
+
+export interface ModelsSnapshot {
+  mode: TradingMode
+  periods: Record<string, ModelsPeriod>
+}
+
 export interface HomeSnapshot {
   mode: TradingMode
   modes: TradingMode[]
