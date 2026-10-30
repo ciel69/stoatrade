@@ -20,6 +20,12 @@ const tone = computed(() => ((props.position.upnl ?? 0) > 0 ? 'up' : (props.posi
 /** Стоп сдвинут от начального (автозащита или правило): это важнее цифры стопа */
 const protectedStop = computed(() => props.position.stop != null && props.position.stop0 != null && props.position.stop !== props.position.stop0)
 const units = (x: number) => x * 100
+/** Смещение цены от входа в процентах в пользу позиции (минус: против неё). */
+const pct = (p: number | null | undefined) => (p != null && props.position.avg ? (sign.value * (p - props.position.avg) / props.position.avg) * 100 : null)
+const movePct = computed(() => pct(props.position.price))
+const roiPct = computed(() => (movePct.value != null && props.position.lev ? movePct.value * props.position.lev : null))
+const stopPct = computed(() => pct(props.position.stop))
+const takePct = computed(() => pct(farTake.value))
 </script>
 
 <template>
@@ -29,8 +35,9 @@ const units = (x: number) => x * 100
       <UiChip>{{ position.side === 'long' ? 'лонг' : 'шорт' }}{{ position.lev ? ' ' + position.lev + '×' : '' }}</UiChip>
       <UiChip v-if="position.stale" tone="warn">цена устарела</UiChip>
       <span class="pnl" :class="tone">{{ signed(position.upnl) }} <small>USDT</small></span>
-      <span class="r" :class="tone">{{ signed(position.r, 2) }}R</span>
+      <span class="r" :class="tone" :title="'Доходность на маржу с учётом плеча; цена от входа: ' + signed(movePct) + '%'">{{ signed(roiPct ?? movePct, 1) }}%</span>
     </div>
+    <p class="sub">вход {{ price(position.avg) }} · сейчас {{ price(position.price) }} ({{ signed(movePct) }}%) · {{ signed(position.r, 2) }}R</p>
 
     <svg v-if="r" class="route" viewBox="0 0 100 14" preserveAspectRatio="none" role="img"
          :aria-label="`${position.sym}: от стопа ${price(position.stop)} через вход ${price(position.avg)} к тейку ${price(farTake)}, цена ${price(position.price)}`">
@@ -45,10 +52,9 @@ const units = (x: number) => x * 100
     <p v-else class="muted">маршрут не построен: нет стопа или входа</p>
 
     <div class="marks">
-      <span class="m stop-m">стоп {{ price(position.stop) }}<template v-if="atStop != null"> · <b class="down">{{ signed(atStop) }}</b></template><UiChip v-if="protectedStop" tone="ok">подтянут</UiChip></span>
-      <span class="m mid-m">{{ price(position.price) }}</span>
-      <span class="m take-m"><template v-if="farTake != null">тейк {{ price(farTake) }}</template><template v-if="atTake != null"> · <b class="up">{{ signed(atTake) }}</b></template></span>
+      <span class="m stop-m">стоп {{ price(position.stop) }}<template v-if="stopPct != null"> ({{ signed(stopPct) }}%)</template><template v-if="atStop != null"> · <b :class="atStop > 0 ? 'up' : 'down'">{{ signed(atStop) }}</b></template><UiChip v-if="protectedStop" tone="ok">подтянут</UiChip></span>
       <span v-if="position.held_s != null" class="m held">{{ duration(position.held_s) }}</span>
+      <span class="m take-m"><template v-if="farTake != null">тейк {{ price(farTake) }}</template><template v-if="takePct != null"> ({{ signed(takePct) }}%)</template><template v-if="atTake != null"> · <b class="up">{{ signed(atTake) }}</b></template></span>
     </div>
   </li>
 </template>
@@ -60,7 +66,8 @@ const units = (x: number) => x * 100
 .sym { font-size: 17px; font-weight: 700; letter-spacing: -0.01em; }
 .pnl { margin-left: auto; font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .pnl small { font-size: 11px; font-weight: 400; color: var(--muted); }
-.r { min-width: 56px; text-align: right; font-size: 13px; font-variant-numeric: tabular-nums; color: var(--muted); }
+.r { min-width: 64px; text-align: right; font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--muted); }
+.sub { margin: 2px 0 0; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .pnl.up, .r.up, .up { color: var(--pos); }
 .pnl.down, .r.down, .down { color: var(--neg); }
 .route { display: block; width: 100%; height: 18px; margin: var(--space-2) 0 var(--space-1); overflow: visible; }
@@ -75,7 +82,6 @@ const units = (x: number) => x * 100
 .marks { display: flex; align-items: baseline; gap: var(--space-3); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .m b { font-weight: 600; }
 .stop-m { flex: 1 1 0; }
-.mid-m { color: var(--text); font-weight: 600; }
 .take-m { flex: 1 1 0; text-align: right; }
 .held { margin-left: var(--space-2); }
 .muted { margin: var(--space-2) 0 0; color: var(--muted); font-size: 12px; }
