@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { collapseEvents, useEventStore } from '@/entities/event'
+import { collapseEvents, eventFields, PRIORITY_TEXT, useEventStore } from '@/entities/event'
 
 const events = useEventStore()
 const open = ref(new URLSearchParams(location.search).has('events'))        // ?events открывает панель сразу (для скриншотов и ссылок)
@@ -32,6 +32,37 @@ const rows = computed(() => {
   }
   return out
 })
+
+/** Раскрытые строки (по номеру события): детали одного события или группы повторов. */
+const opened = ref(new Set<string>())
+function flip(key: string): void {
+  const next = new Set(opened.value)
+  if (!next.delete(key)) next.add(key)
+  opened.value = next
+}
+const fullFmt = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
+const at = (e: { ts: string }) => {
+  const d = new Date(e.ts)
+  return Number.isNaN(d.getTime()) ? e.ts : fullFmt.format(d)
+}
+/** Все известные поля события в виде пар «подпись, значение». */
+function moreOf(g: ReturnType<typeof collapseEvents>[number]): Array<[string, string]> {
+  const e = g.e
+  const out: Array<[string, string]> = [['время', at(e)]]
+  if (g.count > 1) out.push(['повторы', `${g.count} раз подряд: с ${timeFmt.format(new Date(g.oldest.ts))} до ${timeFmt.format(new Date(e.ts))}`])
+  out.push(['тип', e.type], ['важность', PRIORITY_TEXT[e.pri] ?? e.pri])
+  if (e.sym) out.push(['монета', e.sym])
+  if (e.plan) out.push(['план', e.plan])
+  out.push(...eventFields(e), ['номер', String(e.seq)])
+  return out
+}
+
+if (new URLSearchParams(location.search).get('events') === 'expand') {        // ?events=expand: сразу раскрыть две первые строки (для скриншотов)
+  const stop = watch(rows, (r) => {
+    const keys = r.filter((x) => x.g).slice(0, 2).map((x) => x.key)
+    if (keys.length) { opened.value = new Set(keys); stop() }
+  })
+}
 
 function toggle(): void {
   open.value = !open.value
@@ -66,13 +97,22 @@ watch(() => events.lastSeq, () => open.value && events.markSeen())
           <button type="button" class="x" aria-label="Закрыть события" @click="close">×</button>
         </header>
         <TransitionGroup v-if="rows.length" name="feed" tag="ul" class="list">
-          <li v-for="r in rows" :key="r.key" :class="r.g ? ['item', `t-${r.g.text.tone}`] : 'day'" :style="{ '--i': r.i }">
+          <li v-for="r in rows" :key="r.key" :class="r.g ? ['row', `t-${r.g.text.tone}`] : 'day'" :style="{ '--i': r.i }">
             <template v-if="r.g">
-              <span class="time">{{ r.time }}</span>
-              <span class="what">
-                <span class="line"><i class="dot" aria-hidden="true" /><b v-if="r.g.e.sym" class="sym">{{ r.g.e.sym }}</b><span class="title">{{ r.g.text.title }}</span><span v-if="r.g.count > 1" class="count" :title="`повторилось ${r.g.count} раз подряд`">×{{ r.g.count }}</span></span>
-                <span v-if="r.g.text.detail" class="detail">{{ r.g.text.detail }}</span>
-              </span>
+              <button type="button" class="item" :aria-expanded="opened.has(r.key)" :aria-controls="`ev-${r.key}`" @click="flip(r.key)">
+                <span class="time">{{ r.time }}</span>
+                <span class="what">
+                  <span class="line"><i class="dot" aria-hidden="true" /><b v-if="r.g.e.sym" class="sym">{{ r.g.e.sym }}</b><span class="title">{{ r.g.text.title }}</span><span v-if="r.g.count > 1" class="count" :title="`повторилось ${r.g.count} раз подряд`">×{{ r.g.count }}</span></span>
+                  <span v-if="r.g.text.detail" class="detail">{{ r.g.text.detail }}</span>
+                </span>
+              </button>
+              <div :id="`ev-${r.key}`" class="more" :class="{ on: opened.has(r.key) }">
+                <div class="inner">
+                  <dl class="kv">
+                    <template v-for="[k, v] in moreOf(r.g)" :key="k"><dt>{{ k }}</dt><dd>{{ v }}</dd></template>
+                  </dl>
+                </div>
+              </div>
             </template>
             <template v-else>{{ r.day }}</template>
           </li>
@@ -107,7 +147,20 @@ watch(() => events.lastSeq, () => open.value && events.markSeen())
 .head { display: flex; align-items: center; justify-content: space-between; padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--line); font-weight: 600; font-size: 13px; }
 .x { background: transparent; border: 0; color: var(--muted); font-size: 20px; line-height: 1; cursor: pointer; padding: 0 var(--space-1); }
 .list { list-style: none; margin: 0; padding: var(--space-1) 0; overflow-y: auto; position: relative; scrollbar-gutter: stable; }
-.item { display: grid; grid-template-columns: 58px minmax(0, 1fr); column-gap: var(--space-3); padding: 7px var(--space-3) 7px var(--space-4); font-size: 12px; line-height: 1.35; }
+.item { display: grid; grid-template-columns: 58px minmax(0, 1fr); column-gap: var(--space-3); width: 100%; padding: 7px var(--space-3) 7px var(--space-4); background: transparent; border: 0; color: inherit; font: inherit; font-size: 12px; line-height: 1.35; text-align: left; cursor: pointer; transition: background-color var(--dur-fast) ease; }
+.item[aria-expanded='true'] { background: var(--panel2); }
+@media (hover: hover) and (pointer: fine) {
+  .item:hover { background: var(--panel2); }
+}
+.item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* детали события: строки сетки 0fr -> 1fr, как разбор сделки (редкое действие, поэтому движение допустимо) */
+.more { display: grid; grid-template-rows: 0fr; transition: grid-template-rows var(--dur-enter) var(--ease-out); background: var(--panel2); }
+.more.on { grid-template-rows: 1fr; }
+.more .inner { overflow: hidden; min-height: 0; }
+.more.on .inner { padding: 2px var(--space-3) var(--space-3) calc(var(--space-4) + 58px + var(--space-3)); }
+.kv { display: grid; grid-template-columns: minmax(70px, 0.7fr) minmax(0, 1.6fr); gap: 3px var(--space-3); margin: 0; font-size: 12px; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .time { color: var(--muted); font-variant-numeric: tabular-nums; padding-top: 1px; }
 .what { min-width: 0; display: grid; gap: 1px; }
 .line { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; }
@@ -126,11 +179,12 @@ watch(() => events.lastSeq, () => open.value && events.markSeen())
 .panel-enter-from, .panel-leave-to { opacity: 0; transform: translateY(10px) scale(0.92); }
 .panel-enter-active { transition: opacity var(--dur-enter) var(--ease-out), transform 260ms var(--ease-out); }
 .panel-leave-active { transition: opacity 120ms var(--ease-out), transform 160ms var(--ease-out); }
-.panel-enter-from .item, .panel-enter-from .day { opacity: 0; transform: translateY(6px); }
-.panel-enter-active .item, .panel-enter-active .day { transition: opacity var(--dur-enter) var(--ease-out), transform var(--dur-enter) var(--ease-out); transition-delay: calc(var(--i, 0) * 30ms + 60ms); }
+.panel-enter-from .row, .panel-enter-from .day { opacity: 0; transform: translateY(6px); }
+.panel-enter-active .row, .panel-enter-active .day { transition: opacity var(--dur-enter) var(--ease-out), transform var(--dur-enter) var(--ease-out); transition-delay: calc(var(--i, 0) * 30ms + 60ms); }
 @media (prefers-reduced-motion: reduce) {
   .panel-enter-from, .panel-leave-to { transform: none; }
-  .panel-enter-from .item, .panel-enter-from .day { transform: none; }
+  .panel-enter-from .row, .panel-enter-from .day { transform: none; }
+  .more { transition: none; }
   .fab:active { transform: none; }
 }
 </style>
