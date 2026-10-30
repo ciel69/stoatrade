@@ -43,6 +43,7 @@ V2 = {
     "gateway": "tb.gateway.cli",
     "mcp": "tb.mcp.server",
     "llm": "tb.llm.cli",
+    "dash2": "tb.dash2.server",        # новый дашборд (Vue + WebSocket), порт 8767
     # платформа (WP11-B): "модуль:функция" (по умолчанию main)
     "start": "tb.platform.quick:main_start",       # простой запуск: полная платформа одной командой (paper, фон)
     "stop": "tb.platform.quick:main_stop",

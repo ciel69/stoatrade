@@ -1,0 +1,65 @@
+/* Токены темы (источник: DESIGN.md): цвета, типографика, отступы, радиусы. Тёмная тема по умолчанию, светлая по prefers-color-scheme или [data-theme]. */
+:root {
+  color-scheme: dark;
+  --bg: #0b121a;
+  --panel: #121c28;
+  --panel2: #1a2634;
+  --line: #223142;
+  --line2: #31445a;
+  --text: #e8eef4;
+  --muted: #93a4b8;
+  --accent: #4db3ff;
+  --accent-bg: #14304a;
+  --pos: #5fd38d;
+  --neg: #ff7b7b;
+  --warn: #f5a524;
+  --zone-brain: #a58bff;
+
+  --font: "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --radius: 10px;
+  --radius-sm: 6px;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --bg: #eef2f6;
+    --panel: #ffffff;
+    --panel2: #e8eef4;
+    --line: #d6dee7;
+    --line2: #b9c5d2;
+    --text: #0f1a26;
+    --muted: #4a5b6f;
+    --accent: #0b63b5;
+    --accent-bg: #dcebf9;
+    --pos: #0b7a43;
+    --neg: #b42318;
+    --warn: #8a5200;
+    --zone-brain: #6a4fd1;
+  }
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #eef2f6;
+  --panel: #ffffff;
+  --panel2: #e8eef4;
+  --line: #d6dee7;
+  --line2: #b9c5d2;
+  --text: #0f1a26;
+  --muted: #4a5b6f;
+  --accent: #0b63b5;
+  --accent-bg: #dcebf9;
+  --pos: #0b7a43;
+  --neg: #b42318;
+  --warn: #8a5200;
+  --zone-brain: #6a4fd1;
+}
