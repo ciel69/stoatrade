@@ -36,10 +36,35 @@ export interface EventText {
   tone: 'bad' | 'good' | 'neutral'
 }
 
+export interface EventGroup {
+  /** самое новое событие группы */
+  e: BusEvent
+  text: EventText
+  count: number
+}
+
+/** Подряд идущие одинаковые события (тот же тип, монета, план и текст) сворачиваются в одну строку с числом повторов: шина может слать их десятками. Вход: новые сверху. */
+export function collapse(items: BusEvent[]): EventGroup[] {
+  const out: EventGroup[] = []
+  let key = ''
+  for (const e of items) {
+    const text = describe(e)
+    const k = [e.type, e.sym, e.plan, text.title, text.detail].join('|')
+    if (out.length && k === key) out[out.length - 1].count++
+    else out.push({ e, text, count: 1 })
+    key = k
+  }
+  return out
+}
+
 /** Короткое описание события: тип по-русски и главный параметр (код, веха, вид сигнала). Только поля из белого списка шины, всё выводится как текст. */
 export function describe(e: BusEvent): EventText {
   const d = e.d ?? {}
   const pick = (k: string) => (typeof d[k] === 'string' || typeof d[k] === 'number' ? String(d[k]) : '')
+  if (e.type === 'rule_fired') {
+    const act = [pick('rule'), pick('action')].filter(Boolean).join(' → ')
+    return { title: TYPE_TEXT.rule_fired, detail: d.ok === false ? `${act} · отказ ${pick('code')}` : act, tone: d.ok === false ? 'bad' : 'neutral' }
+  }
   const detail = [pick('kind'), pick('name'), pick('code'), pick('which'), pick('reason'), pick('why'), pick('state'), pick('action')].filter(Boolean)[0] ?? ''
   return { title: TYPE_TEXT[e.type] ?? e.type, detail, tone: BAD.has(e.type) ? 'bad' : GOOD.has(e.type) ? 'good' : 'neutral' }
 }
