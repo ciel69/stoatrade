@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { Position } from '../model/types'
-import { route } from './route'
+import type { NearPlan, Position } from '../model/types'
+import { planRoute, route } from './route'
 
 const base: Position = {
   plan: 'PL-1', sym: 'ETH', side: 'short', mode: 'paper', lev: 10, qty: 1, avg: 100, price: 98, stale: false, stop: 104, stop0: 104,
@@ -40,5 +40,22 @@ describe('route', () => {
   it('цена за пределами полосы прижимается к краям с запасом', () => {
     expect(route({ ...base, price: 120 })!.price).toBeCloseTo(-0.08)
     expect(route({ ...base, price: 50 })!.price).toBeCloseTo(1.08)
+  })
+})
+
+describe('planRoute', () => {
+  const plan = { side: 'short', level: 100, price: 102, stop: 104, targets: [96, 92], target: 96 } as unknown as NearPlan
+
+  it('план до входа: вход у уровня, цена между входом и стопом, отрезок «осталось дойти» между ними', () => {
+    const r = planRoute(plan)!
+    expect(r.entry).toBeCloseTo(4 / 12)
+    expect(r.price).toBeCloseTo(2 / 12)
+    expect(r.gap![0]).toBeCloseTo(2 / 12)
+    expect(r.gap![1]).toBeCloseTo(4 / 12)
+  })
+  it('цена у уровня: отрезка нет; без стопа или стороны полосы нет', () => {
+    expect(planRoute({ ...plan, price: 100 })!.gap).toBeNull()
+    expect(planRoute({ ...plan, stop: null })).toBeNull()
+    expect(planRoute({ ...plan, side: null })).toBeNull()
   })
 })

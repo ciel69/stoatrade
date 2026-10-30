@@ -272,7 +272,8 @@ def _plans(v2, mode, now):
                     "missing": [str(x)[:90] for x in (t.get("missing") or [])[:4]], "met_n": int(_num(t.get("met_n")) or 0), "leaf_n": int(_num(t.get("leaf_n")) or 0),
                     "seq": t.get("seq") if isinstance(t.get("seq"), dict) else None, "level": _num(t.get("level")), "price": _num(c.get("price")), "kind": t.get("kind"),
                     "dir": t.get("dir"), "beyond": t.get("beyond"), "tf": t.get("eta_tf"), "ttl_at": round((now + ttl) / 30.0) * 30 if ttl is not None else None,
-                    "hold": c.get("hold"), "hold_reason": c.get("hold_reason"), "stop": _num(c.get("stop")), "target": _num(tgs[0]["price"]) if tgs else None})
+                    "hold": c.get("hold"), "hold_reason": c.get("hold_reason"), "stop": _num(c.get("stop")), "target": _num(tgs[0]["price"]) if tgs else None, "targets": [_num(x["price"]) for x in tgs[:4]],
+                    "leverage": _num(c.get("leverage")), "chase_bps": _num(c.get("chase_bps")), "chase_max_bps": _num(c.get("chase_max_bps"))})
     return {"counts": counts, "total": len(cards), "near": out}
 
 

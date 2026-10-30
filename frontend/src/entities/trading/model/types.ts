@@ -98,6 +98,10 @@ export interface NearPlan {
   hold_reason: string | null
   stop: number | null
   target: number | null
+  targets: number[]                           // цены всех целей
+  leverage: number | null
+  chase_bps: number | null                    // насколько цена ушла дальше уровня (б.п.), если вход ждёт отката
+  chase_max_bps: number | null
 }
 
 export interface PlansBlock {
