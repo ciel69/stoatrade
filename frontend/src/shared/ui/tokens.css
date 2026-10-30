@@ -14,6 +14,12 @@
   --neg: #ff7b7b;
   --warn: #f5a524;
   --zone-brain: #a58bff;
+  /* зоны разделов (как на старом дашборде): цвет значка раздела в боковой колонке */
+  --zone-now: #4db3ff;
+  --zone-trades: #3cc4b5;
+  --zone-market: #e58fc1;
+  --zone-system: #9aa9ba;
+  --lift: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 10px 30px rgba(0, 0, 0, 0.28);
 
   --font: "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -44,6 +50,11 @@
     --neg: #b42318;
     --warn: #8a5200;
     --zone-brain: #6a4fd1;
+    --zone-now: #0b63b5;
+    --zone-trades: #0b8a7a;
+    --zone-market: #b0397f;
+    --zone-system: #5c6b7d;
+    --lift: 0 1px 0 rgba(255, 255, 255, 0.55) inset, 0 6px 20px rgba(15, 26, 38, 0.07);
   }
 }
 
@@ -62,4 +73,9 @@
   --neg: #b42318;
   --warn: #8a5200;
   --zone-brain: #6a4fd1;
+  --zone-now: #0b63b5;
+  --zone-trades: #0b8a7a;
+  --zone-market: #b0397f;
+  --zone-system: #5c6b7d;
+  --lift: 0 1px 0 rgba(255, 255, 255, 0.55) inset, 0 6px 20px rgba(15, 26, 38, 0.07);
 }
