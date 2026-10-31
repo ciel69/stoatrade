@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { UiChip } from '@/shared/ui'
+import { UiChip, UiRouteStrip, type StripBand, type StripMark } from '@/shared/ui'
 import { duration, price, signed } from '@/shared/lib'
 import { route } from '../lib/route'
 import type { Position } from '../model/types'
@@ -19,7 +19,6 @@ const atTake = computed(() => (props.position.qty != null && props.position.avg 
 const tone = computed(() => ((props.position.upnl ?? 0) > 0 ? 'up' : (props.position.upnl ?? 0) < 0 ? 'down' : ''))
 /** Стоп сдвинут от начального (автозащита или правило): это важнее цифры стопа */
 const protectedStop = computed(() => props.position.stop != null && props.position.stop0 != null && props.position.stop !== props.position.stop0)
-const units = (x: number) => x * 100
 /** Смещение цены от входа в процентах в пользу позиции (минус: против неё). */
 const pct = (p: number | null | undefined) => (p != null && props.position.avg ? (sign.value * (p - props.position.avg) / props.position.avg) * 100 : null)
 const movePct = computed(() => pct(props.position.price))
@@ -27,6 +26,31 @@ const movePct = computed(() => pct(props.position.price))
 const roiPct = computed(() => props.position.pnl_pct ?? (movePct.value != null && props.position.lev ? movePct.value * props.position.lev : null))
 const stopPct = computed(() => pct(props.position.stop))
 const takePct = computed(() => pct(farTake.value))
+
+/** Деления и закрашенные отрезки полосы; цели берутся в том же порядке и с тем же отбором, что в route(). */
+const goals = computed(() => props.position.targets.map((x) => x.price).filter((x) => props.position.avg != null && sign.value * (x - props.position.avg) > 0))
+const marks = computed<StripMark[]>(() => {
+  const x = r.value
+  if (!x) return []
+  const p = props.position
+  const out: StripMark[] = [
+    { key: 'stop', kind: x.stop > x.entry ? 'safe' : 'stop', at: x.stop, name: protectedStop.value ? 'Стоп подтянут' : 'Стоп', price: p.stop, pct: stopPct.value, money: atStop.value },
+    { key: 'entry', kind: 'entry', at: x.entry, name: 'Вход', price: p.avg },
+  ]
+  x.targets.forEach((at, i) => {
+    const last = farTake.value != null && i === goals.value.lastIndexOf(farTake.value)
+    out.push({ key: last ? 'take' : `take-${i}`, kind: 'take', at, name: goals.value.length > 1 ? `Тейк ${i + 1}` : 'Тейк', price: goals.value[i] ?? null, pct: pct(goals.value[i]), money: last ? atTake.value : null })
+  })
+  if (x.price != null) out.push({ key: 'now', kind: 'now', at: x.price, name: 'Сейчас', price: p.price, pct: movePct.value, money: p.upnl })
+  return out
+})
+const bands = computed<StripBand[]>(() => {
+  const x = r.value
+  if (!x) return []
+  const out: StripBand[] = [x.stop <= x.entry ? { from: 0, to: x.entry, kind: 'risk' } : { from: x.entry, to: x.stop, kind: 'locked' }]
+  if (x.price != null) out.push({ from: Math.min(x.entry, x.price), to: Math.max(x.entry, x.price), kind: x.inProfit ? 'gain' : 'loss' })
+  return out
+})
 </script>
 
 <template>
@@ -40,24 +64,19 @@ const takePct = computed(() => pct(farTake.value))
     </div>
     <p class="sub">вход {{ price(position.avg) }} · сейчас {{ price(position.price) }} ({{ signed(movePct) }}%) · {{ signed(position.r, 2) }}R</p>
 
-    <svg v-if="r" class="route" viewBox="0 0 100 14" preserveAspectRatio="none" role="img"
-         :aria-label="`${position.sym}: от стопа ${price(position.stop)} через вход ${price(position.avg)} к тейку ${price(farTake)}, цена ${price(position.price)}`">
-      <rect class="track" x="0" y="6" width="100" height="2" />
-      <rect v-if="r.stop <= r.entry" class="risk" :x="0" y="4.5" :width="units(r.entry)" height="5" />
-      <rect v-else class="locked" :x="units(r.entry)" y="4.5" :width="units(r.stop - r.entry)" height="5" />
-      <rect v-if="r.price != null" class="gain" :class="{ loss: !r.inProfit }" :x="units(Math.min(r.entry, r.price))" y="4.5" :width="units(Math.abs(r.price - r.entry))" height="5" />
-      <line v-for="(t, i) in r.targets" :key="i" class="take" :x1="units(t)" :x2="units(t)" y1="2" y2="12" />
-      <line class="entry" :x1="units(r.entry)" :x2="units(r.entry)" y1="1" y2="13" />
-      <line class="stop" :class="{ safe: r.stop > r.entry }" :x1="units(r.stop)" :x2="units(r.stop)" y1="0" y2="14" />
-      <line v-if="r.price != null" class="now" x1="0" x2="0" y1="0" y2="14" :style="{ transform: `translateX(${units(r.price)}px)` }" />
-    </svg>
+    <UiRouteStrip v-if="r" class="strip" :marks="marks" :bands="bands" :label="`${position.sym}: от стопа ${price(position.stop)} через вход ${price(position.avg)} к тейку ${price(farTake)}, цена ${price(position.price)}`">
+      <template #caption="{ active, set }">
+        <span class="rs-i" :class="{ hot: active === 'stop' }" @pointerenter="set('stop')" @pointerleave="set(null)">
+          <span>стоп {{ price(position.stop) }}<template v-if="stopPct != null"> ({{ signed(stopPct) }}%)</template><template v-if="atStop != null"> · <b :class="atStop > 0 ? 'up' : 'down'">{{ signed(atStop) }}</b></template></span>
+          <UiChip v-if="protectedStop" tone="ok">подтянут</UiChip>
+        </span>
+        <span v-if="position.held_s != null" class="rs-i rs-mid">{{ duration(position.held_s) }}</span>
+        <span v-if="farTake != null" class="rs-i rs-end" :class="{ hot: active === 'take' }" @pointerenter="set('take')" @pointerleave="set(null)">
+          <span>тейк {{ price(farTake) }}<template v-if="takePct != null"> ({{ signed(takePct) }}%)</template><template v-if="atTake != null"> · <b class="up">{{ signed(atTake) }}</b></template></span>
+        </span>
+      </template>
+    </UiRouteStrip>
     <p v-else class="muted">маршрут не построен: нет стопа или входа</p>
-
-    <div class="marks">
-      <span class="m stop-m">стоп {{ price(position.stop) }}<template v-if="stopPct != null"> ({{ signed(stopPct) }}%)</template><template v-if="atStop != null"> · <b :class="atStop > 0 ? 'up' : 'down'">{{ signed(atStop) }}</b></template><UiChip v-if="protectedStop" tone="ok">подтянут</UiChip></span>
-      <span v-if="position.held_s != null" class="m held">{{ duration(position.held_s) }}</span>
-      <span class="m take-m"><template v-if="farTake != null">тейк {{ price(farTake) }}</template><template v-if="takePct != null"> ({{ signed(takePct) }}%)</template><template v-if="atTake != null"> · <b class="up">{{ signed(atTake) }}</b></template></span>
-    </div>
   </li>
 </template>
 
@@ -72,24 +91,6 @@ const takePct = computed(() => pct(farTake.value))
 .sub { margin: 2px 0 0; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .pnl.up, .r.up, .up { color: var(--pos); }
 .pnl.down, .r.down, .down { color: var(--neg); }
-.route { display: block; width: 100%; height: 18px; margin: var(--space-2) 0 var(--space-1); overflow: visible; }
-.track { fill: var(--line2); }
-.risk { fill: var(--neg); opacity: 0.22; }
-.locked { fill: var(--pos); opacity: 0.28; }
-.stop.safe { stroke: var(--pos); }
-.gain { fill: var(--pos); opacity: 0.55; }
-.gain.loss { fill: var(--neg); opacity: 0.55; }
-.take { stroke: var(--pos); stroke-width: 1.4; vector-effect: non-scaling-stroke; opacity: 0.8; }
-.entry { stroke: var(--muted); stroke-width: 1.4; vector-effect: non-scaling-stroke; }
-.stop { stroke: var(--neg); stroke-width: 2; vector-effect: non-scaling-stroke; }
-.now { stroke: var(--text); stroke-width: 2.4; vector-effect: non-scaling-stroke; transition: transform 400ms var(--ease-out); }
-.marks { display: flex; align-items: baseline; gap: var(--space-3); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.m b { font-weight: 600; }
-.stop-m { flex: 1 1 0; }
-.take-m { flex: 1 1 0; text-align: right; }
-.held { margin-left: var(--space-2); }
+.strip { margin-top: var(--space-3); }
 .muted { margin: var(--space-2) 0 0; color: var(--muted); font-size: 12px; }
-@media (prefers-reduced-motion: reduce) {
-  .now { transition: none; }
-}
 </style>

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { UiChip } from '@/shared/ui'
+import { UiChip, UiRouteStrip, type StripBand, type StripMark } from '@/shared/ui'
 import { countdown, duration, fixed, price } from '@/shared/lib'
 import { planRoute } from '../lib/route'
 import { planWait } from '../lib/plan-wait'
@@ -17,7 +17,6 @@ const TF_S: Record<string, number> = { м: 60, m: 60, ч: 3600, h: 3600, д: 864
 
 const w = computed(() => planWait(props.plan, props.now))
 const r = computed(() => planRoute(props.plan))
-const units = (x: number) => x * 100
 const entry = computed(() => props.plan.level ?? props.plan.price)
 const near = computed(() => props.plan.dist_pct != null && props.plan.dist_pct <= NEAR)
 const eta = computed(() => (props.plan.eta_at != null && props.plan.eta_at > props.now ? props.plan.eta_at - props.now : null))
@@ -58,8 +57,33 @@ const line = computed(() => {
   if (crossed.value) return `цена за уровнем · вход при закрытии свечи${eta.value != null ? ' через ' + countdown(eta.value) : ''}`
   return pierce.value ?? props.plan.missing[0] ?? props.plan.text
 })
-/** Метка уровня над полосой: центр по входу, не дальше краёв. */
-const entryLeft = computed(() => (r.value ? Math.min(90, Math.max(10, units(r.value.entry))) : 50))
+const dir = computed(() => (props.plan.side === 'short' ? -1 : 1))
+/** Смещение цены от уровня входа в пользу плана, %. */
+const fromEntrySigned = (p: number | null | undefined) => (p != null && entry.value ? (dir.value * (p - entry.value) / entry.value) * 100 : null)
+/** Цели в том же порядке и с тем же отбором, что в planRoute(). */
+const goals = computed(() => (props.plan.targets?.length ? props.plan.targets : props.plan.target != null ? [props.plan.target] : []).filter((x) => entry.value != null && dir.value * (x - entry.value) > 0))
+const marks = computed<StripMark[]>(() => {
+  const x = r.value
+  if (!x) return []
+  const p = props.plan
+  const out: StripMark[] = [
+    { key: 'stop', kind: 'stop', at: x.stop, name: 'Стоп', price: p.stop, pct: fromEntrySigned(p.stop), money: p.risk != null ? -p.risk : null },
+    { key: 'entry', kind: 'level', at: x.entry, name: 'Вход', price: entry.value },
+  ]
+  x.targets.forEach((at, i) => {
+    const last = farTake.value != null && i === goals.value.lastIndexOf(farTake.value)
+    out.push({ key: last ? 'take' : `take-${i}`, kind: 'take', at, name: goals.value.length > 1 ? `Тейк ${i + 1}` : 'Тейк', price: goals.value[i] ?? null, pct: fromEntrySigned(goals.value[i]) })
+  })
+  if (x.price != null) out.push({ key: 'now', kind: 'now', at: x.price, name: 'Цена', price: p.price, pct: fromEntrySigned(p.price) })
+  return out
+})
+const bands = computed<StripBand[]>(() => {
+  const x = r.value
+  if (!x) return []
+  const out: StripBand[] = [{ from: 0, to: x.entry, kind: 'risk' }]
+  if (x.gap) out.push({ from: x.gap[0], to: x.gap[1], kind: 'gap' })
+  return out
+})
 /** Срок плана, если он скоро кончится и не совпадает с отсчётом до свечи (иначе на карточке два одинаковых таймера). */
 const ttlSoon = computed(() => {
   const left = props.plan.ttl_at != null ? props.plan.ttl_at - props.now : null
@@ -97,23 +121,17 @@ const tip = computed(() => {
       <span v-if="ttlSoon != null" class="ttl">план {{ countdown(ttlSoon) }}</span>
     </p>
 
-    <div v-if="r" class="viz">
-      <span class="lvl" :style="{ left: entryLeft + '%' }">{{ price(entry) }}</span>
-      <svg class="route" viewBox="0 0 100 14" preserveAspectRatio="none" role="img"
-           :aria-label="`${plan.sym}: от стопа ${price(plan.stop)} через вход ${price(entry)} к цели ${price(farTake)}, цена ${price(plan.price)}`">
-        <rect class="track" x="0" y="6" width="100" height="2" />
-        <rect class="risk" x="0" y="4.5" :width="units(r.entry)" height="5" />
-        <rect v-if="r.gap" class="gap" :x="units(r.gap[0])" y="4.5" :width="units(r.gap[1] - r.gap[0])" height="5" />
-        <line v-for="(t, i) in r.targets" :key="i" class="take" :x1="units(t)" :x2="units(t)" y1="2" y2="12" />
-        <line class="entry" :x1="units(r.entry)" :x2="units(r.entry)" y1="0" y2="14" />
-        <line class="stop" x1="0" x2="0" y1="0" y2="14" />
-        <line v-if="r.price != null" class="now" x1="0" x2="0" y1="0" y2="14" :style="{ transform: `translateX(${units(r.price)}px)` }" />
-      </svg>
-      <div class="ends">
-        <span class="down">{{ price(plan.stop) }}<template v-if="stopPct != null"> −{{ fixed(stopPct) }}%</template></span>
-        <span v-if="farTake != null" class="up">{{ price(farTake) }}<template v-if="takePct != null"> +{{ fixed(takePct) }}%</template></span>
-      </div>
-    </div>
+    <UiRouteStrip v-if="r" class="strip" :marks="marks" :bands="bands" :flag="{ at: r.entry, text: price(entry), markKey: 'entry' }"
+                  :label="`${plan.sym}: от стопа ${price(plan.stop)} через вход ${price(entry)} к цели ${price(farTake)}, цена ${price(plan.price)}`">
+      <template #caption="{ active, set }">
+        <span class="rs-i" :class="{ hot: active === 'stop' }" @pointerenter="set('stop')" @pointerleave="set(null)">
+          <span class="down">{{ price(plan.stop) }}<template v-if="stopPct != null"> −{{ fixed(stopPct) }}%</template></span>
+        </span>
+        <span v-if="farTake != null" class="rs-i rs-end" :class="{ hot: active === 'take' }" @pointerenter="set('take')" @pointerleave="set(null)">
+          <span class="up">{{ price(farTake) }}<template v-if="takePct != null"> +{{ fixed(takePct) }}%</template></span>
+        </span>
+      </template>
+    </UiRouteStrip>
   </li>
 </template>
 
@@ -138,20 +156,10 @@ const tip = computed(() => {
 .dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--line2); }
 .dots i.on { background: var(--accent); }
 .ttl { margin-left: auto; flex: none; color: var(--warn); font-variant-numeric: tabular-nums; }
-.viz { position: relative; padding-top: 14px; margin-top: var(--space-1); }
-.lvl { position: absolute; top: 0; transform: translateX(-50%); font-size: 11px; font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.route { display: block; width: 100%; height: 18px; overflow: visible; }
-.track { fill: var(--line2); }
-.risk { fill: var(--neg); opacity: 0.22; }
-.gap { fill: var(--accent); opacity: 0.5; }
-.take { stroke: var(--pos); stroke-width: 1.4; vector-effect: non-scaling-stroke; opacity: 0.8; }
-.entry { stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
-.stop { stroke: var(--neg); stroke-width: 2; vector-effect: non-scaling-stroke; }
-.now { stroke: var(--text); stroke-width: 2.4; vector-effect: non-scaling-stroke; transition: transform 400ms var(--ease-out); }
-.ends { display: flex; justify-content: space-between; margin-top: 3px; font-size: 11px; font-variant-numeric: tabular-nums; }
+.strip { margin-top: var(--space-2); }
 .up { color: var(--pos); }
 .down { color: var(--neg); }
 @media (prefers-reduced-motion: reduce) {
-  .now, .ring-fg { transition: none; }
+  .ring-fg { transition: none; }
 }
 </style>

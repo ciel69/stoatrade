@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { useLive, type LiveMessage } from '@/shared/api'
+import { mockHome, mockPlans } from '../lib/mock'
 import type { DecisionsSnapshot, HomeSnapshot, ModelsSnapshot, PlanDetailReply, PlansSnapshot, TradesSnapshot, TradingMode } from './types'
 
 const MODES: TradingMode[] = ['paper', 'live', 'testnet', 'all']
@@ -17,6 +18,7 @@ export const useTradingStore = defineStore('trading', () => {
   const chosen = ref<TradingMode | null>(null)
   const serverMode = ref<TradingMode>('paper')
   let started = false
+  let mocked = false
 
   const mode = computed<TradingMode>(() => chosen.value ?? serverMode.value)
   const positions = computed(() => snapshot.value?.positions ?? [])
@@ -24,7 +26,7 @@ export const useTradingStore = defineStore('trading', () => {
 
   function applyHome(m: LiveMessage): void {
     const data = m.data as HomeSnapshot
-    if (data.mode !== mode.value) return          // запоздавший снимок прежнего режима
+    if (mocked || data.mode !== mode.value) return          // запоздавший снимок прежнего режима (и образцовые данные ?trading=mock не затираем)
     snapshot.value = data
   }
 
@@ -46,7 +48,7 @@ export const useTradingStore = defineStore('trading', () => {
 
   function applyPlans(m: LiveMessage): void {
     const data = m.data as PlansSnapshot
-    if (data.mode === mode.value) plans.value = data
+    if (!mocked && data.mode === mode.value) plans.value = data
   }
 
   function applyPlanDetail(m: LiveMessage): void {
@@ -84,6 +86,16 @@ export const useTradingStore = defineStore('trading', () => {
   function start(): void {
     if (started) return
     started = true
+    if (new URLSearchParams(location.search).get('trading') === 'mock') {        // ?trading=mock: образцовые позиции и планы без сервера (для проверки глазами)
+      mocked = true
+      snapshot.value = mockHome()
+      plans.value = mockPlans()
+      window.setInterval(() => {                                                 // цена каждые 4 с чуть двигается: видно плавный ход маркера
+        const s = snapshot.value
+        if (!s) return
+        snapshot.value = { ...s, positions: s.positions.map((p) => (p.price == null ? p : { ...p, price: p.price * (1 + (Math.random() - 0.5) * 0.004) })) }
+      }, 4000)
+    }
     const { socket } = useLive()
     socket.subscribe('hello', applyHello)
     socket.subscribe('home', applyHome)

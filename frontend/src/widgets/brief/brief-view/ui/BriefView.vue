@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { briefMs, coinStat, hotRows, scopeText, type Brief, type BriefPosition } from '@/entities/brief'
 import { planShort, routeFor } from '@/entities/trading'
-import { UiChip } from '@/shared/ui'
+import { UiChip, UiRouteStrip, type StripBand, type StripMark } from '@/shared/ui'
 import { ageText, fixed, price, signed, useNow } from '@/shared/lib'
 import BriefLevels from './BriefLevels.vue'
 
@@ -66,7 +66,22 @@ const tiles = computed<Tile[]>(() => {
 function routeOf(p: BriefPosition) {
   return routeFor(p.side, p.sl, p.avg, p.px, (p.targets ?? []).map((t) => t.px))
 }
-const u = (v: number) => v * 100
+/** Деления и отрезки полосы позиции из досье (цели в порядке route(): только с стороны прибыли). */
+function stripOf(p: BriefPosition): { marks: StripMark[]; bands: StripBand[] } | null {
+  const r = routeOf(p)
+  if (!r || p.avg == null) return null
+  const sg = p.side === 'long' ? 1 : -1
+  const pc = (x: number | null | undefined) => (x != null && p.avg ? (sg * (x - p.avg) / p.avg) * 100 : null)
+  const goals = (p.targets ?? []).map((t) => t.px).filter((x) => sg * (x - p.avg!) > 0)
+  const marks: StripMark[] = [
+    { key: 'stop', kind: r.stop > r.entry ? 'safe' : 'stop', at: r.stop, name: 'Стоп', price: p.sl, pct: pc(p.sl) },
+    { key: 'entry', kind: 'entry', at: r.entry, name: 'Вход', price: p.avg },
+    ...r.targets.map((at, i): StripMark => ({ key: `take-${i}`, kind: 'take', at, name: goals.length > 1 ? `Тейк ${i + 1}` : 'Тейк', price: goals[i] ?? null, pct: pc(goals[i]) })),
+  ]
+  if (r.price != null) marks.push({ key: 'now', kind: 'now', at: r.price, name: 'Сейчас', price: p.px, pct: pc(p.px), money: p.r, unit: 'R' })
+  const bands: StripBand[] = [r.stop <= r.entry ? { from: 0, to: r.entry, kind: 'risk' } : { from: r.entry, to: r.stop, kind: 'locked' }]
+  return { marks, bands }
+}
 const coinLines = computed(() => {
   const m = b.value.market
   if (!m) return []
@@ -137,15 +152,7 @@ const kvLine = (d: Record<string, unknown> | undefined) => Object.entries(d ?? {
             <router-link v-if="p.plan" class="lnk" :to="{ path: '/trading/plans', query: { plan: p.plan } }">{{ planShort(p.plan) }}</router-link>
             <b class="r" :class="tone(p.r)">{{ p.r != null ? signed(p.r) + 'R' : '–' }}</b>
           </div>
-          <div v-if="routeOf(p)" class="rt">
-            <svg viewBox="0 0 100 12" preserveAspectRatio="none" role="img" :aria-label="`${p.sym}: стоп ${price(p.sl)}, вход ${price(p.avg)}, цена ${price(p.px)}`">
-              <rect class="trk" x="0" y="5" width="100" height="2" />
-              <rect class="rsk" x="0" y="3.5" :width="u(routeOf(p)!.entry)" height="5" />
-              <line v-for="(t, i) in routeOf(p)!.targets" :key="i" class="tk" :x1="u(t)" :x2="u(t)" y1="1" y2="11" />
-              <line class="en" :x1="u(routeOf(p)!.entry)" :x2="u(routeOf(p)!.entry)" y1="0" y2="12" />
-              <line v-if="routeOf(p)!.price != null" class="nw" :x1="u(routeOf(p)!.price!)" :x2="u(routeOf(p)!.price!)" y1="0" y2="12" />
-            </svg>
-          </div>
+          <UiRouteStrip v-if="stripOf(p)" class="rt" :marks="stripOf(p)!.marks" :bands="stripOf(p)!.bands" :label="`${p.sym}: стоп ${price(p.sl)}, вход ${price(p.avg)}, цена ${price(p.px)}`" />
           <p class="meta">вход {{ price(p.avg) }} · цена {{ price(p.px) }} · стоп {{ price(p.sl) }} · ликвидация {{ price(p.liq) }} · MAE {{ fixed(p.mae_r) }}R · MFE {{ fixed(p.mfe_r) }}R · {{ p.age_min ?? '–' }} мин</p>
         </li>
       </ul>
@@ -314,12 +321,7 @@ dd { margin: 0; text-align: right; overflow-wrap: anywhere; font-variant-numeric
 .end { margin-left: auto; }
 .meta { margin: 2px 0 0; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .muted { margin: 0; font-size: 11px; color: var(--muted); }
-.rt svg { display: block; width: 100%; height: 14px; margin-top: var(--space-1); overflow: visible; }
-.trk { fill: var(--line2); }
-.rsk { fill: var(--neg); opacity: 0.22; }
-.tk { stroke: var(--pos); stroke-width: 1.4; vector-effect: non-scaling-stroke; opacity: 0.8; }
-.en { stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
-.nw { stroke: var(--text); stroke-width: 2.4; vector-effect: non-scaling-stroke; }
+.rt { margin: var(--space-3) 0 var(--space-1); }
 .thesis { margin: 4px 0 0; font-size: 12px; color: var(--muted); line-height: 1.45; }
 .thesis span { padding: 0 6px; border: 1px solid var(--line2); border-radius: 99px; font-size: 10px; margin-right: 4px; }
 .coins { display: grid; gap: var(--space-2); }

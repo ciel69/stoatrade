@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { UiChip } from '@/shared/ui'
+import { UiChip, UiRouteStrip, type StripBand, type StripMark } from '@/shared/ui'
 import { duration, fixed, price } from '@/shared/lib'
 import { ideaRisk, ideaRoute, levelWait } from '../lib/idea'
 import type { IdeaItem } from '../model/types'
@@ -15,8 +15,28 @@ const emit = defineEmits<{ select: [] }>()
 const r = computed(() => ideaRoute(props.idea))
 const k = computed(() => ideaRisk(props.idea))
 const wait = computed(() => levelWait(props.idea))
-const units = (x: number) => x * 100
-const levelLeft = computed(() => (r.value ? Math.min(90, Math.max(10, units(r.value.level))) : 50))
+const sg = computed(() => (props.idea.side === 'short' ? -1 : 1))
+/** Смещение цены от уровня в пользу идеи, %. */
+const fromLevel = (p: number | null | undefined) => (p != null && props.idea.level ? (sg.value * (p - props.idea.level) / props.idea.level) * 100 : null)
+const marks = computed<StripMark[]>(() => {
+  const x = r.value
+  if (!x) return []
+  const i = props.idea
+  const out: StripMark[] = [
+    { key: 'stop', kind: 'stop', at: 0, name: 'Стоп', price: i.stop, pct: fromLevel(i.stop) },
+    { key: 'level', kind: 'level', at: x.level, name: 'Уровень', price: i.level },
+    { key: 'take', kind: 'take', at: 1, name: 'Цель', price: i.tp ?? null, pct: fromLevel(i.tp) },
+  ]
+  if (x.price != null) out.push({ key: 'now', kind: 'now', at: x.price, name: 'Цена', price: i.now_price, pct: fromLevel(i.now_price) })
+  return out
+})
+const bands = computed<StripBand[]>(() => {
+  const x = r.value
+  if (!x) return []
+  const out: StripBand[] = [{ from: 0, to: x.level, kind: 'risk' }]
+  if (x.gap) out.push({ from: x.gap[0], to: x.gap[1], kind: 'gap' })
+  return out
+})
 const left = computed(() => (props.idea.expires_epoch != null ? props.idea.expires_epoch - props.now : null))
 const dist = computed(() => (props.idea.dist_level_pct != null ? `${props.idea.dist_level_pct > 0 ? '' : '−'}${fixed(Math.abs(props.idea.dist_level_pct))}%` : '–'))
 const tip = computed(() => [props.idea.tag, props.idea.note, k.value.rr != null ? `RR ${fixed(k.value.rr, 1)} без издержек` : ''].filter(Boolean).join(' · '))
@@ -24,7 +44,8 @@ const tip = computed(() => [props.idea.tag, props.idea.note, k.value.rr != null 
 
 <template>
   <li class="card" :class="{ near: idea.zone, sel: selected }">
-    <button type="button" class="hit" :aria-pressed="selected" :title="tip" @click="emit('select')">
+    <button type="button" class="hit" :aria-pressed="selected" :aria-label="`${idea.sym}: открыть идею`" :title="tip" @click="emit('select')" />
+    <div class="body">
       <span class="head">
         <span class="sym">{{ idea.sym }}</span>
         <UiChip>{{ idea.side === 'long' ? 'лонг' : idea.side === 'short' ? 'шорт' : '?' }}</UiChip>
@@ -33,36 +54,33 @@ const tip = computed(() => [props.idea.tag, props.idea.note, k.value.rr != null 
         <span class="ttl" :class="{ soon: left != null && left < 1800 }" :title="left == null ? 'без срока' : 'идея истечёт, если цена не дойдёт до уровня'">{{ left == null ? 'без срока' : left > 0 ? duration(left) : 'срок вышел' }}</span>
       </span>
 
-      <span v-if="r" class="viz">
-        <span class="lvl" :style="{ left: levelLeft + '%' }">{{ price(idea.level) }}</span>
-        <svg class="route" viewBox="0 0 100 14" preserveAspectRatio="none" role="img"
-             :aria-label="`${idea.sym}: от стопа ${price(idea.stop)} через уровень ${price(idea.level)} к цели ${price(idea.tp)}, цена ${price(idea.now_price)}`">
-          <rect class="track" x="0" y="6" width="100" height="2" />
-          <rect class="risk" x="0" y="4.5" :width="units(r.level)" height="5" />
-          <rect v-if="r.gap" class="gap" :x="units(r.gap[0])" y="4.5" :width="units(r.gap[1] - r.gap[0])" height="5" />
-          <line class="take" x1="100" x2="100" y1="2" y2="12" />
-          <line class="entry" :x1="units(r.level)" :x2="units(r.level)" y1="0" y2="14" />
-          <line class="stop" x1="0" x2="0" y1="0" y2="14" />
-          <line v-if="r.price != null" class="now" x1="0" x2="0" y1="0" y2="14" :style="{ transform: `translateX(${units(r.price)}px)` }" />
-        </svg>
-        <span class="ends">
-          <span class="down">{{ price(idea.stop) }}<template v-if="k.risk != null"> −{{ fixed(k.risk) }}%</template></span>
-          <span class="up">{{ price(idea.tp) }}<template v-if="k.reward != null"> +{{ fixed(k.reward) }}%</template></span>
-        </span>
-      </span>
+      <UiRouteStrip v-if="r" class="strip" :marks="marks" :bands="bands" :flag="{ at: r.level, text: price(idea.level), markKey: 'level' }"
+                    :label="`${idea.sym}: от стопа ${price(idea.stop)} через уровень ${price(idea.level)} к цели ${price(idea.tp)}, цена ${price(idea.now_price)}`" @click="emit('select')">
+        <template #caption="{ active, set }">
+          <span class="rs-i" :class="{ hot: active === 'stop' }" @pointerenter="set('stop')" @pointerleave="set(null)">
+            <span class="down">{{ price(idea.stop) }}<template v-if="k.risk != null"> −{{ fixed(k.risk) }}%</template></span>
+          </span>
+          <span class="rs-i rs-end" :class="{ hot: active === 'take' }" @pointerenter="set('take')" @pointerleave="set(null)">
+            <span class="up">{{ price(idea.tp) }}<template v-if="k.reward != null"> +{{ fixed(k.reward) }}%</template></span>
+          </span>
+        </template>
+      </UiRouteStrip>
       <span v-else class="note-only">Уровня или стопа нет: сканер по этой заметке мозг не разбудит.</span>
 
       <span v-if="idea.note" class="note">{{ idea.note }}</span>
-    </button>
+    </div>
   </li>
 </template>
 
 <style scoped>
-.card { padding: var(--space-3) 0; border-top: 1px solid var(--line); }
+.card { position: relative; padding: var(--space-3) 0; border-top: 1px solid var(--line); }
 .card:first-child { border-top: 0; padding-top: 0; }
 .card.sel { box-shadow: inset 3px 0 0 var(--accent); padding-left: var(--space-3); }
-.hit { display: block; width: 100%; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: var(--radius-sm); }
+/* Вся карточка кликабельна одной кнопкой под содержимым: внутри полосы свои кнопки-деления, вложенные кнопки недопустимы */
+.hit { position: absolute; inset: 0; width: 100%; padding: 0; border: 0; background: none; cursor: pointer; border-radius: var(--radius-sm); }
 .hit:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.body { position: relative; pointer-events: none; }
+.strip { pointer-events: auto; margin-top: var(--space-2); }
 .head { display: flex; align-items: center; gap: var(--space-2); }
 .sym { font-size: 17px; font-weight: 700; letter-spacing: -0.01em; }
 .dist { margin-left: auto; font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--muted); }
@@ -70,25 +88,11 @@ const tip = computed(() => [props.idea.tag, props.idea.note, k.value.rr != null 
 .dist.w-close { color: var(--text); }
 .ttl { min-width: 64px; text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--muted); }
 .ttl.soon { color: var(--warn); }
-.viz { display: block; position: relative; padding-top: 14px; margin-top: var(--space-1); }
-.lvl { position: absolute; top: 0; transform: translateX(-50%); font-size: 11px; font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.route { display: block; width: 100%; height: 18px; overflow: visible; }
-.track { fill: var(--line2); }
-.risk { fill: var(--neg); opacity: 0.22; }
-.gap { fill: var(--accent); opacity: 0.5; }
-.take { stroke: var(--pos); stroke-width: 1.4; vector-effect: non-scaling-stroke; opacity: 0.8; }
-.entry { stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
-.stop { stroke: var(--neg); stroke-width: 2; vector-effect: non-scaling-stroke; }
-.now { stroke: var(--text); stroke-width: 2.4; vector-effect: non-scaling-stroke; transition: transform 400ms var(--ease-out); }
-.ends { display: flex; justify-content: space-between; margin-top: 3px; font-size: 11px; font-variant-numeric: tabular-nums; }
 .up { color: var(--pos); }
 .down { color: var(--neg); }
 .note-only { display: block; margin-top: 2px; font-size: 12px; color: var(--muted); }
 .note { display: block; margin-top: var(--space-1); font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (hover: hover) and (pointer: fine) {
-  .hit:hover .sym { color: var(--accent); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .now { transition: none; }
+  .card:hover .sym { color: var(--accent); }
 }
 </style>
