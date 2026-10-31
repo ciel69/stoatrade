@@ -208,10 +208,10 @@ class ServerTest(Fx, unittest.IsolatedAsyncioTestCase):
     async def test_snapshot_then_only_changes(self):
         self.hb()
         async with connect("ws://127.0.0.1:%d/ws" % self.port) as ws:
-            first = [await self.recv(ws) for _ in range(14)]
-            self.assertEqual([m["topic"] for m in first], ["hello", "brain", "briefs", "ctl", "events", "market", "news", "system", "decisions", "home", "ideas", "models", "plans", "trades"])
+            first = [await self.recv(ws) for _ in range(15)]
+            self.assertEqual([m["topic"] for m in first], ["hello", "brain", "briefs", "ctl", "events", "market", "news", "settings", "system", "decisions", "home", "ideas", "models", "plans", "trades"])
             self.assertEqual(first[1]["data"]["status"], "idle")
-            self.assertEqual((first[0]["data"]["mode"], first[9]["data"]["mode"]), ("paper", "paper"))
+            self.assertEqual((first[0]["data"]["mode"], first[10]["data"]["mode"]), ("paper", "paper"))
             self.assertIn("enabled", first[0]["data"]["ctl"])
             with self.assertRaises(asyncio.TimeoutError):                         # без изменений сервер молчит (опроса нет)
                 await self.recv(ws, 0.8)
@@ -224,7 +224,7 @@ class ServerTest(Fx, unittest.IsolatedAsyncioTestCase):
     async def test_mode_switch_sends_home_for_that_mode_only(self):
         self.hb()
         async with connect("ws://127.0.0.1:%d/ws" % self.port) as a, connect("ws://127.0.0.1:%d/ws" % self.port) as b:
-            for _ in range(14):
+            for _ in range(15):
                 await self.recv(a)
                 await self.recv(b)
             await a.send(json.dumps({"op": "mode", "mode": "live"}))
@@ -239,17 +239,28 @@ class ServerTest(Fx, unittest.IsolatedAsyncioTestCase):
     async def test_plan_detail_op_answers_only_asker_and_rejects_bad_id(self):
         self.hb()
         async with connect("ws://127.0.0.1:%d/ws" % self.port) as a, connect("ws://127.0.0.1:%d/ws" % self.port) as b:
-            for _ in range(14):
+            for _ in range(15):
                 await self.recv(a)
                 await self.recv(b)
+            async def reply(ws):                       # между командой и ответом может прийти обычное обновление другой темы: ждём именно plan_detail
+                for _ in range(30):
+                    m = await self.recv(ws)
+                    if m["topic"] == "plan_detail":
+                        return m
+                self.fail("ответа plan_detail нет")
             await a.send(json.dumps({"op": "plan", "id": "../../etc/passwd"}))
-            m = await self.recv(a)
+            m = await reply(a)
             self.assertEqual((m["topic"], m["data"]["ok"]), ("plan_detail", False))
             await a.send(json.dumps({"op": "plan", "id": "PL-NOPE"}))
-            m = await self.recv(a)
+            m = await reply(a)
             self.assertEqual((m["topic"], m["data"]["ok"], m["data"]["id"]), ("plan_detail", False, "PL-NOPE"))
-            with self.assertRaises(asyncio.TimeoutError):
-                await self.recv(b, 0.5)
+            seen = []                                   # второй клиент ответ на чужой запрос получать не должен (обычные обновления тем допустимы)
+            try:
+                while True:
+                    seen.append((await self.recv(b, 0.5))["topic"])
+            except asyncio.TimeoutError:
+                pass
+            self.assertNotIn("plan_detail", seen)
 
     def test_system_topic_has_moments_not_ages_and_paper_private_is_not_a_warning(self):
         def state(root, mode, now):
@@ -272,6 +283,24 @@ class ServerTest(Fx, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(net["level"], "ok")                                 # paper: «private нет» не предупреждение
         self.assertEqual(a["level"], "ok")                                   # общий уровень считается по узлам с поправкой, а не по исходному strip.level
         self.assertEqual((a["exec"]["consumers"]["api"]["unacked"], a["room"]["rows"][0]["room"], a["account"]["venues"]["bybit"]), (2, 4.0, {"equity": 39.5, "free": 39.0}))
+
+    def test_settings_topic_roles_with_day_quality_and_no_secrets(self):
+        from tb.llm import dashapi
+        model = {"id": "lm", "provider": "local", "model_name": "gpt", "provider_enabled": True, "live_ok": False, "params": {"temperature": 0.1, "max_out_tok": 1500, "thinking": "low"}, "api_key": "SECRET"}
+        data = {"overview": {"mode": "paper", "rev": 3, "live_team": "A", "providers": {"total": 2, "enabled": 1}, "usage_today": {"usd": 0.0, "calls": 5}, "errors": []},
+                "roles": {"roles": [{"role": "entry_scout", "scope": "team", "team": "A", "live_risk": False, "io": "decision_json", "primary": model, "fallback": [dict(model, id="fb", provider_enabled=False)],
+                                     "budget": {"day_usd": None}, "today": {"usd": 0.0, "calls": 5, "errors": 1, "budget_left_usd": None}}], "errors": []},
+                "usage": {"groups": [{"id": "entry_scout", "calls": 9, "err_rate": 0.1, "fmt_err_rate": 0.3, "fallbacks": 2, "lat_p50_ms": 8149, "usd": 0.0}]}}
+        orig = dashapi.api
+        dashapi.api = lambda path, query, root, now: (200, data[path.rsplit("/", 1)[1]])
+        try:
+            t = topics.settings(None, 1000.0)
+        finally:
+            dashapi.api = orig
+        r = t["roles"][0]
+        self.assertEqual((t["mode"], t["rev"], r["role"], r["primary"]["model_name"], r["fallback"][0]["provider_enabled"]), ("paper", 3, "entry_scout", "gpt", False))
+        self.assertEqual((r["day"]["fmt_err_rate"], r["day"]["p50_ms"], r["day"]["fallbacks"], r["today"]["calls"]), (0.3, 8100, 2, 5))       # задержка округлена до 100 мс: тема не дребезжит
+        self.assertNotIn("SECRET", repr(t))                                                                                                     # поля вне белого списка не уходят
 
     def test_briefs_list_and_detail(self):
         w(self.root, "state/briefs/B-20261031-1000-01.json", json.dumps({"brief_id": "B-20261031-1000-01", "ts": "2026-10-31T10:00:00Z", "scope": "start", "room": {"allowed": True}, "positions": [{"sym": "SOL"}], "plans": [], "secret_key": "x"}))

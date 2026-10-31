@@ -6,6 +6,7 @@ import { IdeasPage } from '@/pages/ideas'
 import { MarketPage } from '@/pages/market'
 import { NewsPage } from '@/pages/news'
 import { PlansPage } from '@/pages/plans'
+import { SettingsPage } from '@/pages/settings'
 import { SystemPage } from '@/pages/system'
 import { TradesPage } from '@/pages/trades'
 
@@ -24,7 +25,9 @@ export const router = createRouter({
     { path: '/brain/decisions', name: 'decisions', component: DecisionsPage, meta: { title: 'Мозг: решения' } },
     { path: '/brain/brief', name: 'brief', component: BriefPage, meta: { title: 'Мозг: досье' } },
     { path: '/system/control', name: 'control', component: SystemPage, meta: { title: 'Система: управление' } },
+    { path: '/system/settings', name: 'settings', component: SettingsPage, meta: { title: 'Система: настройки' } },
     moved('/system', '/system/control'),
+    moved('/settings', '/system/settings'),
     moved('/control', '/system/control'),
     moved('/trading', '/trading/ideas'),
     moved('/brain', '/brain/decisions'),

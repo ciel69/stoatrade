@@ -38,7 +38,7 @@ export const NAV_GROUPS: NavGroup[] = [
         tabs: [{ to: '/trading/ideas', label: 'Идеи' }, { to: '/trading/plans', label: 'Планы' }, { to: '/trading/trades', label: 'Сделки' }],
       },
       { to: '/brain/decisions', label: 'Мозг', icon: 'M4 6h16M4 12h10M4 18h6M17 14l2.5 2.5L23 12', zone: 'brain', base: '/brain', tabs: [{ to: '/brain/decisions', label: 'Решения' }, { to: '/brain/brief', label: 'Досье' }] },
-      { to: '/system/control', label: 'Система', icon: 'M12 3v9m5.7-6.7a8 8 0 1 1-11.4 0', zone: 'system', base: '/system', tabs: [{ to: '/system/control', label: 'Управление' }] },
+      { to: '/system/control', label: 'Система', icon: 'M12 3v9m5.7-6.7a8 8 0 1 1-11.4 0', zone: 'system', base: '/system', tabs: [{ to: '/system/control', label: 'Управление' }, { to: '/system/settings', label: 'Настройки' }] },
     ],
   },
 ]

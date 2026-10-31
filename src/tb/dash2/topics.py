@@ -421,6 +421,41 @@ def system(root=None, now=None):
     }
 
 
+def _model(m):
+    """Модель роли для страницы: без служебных полей (ключей в данных нет, провайдер и модель только как имена)."""
+    if not isinstance(m, dict):
+        return None
+    p = m.get("params") if isinstance(m.get("params"), dict) else {}
+    return {"id": str(m.get("id") or "")[:40], "provider": str(m.get("provider") or "")[:40], "model_name": str(m.get("model_name") or "")[:80], "provider_enabled": bool(m.get("provider_enabled")),
+            "live_ok": bool(m.get("live_ok")), "params": {"temperature": _num(p.get("temperature")), "max_out_tok": _num(p.get("max_out_tok")), "thinking": p.get("thinking") if isinstance(p.get("thinking"), str) else None}}
+
+
+def settings(root=None, now=None):
+    """Страница «Система · Настройки», блок «Кто думает»: роли мозга, их основная и запасные модели, параметры, расход за сутки и качество ответов по роли. Только чтение: источник
+    llm.dashapi (`/api/settings/*`), запись идёт через ctl-действия и в этом дашборде пока недоступна."""
+    from tb.llm import dashapi
+    now = time.time() if now is None else now
+
+    def get(path, query=None):
+        r = dashapi.api("/api/settings/" + path, query or {}, root, now)
+        return r[1] if r and r[0] == 200 and isinstance(r[1], dict) else {}
+    ov, rl = get("overview"), get("roles")
+    day = {g.get("id"): g for g in (get("usage", {"days": ["1"], "by": ["role"]}).get("groups") or []) if isinstance(g, dict)}
+    roles = []
+    for r in rl.get("roles") or []:
+        if not isinstance(r, dict):
+            continue
+        t, d = r.get("today") or {}, day.get(r.get("role")) or {}
+        roles.append({"role": str(r.get("role"))[:40], "scope": r.get("scope"), "team": r.get("team"), "live_risk": bool(r.get("live_risk")), "io": r.get("io"),
+                      "primary": _model(r.get("primary")), "fallback": [m for m in (_model(x) for x in (r.get("fallback") or [])) if m],
+                      "budget_day_usd": _num((r.get("budget") or {}).get("day_usd")),
+                      "today": {"usd": _num(t.get("usd")), "calls": _num(t.get("calls")), "errors": _num(t.get("errors")), "budget_left_usd": _num(t.get("budget_left_usd"))},
+                      "day": {"calls": _num(d.get("calls")), "err_rate": _num(d.get("err_rate")), "fmt_err_rate": _num(d.get("fmt_err_rate")), "fallbacks": _num(d.get("fallbacks")),
+                              "p50_ms": round((_num(d.get("lat_p50_ms")) or 0) / 100.0) * 100 if _num(d.get("lat_p50_ms")) is not None else None, "usd": _num(d.get("usd"))}})
+    return {"mode": ov.get("mode"), "rev": ov.get("rev"), "live_team": ov.get("live_team"), "exchange": ov.get("exchange"), "providers": ov.get("providers"),
+            "usage_today": ov.get("usage_today"), "errors": [str(e)[:120] for e in ((ov.get("errors") or []) + (rl.get("errors") or []))[:6]], "roles": roles}
+
+
 BRIEFS_OUT = 60
 _BRIEF_META = {}            # (корень, id) -> краткая сводка досье: файл досье после записи не меняется, поэтому читаем один раз
 
@@ -568,8 +603,8 @@ def ctl(root=None, now=None):
                      for r in (st.get("last") or [])[:8] if isinstance(r, dict)]}
 
 
-TOPICS = {"brain": brain, "ctl": ctl, "events": events, "market": market, "news": news, "briefs": briefs, "system": system}
-INTERVAL = {"decisions": 3.0, "models": 30.0, "ideas": 10.0, "market": 5.0, "news": 15.0, "briefs": 10.0, "system": 5.0}        # тема -> не чаще раза в N секунд (по умолчанию HEAVY_S сервера)
+TOPICS = {"brain": brain, "ctl": ctl, "events": events, "market": market, "news": news, "briefs": briefs, "system": system, "settings": settings}
+INTERVAL = {"decisions": 3.0, "models": 30.0, "ideas": 10.0, "market": 5.0, "news": 15.0, "briefs": 10.0, "system": 5.0, "settings": 15.0}        # тема -> не чаще раза в N секунд (по умолчанию HEAVY_S сервера)
 MODE_TOPICS = {"home": home, "trades": trades, "decisions": decisions, "models": models, "plans": plans, "ideas": ideas}        # зависят от режима клиента: строятся для каждого режима, который сейчас смотрит хотя бы один клиент
 
 
