@@ -208,10 +208,10 @@ class ServerTest(Fx, unittest.IsolatedAsyncioTestCase):
     async def test_snapshot_then_only_changes(self):
         self.hb()
         async with connect("ws://127.0.0.1:%d/ws" % self.port) as ws:
-            first = [await self.recv(ws) for _ in range(12)]
-            self.assertEqual([m["topic"] for m in first], ["hello", "brain", "ctl", "events", "market", "news", "decisions", "home", "ideas", "models", "plans", "trades"])
+            first = [await self.recv(ws) for _ in range(13)]
+            self.assertEqual([m["topic"] for m in first], ["hello", "brain", "briefs", "ctl", "events", "market", "news", "decisions", "home", "ideas", "models", "plans", "trades"])
             self.assertEqual(first[1]["data"]["status"], "idle")
-            self.assertEqual((first[0]["data"]["mode"], first[7]["data"]["mode"]), ("paper", "paper"))
+            self.assertEqual((first[0]["data"]["mode"], first[8]["data"]["mode"]), ("paper", "paper"))
             self.assertIn("enabled", first[0]["data"]["ctl"])
             with self.assertRaises(asyncio.TimeoutError):                         # без изменений сервер молчит (опроса нет)
                 await self.recv(ws, 0.8)
@@ -224,7 +224,7 @@ class ServerTest(Fx, unittest.IsolatedAsyncioTestCase):
     async def test_mode_switch_sends_home_for_that_mode_only(self):
         self.hb()
         async with connect("ws://127.0.0.1:%d/ws" % self.port) as a, connect("ws://127.0.0.1:%d/ws" % self.port) as b:
-            for _ in range(12):
+            for _ in range(13):
                 await self.recv(a)
                 await self.recv(b)
             await a.send(json.dumps({"op": "mode", "mode": "live"}))
@@ -239,7 +239,7 @@ class ServerTest(Fx, unittest.IsolatedAsyncioTestCase):
     async def test_plan_detail_op_answers_only_asker_and_rejects_bad_id(self):
         self.hb()
         async with connect("ws://127.0.0.1:%d/ws" % self.port) as a, connect("ws://127.0.0.1:%d/ws" % self.port) as b:
-            for _ in range(12):
+            for _ in range(13):
                 await self.recv(a)
                 await self.recv(b)
             await a.send(json.dumps({"op": "plan", "id": "../../etc/passwd"}))
@@ -250,6 +250,20 @@ class ServerTest(Fx, unittest.IsolatedAsyncioTestCase):
             self.assertEqual((m["topic"], m["data"]["ok"], m["data"]["id"]), ("plan_detail", False, "PL-NOPE"))
             with self.assertRaises(asyncio.TimeoutError):
                 await self.recv(b, 0.5)
+
+    def test_briefs_list_and_detail(self):
+        w(self.root, "state/briefs/B-20261031-1000-01.json", json.dumps({"brief_id": "B-20261031-1000-01", "ts": "2026-10-31T10:00:00Z", "scope": "start", "room": {"allowed": True}, "positions": [{"sym": "SOL"}], "plans": [], "secret_key": "x"}))
+        w(self.root, "state/briefs/B-20261031-1001-01.json", json.dumps({"brief_id": "B-20261031-1001-01", "ts": "2026-10-31T10:01:00Z", "scope": "event", "trunc": True}))
+        topics._BRIEF_META.clear()
+        lst = topics.briefs(self.root, 1.0)
+        self.assertEqual([i["id"] for i in lst["items"]], ["B-20261031-1001-01", "B-20261031-1000-01"])          # новые первыми
+        self.assertEqual((lst["total"], lst["items"][0]["trunc"], lst["items"][1]["allowed"], lst["items"][1]["positions"]), (2, True, True, 1))
+        d = topics.brief_detail(self.root, "last")
+        self.assertEqual((d["ok"], d["id"], d["data"]["scope"]), (True, "B-20261031-1001-01", "event"))
+        d = topics.brief_detail(self.root, "B-20261031-1000-01")
+        self.assertNotIn("secret_key", d["data"])                                          # только поля из белого списка
+        self.assertFalse(topics.brief_detail(self.root, "../../etc/passwd")["ok"])
+        self.assertFalse(topics.brief_detail(self.root, "B-20990101-0000-01")["ok"])
 
     def test_ideas_topic_has_no_volatile_ages_and_rounds_expiry(self):
         from tb.dash import model

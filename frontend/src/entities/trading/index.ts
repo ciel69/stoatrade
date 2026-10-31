@@ -1,6 +1,7 @@
 export { useTradingStore } from './model/store'
 export type { DecisionDay, DecisionItem, DecisionsSnapshot, ModelRow, ModelsPeriod, ModelsSnapshot, HomeSnapshot, LimitRow, Money, NearPlan, PendingBlock, PendingOrder, PlanCardFull, PlanDetail, PlanDetailReply, PlanRev, PlanTarget, PlansBlock, PlansSnapshot, PlatformItem, Position, Target, TradeCard, TradeGroup, TradesSnapshot, TradingMode } from './model/types'
-export { route } from './lib/route'
+export { route, routeFor } from './lib/route'
+export type { Route } from './lib/route'
 export { actorKey, filterDecisions, humanAction, isFail, planShort } from './lib/decisions'
 export type { ActorFilter, DecisionFilter } from './lib/decisions'
 export { planWait } from './lib/plan-wait'

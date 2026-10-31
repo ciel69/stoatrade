@@ -42,8 +42,22 @@ const dots = computed(() => {
   const done = props.plan.seq ? props.plan.seq.done : props.plan.met_n
   return total > 1 ? Array.from({ length: total }, (_, i) => i < done) : []
 })
+/** Свечное условие: цена уже за уровнем, но вход только по закрытию свечи (касание входом не считается). */
+const candle = computed(() => props.plan.kind === 'candle_close' || props.plan.kind === 'candle_reject')
+const crossed = computed(() => candle.value && props.plan.beyond === true)
+/** Прошлая свеча прокалывала уровень и закрылась обратно: почему входа не было. */
+const pierce = computed(() => {
+  const b = props.plan.last_bar
+  if (!candle.value || !b?.pierced) return null
+  const ext = props.plan.dir === 'below' ? b.l : b.h
+  return `прокол до ${price(ext)}, свеча закрылась ${props.plan.dir === 'below' ? 'выше' : 'ниже'} (${price(b.c)})`
+})
 /** Единственная строка словами. */
-const line = computed(() => (w.value.tone === 'wait' ? (props.plan.missing[0] ?? props.plan.text) : w.value.headline))
+const line = computed(() => {
+  if (w.value.tone !== 'wait') return w.value.headline
+  if (crossed.value) return `цена за уровнем · вход при закрытии свечи${eta.value != null ? ' через ' + countdown(eta.value) : ''}`
+  return pierce.value ?? props.plan.missing[0] ?? props.plan.text
+})
 /** Метка уровня над полосой: центр по входу, не дальше краёв. */
 const entryLeft = computed(() => (r.value ? Math.min(90, Math.max(10, units(r.value.entry))) : 50))
 /** Срок плана, если он скоро кончится и не совпадает с отсчётом до свечи (иначе на карточке два одинаковых таймера). */
@@ -67,7 +81,7 @@ const tip = computed(() => {
       <UiChip>{{ plan.side === 'long' ? 'лонг' : plan.side === 'short' ? 'шорт' : '?' }}{{ plan.leverage ? ' ' + plan.leverage + '×' : '' }}</UiChip>
       <UiChip v-if="plan.status === 'draft'" tone="warn">черновик</UiChip>
       <UiChip v-if="plan.entry_state === 'resting'" tone="ok">лимит стоит</UiChip>
-      <span class="dist" :class="{ near }">{{ plan.dist_pct != null ? fixed(plan.dist_pct) + '%' : '–' }}</span>
+      <span class="dist" :class="{ near, crossed }" :title="crossed ? 'цена за уровнем на столько; вход ждёт закрытия свечи' : 'до уровня входа'">{{ plan.dist_pct != null ? (crossed ? 'за ' : '') + fixed(plan.dist_pct) + '%' : '–' }}</span>
       <span v-if="eta != null" class="timer" :title="'до закрытия свечи ' + (plan.tf ?? '')">
         <svg v-if="ring != null" class="ring" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
           <circle class="ring-bg" cx="8" cy="8" r="6" />
@@ -77,7 +91,7 @@ const tip = computed(() => {
       </span>
     </div>
 
-    <p class="line" :class="`t-${w.tone}`">
+    <p class="line" :class="[`t-${w.tone}`, { 't-crossed': crossed }]">
       <span v-if="dots.length" class="dots" :title="plan.missing.join('; ')" aria-hidden="true"><i v-for="(d, i) in dots" :key="i" :class="{ on: d }" /></span>
       <span class="txt">{{ line }}</span>
       <span v-if="ttlSoon != null" class="ttl">план {{ countdown(ttlSoon) }}</span>
@@ -109,7 +123,9 @@ const tip = computed(() => {
 .head { display: flex; align-items: center; gap: var(--space-2); }
 .sym { font-size: 17px; font-weight: 700; letter-spacing: -0.01em; }
 .dist { margin-left: auto; font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--muted); }
-.dist.near { color: var(--pos); }
+.dist.near { color: var(--accent); }
+.dist.crossed { color: var(--warn); }
+.t-crossed .txt { color: var(--warn); }
 .timer { display: inline-flex; align-items: center; gap: 5px; min-width: 56px; justify-content: flex-end; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--muted); }
 .ring { flex: none; transform: rotate(-90deg); }
 .ring circle { fill: none; stroke-width: 2.2; }

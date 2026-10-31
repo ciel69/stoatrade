@@ -33,6 +33,11 @@ function build(side: 'long' | 'short', stop: number, entry: number, price: numbe
   }
 }
 
+/** Полоса по голым числам (для досье и мест, где нет объекта позиции): сторона, стоп, вход, цена, цены целей. */
+export function routeFor(side: 'long' | 'short', stop: number | null, entry: number | null, price: number | null, targets: number[]): Route | null {
+  return stop == null || entry == null ? null : build(side, stop, entry, price, targets)
+}
+
 export function route(p: Position): Route | null {
   if (p.stop == null || p.avg == null) return null
   return build(p.side === 'long' ? 'long' : 'short', p.stop, p.avg, p.price, p.targets.map((t) => t.price))

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { RouterLink } from 'vue-router'
 import { UiChip, UiDetail } from '@/shared/ui'
 import { price, signed } from '@/shared/lib'
 import { actorKey, humanAction, planShort } from '../lib/decisions'
@@ -52,6 +53,10 @@ const rows = computed<Array<[string, string]>>(() => {
       <span v-if="decision.plan" class="plan" :title="decision.plan">{{ planShort(decision.plan) }}</span>
     </template>
     <p v-if="decision.why" class="why">{{ decision.why }}</p>
+    <RouterLink v-if="decision.brief_id" class="brief" :to="{ path: '/brief', query: { id: decision.brief_id } }">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h9l4 4v14H6zM9 12h7M9 16h7M14 3v5h5" /></svg>
+      <span>Досье, на которое смотрел мозг</span><b class="bid">{{ decision.brief_id }}</b>
+    </RouterLink>
     <dl class="kv"><template v-for="[k, v] in rows" :key="k"><dt>{{ k }}</dt><dd>{{ v }}</dd></template></dl>
   </UiDetail>
 </template>
@@ -60,6 +65,13 @@ const rows = computed<Array<[string, string]>>(() => {
 .action { font-size: 14px; overflow-wrap: anywhere; }
 .plan { font-size: 11px; color: var(--muted); }
 .why { margin: 0; padding: var(--space-3); border-radius: var(--radius-sm); background: var(--panel2); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.brief { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--line2); border-radius: var(--radius-sm); color: var(--text); text-decoration: none; font-size: 12px; transition: border-color var(--dur-fast) ease; }
+.brief svg { flex: none; color: var(--accent); }
+.bid { margin-left: auto; font-family: var(--mono, ui-monospace, monospace); font-size: 11px; color: var(--muted); }
+.brief:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (hover: hover) and (pointer: fine) {
+  .brief:hover { border-color: var(--accent); }
+}
 .kv { display: grid; grid-template-columns: minmax(100px, 0.6fr) minmax(0, 2fr); gap: 5px var(--space-3); margin: 0; font-size: 12px; }
 .kv dt { color: var(--muted); }
 .kv dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }

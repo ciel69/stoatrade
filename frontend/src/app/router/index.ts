@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { HomePage } from '@/pages/home'
+import { BriefPage } from '@/pages/brief'
 import { DecisionsPage } from '@/pages/decisions'
 import { IdeasPage } from '@/pages/ideas'
 import { MarketPage } from '@/pages/market'
@@ -12,6 +13,7 @@ export const router = createRouter({
     { path: '/', name: 'home', component: HomePage, meta: { title: 'Обзор' } },
     { path: '/market', name: 'market', component: MarketPage, meta: { title: 'Рынок' } },
     { path: '/decisions', name: 'decisions', component: DecisionsPage, meta: { title: 'Решения' } },
+    { path: '/brief', name: 'brief', component: BriefPage, meta: { title: 'Досье' } },
     { path: '/ideas', name: 'ideas', component: IdeasPage, meta: { title: 'Идеи' } },
     { path: '/plans', name: 'plans', component: PlansPage, meta: { title: 'Планы' } },
     { path: '/trades', name: 'trades', component: TradesPage, meta: { title: 'Сделки' } },

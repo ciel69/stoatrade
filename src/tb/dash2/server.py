@@ -174,6 +174,8 @@ class Hub(object):
                     await self.ctl_op(ws, m)
                 elif m.get("op") == "plan":
                     await self.plan_op(ws, m)
+                elif m.get("op") == "brief":
+                    await self.brief_op(ws, m)
         except ConnectionClosed:                 # клиент закрыл вкладку или оборвал связь: не ошибка сервера
             pass
         finally:
@@ -186,6 +188,14 @@ class Hub(object):
         try:
             await ws.send(self._msg("plan_detail", 0, res))
         except Exception:                    # соединение закрылось, пока читали план
+            pass
+
+    async def brief_op(self, ws, m):
+        """Досье по запросу (чтение): ответ `brief_detail` только этому соединению. Идентификатор проверяется в model2.brief_get; id «last» даёт последнее."""
+        res = await asyncio.to_thread(topics.brief_detail, self.root, m.get("id"), None)
+        try:
+            await ws.send(self._msg("brief_detail", 0, res))
+        except Exception:
             pass
 
     async def ctl_op(self, ws, m):

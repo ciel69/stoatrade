@@ -274,7 +274,7 @@ def _plan_row(c, now):
             "status": c.get("status"), "setup": c.get("setup"), "thesis": (c.get("thesis") or "")[:160], "entry_text": c.get("entry_text") or "",
             "missing": [str(x)[:90] for x in (t.get("missing") or [])[:4]], "met_n": int(_num(t.get("met_n")) or 0), "leaf_n": int(_num(t.get("leaf_n")) or 0),
             "seq": t.get("seq") if isinstance(t.get("seq"), dict) else None, "level": _num(t.get("level")), "price": _num(c.get("price")), "kind": t.get("kind"),
-            "dir": t.get("dir"), "beyond": t.get("beyond"), "tf": t.get("eta_tf"), "ttl_at": round((now + ttl) / 30.0) * 30 if ttl is not None else None,
+            "dir": t.get("dir"), "beyond": t.get("beyond"), "last_bar": t.get("last_bar") if isinstance(t.get("last_bar"), dict) else None, "tf": t.get("eta_tf"), "ttl_at": round((now + ttl) / 30.0) * 30 if ttl is not None else None,
             "hold": c.get("hold"), "hold_reason": c.get("hold_reason"), "stop": _num(c.get("stop")), "target": _num(tgs[0]["price"]) if tgs else None, "targets": [_num(x["price"]) for x in tgs[:4]],
             "leverage": _num(c.get("leverage")), "chase_bps": _num(c.get("chase_bps")), "chase_max_bps": _num(c.get("chase_max_bps")),
             "rev": c.get("rev"), "exp": c.get("exp"), "var": c.get("var"), "hyp": c.get("hyp"), "src": c.get("src"), "parent": c.get("parent"), "session_type": c.get("session_type"),
@@ -354,6 +354,42 @@ def news(root=None, now=None):
 
 def _round(x, n):
     return round(x, n) if isinstance(x, (int, float)) and not isinstance(x, bool) else x
+
+
+BRIEFS_OUT = 60
+_BRIEF_META = {}            # (корень, id) -> краткая сводка досье: файл досье после записи не меняется, поэтому читаем один раз
+
+
+def briefs(root=None, now=None):
+    """Лента досье: последние BRIEFS_OUT (id вида B-ГГГГММДД-ЧЧММ-NN) с краткой сводкой (время, вид, обрезано ли, разрешены ли входы, число позиций и планов). Содержимое отдаёт brief_detail."""
+    from tb.dash import model, model2
+    ids = model2.brief_list(root)
+    items = []
+    for bid in ids[:BRIEFS_OUT]:
+        key = (root, bid)
+        m = _BRIEF_META.get(key)
+        if m is None:
+            b = model.read_json(os.path.join(paths.briefs(root=root), bid + ".json"))
+            if not isinstance(b, dict):
+                continue                                      # файл ещё пишется: в следующий проход
+            room = b.get("room") if isinstance(b.get("room"), dict) else {}
+            m = {"id": bid, "ts": b.get("ts") if isinstance(b.get("ts"), str) else None, "scope": b.get("scope") if isinstance(b.get("scope"), str) else None, "trunc": bool(b.get("trunc")),
+                 "allowed": room.get("allowed") if isinstance(room.get("allowed"), bool) else None,
+                 "positions": len(b["positions"]) if isinstance(b.get("positions"), list) else 0, "plans": len(b["plans"]) if isinstance(b.get("plans"), list) else 0}
+            if len(_BRIEF_META) > 400:
+                _BRIEF_META.clear()
+            _BRIEF_META[key] = m
+        items.append(m)
+    return {"total": len(ids), "items": items}
+
+
+def brief_detail(root, bid, now=None):
+    """Одно досье по запросу клиента (белый список полей и очистка строк в model2.brief_get): -> {"id","ok","data"|"error"}."""
+    from tb.dash import model, model2
+    code, data = model2.brief_get(root, bid if isinstance(bid, str) else "")
+    if code != 200 or not (data or {}).get("available"):
+        return {"id": bid if isinstance(bid, str) else None, "ok": False, "error": str((data or {}).get("error") or ("not found" if (data or {}).get("missing") else "no briefs"))[:60]}
+    return {"id": data["id"], "ok": True, "data": model.scrub(data["brief"])}
 
 
 def plan_detail(root, pid, now=None):
@@ -465,8 +501,8 @@ def ctl(root=None, now=None):
             "banner": ({"level": banner.get("level"), "text": str(banner.get("text") or "")[:160]} if banner else None), "day": day}
 
 
-TOPICS = {"brain": brain, "ctl": ctl, "events": events, "market": market, "news": news}
-INTERVAL = {"decisions": 3.0, "models": 30.0, "ideas": 10.0, "market": 5.0, "news": 15.0}        # тема -> не чаще раза в N секунд (по умолчанию HEAVY_S сервера)
+TOPICS = {"brain": brain, "ctl": ctl, "events": events, "market": market, "news": news, "briefs": briefs}
+INTERVAL = {"decisions": 3.0, "models": 30.0, "ideas": 10.0, "market": 5.0, "news": 15.0, "briefs": 10.0}        # тема -> не чаще раза в N секунд (по умолчанию HEAVY_S сервера)
 MODE_TOPICS = {"home": home, "trades": trades, "decisions": decisions, "models": models, "plans": plans, "ideas": ideas}        # зависят от режима клиента: строятся для каждого режима, который сейчас смотрит хотя бы один клиент
 
 

@@ -92,6 +92,7 @@ export interface NearPlan {
   kind: string | null                         // вид ближайшего условия: price_beyond, candle_close, candle_reject, price_in_zone, ...
   dir: 'above' | 'below' | null
   beyond: boolean | null                      // цена уже по нужную сторону уровня
+  last_bar: { h: number; l: number; c: number; pierced: boolean } | null   // последняя закрытая свеча 5м свечного условия; pierced = заходила за уровень и закрылась обратно
   tf: string | null                           // таймфрейм свечной проверки
   ttl_at: number | null                       // когда план истечёт (с)
   hold: string | null
