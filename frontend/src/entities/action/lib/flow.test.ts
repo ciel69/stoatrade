@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Challenge } from '../model/types'
-import { acceptLabel, blockReasons, buildCommand, failedGates, isExpired, isRisky, passedGates, risksOf, secondsLeft, unavailableReason, UNAVAILABLE_TEXT } from './flow'
+import { ACCEPT_KEYS, acceptLabel, blockReasons, buildCommand, failedGates, isExpired, isRisky, passedGates, risksOf, secondsLeft, unavailableReason, UNAVAILABLE_TEXT } from './flow'
 
 const calm: Challenge = { gates: [{ id: 'G1', name: 'Связь', ok: true }], warnings: [], pre_amber: [], phrases: [], danger: false, blocked: false, nonce: 'n1' }
 const risky: Challenge = {
@@ -57,6 +57,13 @@ describe('buildCommand', () => {
     for (const a of ['risk.set', 'brain.use', 'brain.rollback', 'brain.reload']) {
       expect(buildCommand({ action: a, args: { x: 1 } }, risky).args).toEqual({ x: 1, accepted: ['W1', 'W2'] })
     }
+  })
+  it('brain.role (смена цепочки): accepted есть, allow_amber нет', () => {
+    expect(ACCEPT_KEYS['brain.role']).toEqual({ accepted: true, allowAmber: false })
+    const c = buildCommand({ action: 'brain.role', args: { op: 'chain', role: 'A.entry_scout', primary: 'p1', fallback: ['p2'] } }, risky)
+    expect(c.args).toEqual({ op: 'chain', role: 'A.entry_scout', primary: 'p1', fallback: ['p2'], accepted: ['W1', 'W2'] })
+    expect(c.args).not.toHaveProperty('allow_amber')
+    expect(buildCommand({ action: 'brain.role', args: { op: 'chain', role: 'A.x' } }, calm).args).toMatchObject({ accepted: [] })
   })
   it('остальные действия: чужих ключей нет (сервер их отбросит или отвергнет)', () => {
     const c = buildCommand({ action: 'kill.set', args: { flatten: true, reason: 'r' } }, risky)

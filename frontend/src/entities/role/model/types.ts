@@ -16,8 +16,20 @@ export interface RoleModel {
   params: RoleParams
 }
 
+/** Доступный профиль модели (тема settings, profile_list): провайдер, модель, включён ли провайдер, допущена ли к live, какие роли используют. Ключей в данных нет. */
+export interface ProfileRow {
+  id: string
+  provider: string
+  model_name: string
+  provider_enabled: boolean
+  live_ok: boolean
+  used_by?: string[]
+}
+
 export interface RoleRow {
   role: string
+  /** имя роли для действий управления ('A.entry_scout', 'shared.reviewer'); у старого сервера нет, тогда берётся из команды и роли */
+  target?: string
   scope: 'team' | 'shared' | string
   team: string | null
   /** роль влияет на решения в live */
@@ -96,6 +108,7 @@ export interface SwapRow {
 /** Тема `settings`: роли мозга и их модели (источник: llm.dashapi, только чтение). */
 export interface RolesSnapshot {
   provider_list?: ProviderRow[]
+  profile_list?: ProfileRow[]
   exchange_list?: ExchangeRow[]
   swaps?: SwapRow[]
   revisions?: number | null

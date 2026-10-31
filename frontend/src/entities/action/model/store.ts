@@ -211,7 +211,7 @@ export const useActionStore = defineStore('action', () => {
 
   // ---- отладка без сервера (?action=mock-...): реальных отправок нет, ответы сервера изображает mockTransport
 
-  function mockChallenge(kind: ActionMock, args: Record<string, unknown>): Challenge {
+  function mockChallenge(kind: ActionMock, args: Record<string, unknown>, action = ''): Challenge {
     const gates = [
       { id: 'G1', name: 'Исполнитель жив', ok: true }, { id: 'G2', name: 'Сверка свежая', ok: true, msg: '4 с назад' },
       { id: 'G3', name: 'Чистый KILL', ok: true }, { id: 'G4', name: 'Связь с биржей', ok: true },
@@ -220,6 +220,15 @@ export const useActionStore = defineStore('action', () => {
       return { blocked: true, gates: [{ id: 'G1', name: 'Исполнитель жив', ok: true }, { id: 'G2', name: 'Сверка свежая', ok: false, msg: 'последняя сверка 3 минуты назад' }, { id: 'G3', name: 'Нет открытых позиций', ok: false, msg: 'открыта позиция BTCUSDT, сначала закройте её' }], warnings: [], pre_amber: [], danger: false }
     }
     if (kind === 'full' && args.flatten !== true) return { gates, warnings: [], pre_amber: [], danger: false, phrases: [], blocked: false, nonce: 'mock', min_delay: 0, expires_in: 60 }
+    if (action === 'brain.role' || action === 'brain.use') {
+      return {
+        danger: false, blocked: false, gates, phrases: ['mock'], nonce: 'mock', min_delay: 2, expires_in: 90, pre_amber: [],
+        warnings: [
+          { id: 'W_SWAP_NOT_LIVE_OK', code: 'W_SWAP_NOT_LIVE_OK', msg: 'Профиль не допущен к live: его ответы не проверялись живой оценкой.' },
+          { id: 'W_SWAP_PAPER_HISTORY', code: 'W_SWAP_PAPER_HISTORY', msg: 'Мало paper-сделок с этой моделью: рекомендуется 30 сделок за 7 дней.' },
+        ],
+      }
+    }
     return {
       danger: true, blocked: false, gates, phrases: ['mock'], nonce: 'mock', min_delay: 3, expires_in: 90,
       warnings: [{ id: 'W1', code: 'W_RISK_UP', msg: 'Уровень риска 5: размер позиции до 25% счёта, плечо до 10x.' }, { id: 'W2', code: 'W_OPEN', msg: 'Открытая позиция BTCUSDT будет закрыта по рынку, возможно проскальзывание.' }],
@@ -233,7 +242,7 @@ export const useActionStore = defineStore('action', () => {
       setTimeout(() => {
         const live = (data: unknown) => ({ topic: 'x', seq: 0, ts: 0, data })
         if (p.kind === 'challenge') {
-          applyResult(live({ ...base, kind: 'challenge', ok: true, code: kind === 'blocked' ? 'E_GATE' : 'OK', msg: kind === 'blocked' ? 'условия не выполнены' : '', data: mockChallenge(kind, p.args as Record<string, unknown>) }))
+          applyResult(live({ ...base, kind: 'challenge', ok: true, code: kind === 'blocked' ? 'E_GATE' : 'OK', msg: kind === 'blocked' ? 'условия не выполнены' : '', data: mockChallenge(kind, p.args as Record<string, unknown>, p.action as string) }))
         } else {
           applyResult(live({ ...base, kind: 'command', ok: true, code: 'OK', msg: 'принято' }))
           setTimeout(() => applyFinal(live({ id: 'q1', rid: base.id, status: 'done', code: 'OK', msg: 'Выполнено (пример: на сервер ничего не отправлялось).' })), 700)
@@ -267,5 +276,12 @@ export const useActionStore = defineStore('action', () => {
     }
   }
 
-  return { hello, phase, spec, challenge, receivedAt, error, resultText, riskyRun, toasts, active, risks, start, can, run, accept, recheck, cancel, reset, dismissToast, mock, applyHello, applyResult, applyFinal }
+  /** Отладка смены моделей (?edit=mock): расширенное управление включено только для brain.role и brain.use, ответы изображает mockTransport. calm: без рисков (безрисковый поток), иначе рискованный. */
+  function mockEdit(calm = false): void {
+    mocked = true
+    hello.value = { enabled: true, csrf: 'mock', full: true, modes: ['brain.role', 'brain.use'] }
+    transport = mockTransport(calm ? 'full' : 'confirm')
+  }
+
+  return { hello, phase, spec, challenge, receivedAt, error, resultText, riskyRun, toasts, active, risks, start, can, run, accept, recheck, cancel, reset, dismissToast, mock, mockEdit, applyHello, applyResult, applyFinal }
 })

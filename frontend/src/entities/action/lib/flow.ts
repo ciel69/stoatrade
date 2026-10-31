@@ -2,7 +2,8 @@ import type { ActionCommand, ActionHello, ActionSpec, Challenge, ChallengeGate, 
 
 /**
  * Какие ключи подтверждения принимает схема действия на сервере. Сервер строго отбрасывает лишние ключи args, а часть действий отвергает их целиком,
- * поэтому accepted и allow_amber добавляются только там, где они есть в схеме: day.start (accepted, allow_amber); risk.set, brain.use, brain.rollback, brain.reload (accepted).
+ * поэтому accepted и allow_amber добавляются только там, где они есть в схеме: day.start (accepted, allow_amber); risk.set, brain.use, brain.rollback, brain.reload (accepted);
+ * brain.role: accepted есть у op 'chain' (смена основной и запасных), у op 'opts' сервер собирает args по именам и лишнее поле отбрасывает, так что оно не вредит.
  */
 export const ACCEPT_KEYS: Readonly<Record<string, { accepted: boolean; allowAmber: boolean }>> = {
   'day.start': { accepted: true, allowAmber: true },
@@ -10,6 +11,7 @@ export const ACCEPT_KEYS: Readonly<Record<string, { accepted: boolean; allowAmbe
   'brain.use': { accepted: true, allowAmber: false },
   'brain.rollback': { accepted: true, allowAmber: false },
   'brain.reload': { accepted: true, allowAmber: false },
+  'brain.role': { accepted: true, allowAmber: false },
 }
 
 export const UNAVAILABLE_TEXT = 'это действие недоступно в этом дашборде: включите расширенное управление в config/control.json (auth.dash2_full)'

@@ -37,4 +37,7 @@
   .feed-move {
     transition: none;
   }
+  .feed-leave-to {
+    transform: none;
+  }
 }

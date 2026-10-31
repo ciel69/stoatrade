@@ -12,7 +12,7 @@ export const ROLE_INFO: Record<string, { label: string; what: string }> = {
 export const roleLabel = (r: string): string => ROLE_INFO[r]?.label ?? r
 
 /** Где работает модель: локальный провайдер (LM Studio) или облако. */
-export const placeOf = (m: RoleModel | null): string => (!m ? '–' : m.provider === 'local' ? 'локально' : 'облако')
+export const placeOf = (m: Pick<RoleModel, 'provider'> | null): string => (!m ? '–' : m.provider === 'local' ? 'локально' : 'облако')
 
 export interface RoleIssue {
   tone: 'warn' | 'bad'
