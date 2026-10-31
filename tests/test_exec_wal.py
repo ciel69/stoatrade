@@ -183,6 +183,28 @@ class PartialAndRaces(unittest.TestCase):
         self.assertEqual(rt["status"], "closed")
         self.assertEqual(rt["close"]["reason"], "manual")
 
+    def test_rule_stop_moves_do_not_spam(self):
+        """LIT 2026-10-31: трейл по правилу исчерпал 30 ходов за час и стучался каждый тик (тысячи записей в журнале решений).
+        Исчерпан лимит: правило ждёт без вызова биржи и без записи; шаг меньше 0.1R: отказ без записи на каждом тике."""
+        self.e.port.auto_fill = True
+        pid = self.e.enter()
+        ex = self.e.ex
+        p = ex.plans[pid]
+        rt = p["rt"]
+        n_dec = len(decisions.last(500, root=self.e.root))
+        n_calls = len([c for c in self.e.port.calls if c[0] == "set_stop"])
+        cur, unit = float(rt["pos"]["cur_stop"]), float(rt["pos"]["r_unit"])
+        rt["counters"]["stop_moves_1h"] = [ex.clock()] * int(ex.cfg["stop_moves"]["max_moves_per_hour"])
+        a = {"type": "move_stop", "to": cur + 0.5 * unit, "rule": "auto_lock", "why": "RULE:auto_lock"}
+        for _ in range(20):
+            self.assertIsNone(ex._apply(p, a, ex.view("SOL")))
+        rt["counters"]["stop_moves_1h"] = []
+        tiny = dict(a, to=cur + 0.02 * unit)                                     # 0.02R < 0.1R
+        for _ in range(20):
+            self.assertFalse(ex._apply(p, tiny, ex.view("SOL")))
+        self.assertEqual(len([c for c in self.e.port.calls if c[0] == "set_stop"]), n_calls)
+        self.assertLessEqual(len(decisions.last(500, root=self.e.root)) - n_dec, 1)      # не больше одной записи об отказе (троттлинг 30 с)
+
     def test_stop_moves_race_position_gone(self):
         self.e.port.auto_fill = True
         pid = self.e.enter()

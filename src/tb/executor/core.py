@@ -69,6 +69,8 @@ def new_runtime(now):
 MIN_SIZE_TTL_S = exec_cfg.MIN_SIZE_TTL_S
 
 
+QUIET_STOP_DENY = ("STOP_STEP", "STOP_INTERVAL", "STOP_RATE", "NOT_TIGHTER")      # отказы хода стопа по правилу, которые не пишутся в журнал на каждом тике
+
 class Executor(object):
     def __init__(self, port, root=None, clock=time.time, sleep=None, profile="testnet", observe=False, cfg=None, keep_entries=False, venue_id="bybit"):
         self.port = port
@@ -1105,8 +1107,13 @@ class Executor(object):
                 return True
             return False
         if typ == "move_stop":
+            sm = self.cfg["stop_moves"]
+            hist = [t for t in (rt.get("counters") or {}).get("stop_moves_1h", []) if self.clock() - float(t) < 3600.0]
+            if len(hist) >= int(sm["max_moves_per_hour"]):
+                return None                                     # лимит ходов за час исчерпан: правило ждёт окно, не стучится каждый тик
             kind, info = self.act.move_stop(p, float(a["to"]), by="rule", why=why, price=view.last)
-            self.decide("rule", "move_stop", plan=pid, args={"to": a["to"]}, why=why, res={"ok": kind in ("ok", "unchanged"), "code": info.get("code", "OK")})
+            if not (kind == "denied" and info.get("code") in QUIET_STOP_DENY):          # «шаг мал/рано/лимит» в журнал только через _gate_denied (раз в 30 с)
+                self.decide("rule", "move_stop", plan=pid, args={"to": a["to"]}, why=why, res={"ok": kind in ("ok", "unchanged"), "code": info.get("code", "OK")})
             if kind == "denied":
                 self._gate_denied(p, "set_stop", G.deny(info.get("code", "STOP_NOT_TIGHTER"), info.get("detail", "")))
             elif kind == "gone":

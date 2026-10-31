@@ -11,6 +11,7 @@
  "stop_moves": {
   "min_interval_s": 5,
   "min_step_ticks": 2,
+  "min_step_r": 0.1,
   "min_gap_bps_from_price": 8,
   "max_moves_per_hour": 30
  },

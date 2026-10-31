@@ -336,6 +336,9 @@ class Gate(object):
             tick = float((ex.instrument(sym) or {}).get("tick") or 0)
             if tick > 0 and cur > 0 and abs(to - cur) < float(sm["min_step_ticks"]) * tick - 1e-12:
                 return deny("STOP_STEP", "шаг меньше %s тиков" % sm["min_step_ticks"])
+            unit, step_r = float(pos.get("r_unit") or 0), float(sm.get("min_step_r") or 0)
+            if unit > 0 and step_r > 0 and cur > 0 and abs(to - cur) < step_r * unit - 1e-12:
+                return deny("STOP_STEP", "шаг меньше %sR" % step_r)          # трейл «на копейку» выедал лимит ходов за минуты (LIT 2026-10-31: 30 ходов, затем тысячи отказов)
             last_mv = (rt.get("counters") or {}).get("last_stop_move")
             if last_mv is not None and now - float(last_mv) < float(sm["min_interval_s"]):
                 return deny("STOP_INTERVAL", "интервал меньше %s с" % sm["min_interval_s"])

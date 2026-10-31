@@ -19,7 +19,7 @@ DEFAULTS = {
     "version": 1,
     "watch_symbols": [],
     "pyramid": {"enabled": False, "min_r": 1.0, "max_adds": 1, "max_add_risk_frac": 1.0, "min_gap_s": 60},
-    "stop_moves": {"min_interval_s": 5, "min_step_ticks": 2, "min_gap_bps_from_price": 8, "max_moves_per_hour": 30},
+    "stop_moves": {"min_interval_s": 5, "min_step_ticks": 2, "min_step_r": 0.1, "min_gap_bps_from_price": 8, "max_moves_per_hour": 30},      # min_step_r: ход стопа по правилу не меньше 0.1R
     # автозащита прибыли: исполнитель сам подтягивает стоп у любой позиции (в том числе без правил manage в плане); только в сторону прибыли
     "auto_protect": {"enabled": True, "be_r": 0.7, "trail_activate_r": 1.0, "trail_lock_frac": 0.5},
     # сторож позиции (logic/watch.py): будит мозг (position_manager) по STALLED / FLOW_TURN. paper_only=true: пока только бумажные позиции.
