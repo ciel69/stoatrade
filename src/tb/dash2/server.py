@@ -172,6 +172,8 @@ class Hub(object):
                     await self.set_mode(ws, m["mode"])
                 elif m.get("op") == "ctl":
                     await self.ctl_op(ws, m)
+                elif m.get("op") == "llmkey":
+                    await self.llmkey_op(ws, m)
                 elif m.get("op") == "plan":
                     await self.plan_op(ws, m)
                 elif m.get("op") == "brief":
@@ -218,6 +220,19 @@ class Hub(object):
             await ws.send(self._msg("ctl_result", 0, res))
             if accepted:
                 asyncio.ensure_future(self._follow(ws, res["id"], accepted))
+        except ConnectionClosed:
+            pass
+
+    async def llmkey_op(self, ws, m):
+        """Запись ключа LLM-провайдера (write-only, только в расширенном режиме): ответ `ctl_result` kind='llmkey' этому же соединению. Значение не хранится, не логируется и не возвращается."""
+        from websockets.exceptions import ConnectionClosed
+        try:
+            res = await asyncio.to_thread(self.bridge.llmkey, ws, m)
+        except Exception:                    # текст исключения не выводим: он мог бы нести значение ключа
+            res = {"id": str(m.get("id") or "")[:24], "kind": "llmkey", "action": "llm.key.set", "ok": False, "code": "E_INTERNAL", "msg": "ключ не записан"}
+        m.pop("value", None)
+        try:
+            await ws.send(self._msg("ctl_result", 0, res))
         except ConnectionClosed:
             pass
 

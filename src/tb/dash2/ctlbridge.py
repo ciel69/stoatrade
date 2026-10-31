@@ -8,20 +8,41 @@
 - лимит частоты `max_post_per_min` из config/control.json на соединение (тот же счётчик сессии, что у POST);
 - белый список: `day.start` только для paper|testnet|observe и `day.stop` soft; всё остальное (live, риск, KILL, смена мозга, неизвестное) отвечает E_ELEVATE или E_UNKNOWN
   и пишется в аудит; в команду попадают только поля mode, session, accepted, allow_amber (nonce, фразы, team отбрасываются);
+- РАСШИРЕННЫЙ РЕЖИМ (решение владельца, только 127.0.0.1): config/control.json `auth.dash2_full: true` (по умолчанию false) даёт соединению сессию «full» без токена и открывает FULL_ACTIONS
+  (кроме platform.shutdown) и запись ключа LLM (op llmkey). Все проверки соединения, аргументы через protocol.validate_args и подтверждения ctl (nonce, фразы, шлюзы) остаются: мост передаёт то,
+  что ввёл пользователь, и ничего не подделывает. Аудит из этого дашборда идёт с источником dash2.
 - ответ команде идёт тем же сокетом событием `ctl_result`; итог исполнения ctl (outbox) досылается позже.
 Блокирующие вызовы (`challenge` ждёт ctl до 4 с) вызывай через `asyncio.to_thread`.
 """
 import hmac
+import re
 import time
 
 from tb.control import auth, client, protocol
-from tb.dash import ctlweb
+from tb.dash import ctlweb, keyweb
 
 SAFE_MODES = ctlweb.SAFE_MODES                       # ("paper", "testnet", "observe"): те же, что считает безопасными needs_full
 DAY_KEYS = ("mode", "session", "accepted", "allow_amber")
 FOLLOW_S = 180.0                                      # сколько ждём итог команды в outbox
 FOLLOW_POLL_S = 0.5
 FINAL = ("done", "rejected", "failed", "expired")
+
+# ---- расширенный режим нового дашборда: config/control.json, auth.dash2_full = true (решение владельца; только 127.0.0.1)
+# Сессия соединения становится «full» (new_session уровня full), токен не нужен; подтверждения (nonce, фразы, шлюзы) остаются в силе: их проверяет ctl и CtlWeb.
+SRC = "dash2"                                         # пометка источника в аудите (audit.append обрезает до 8 символов)
+FULL_ACTIONS = ("day.start", "day.stop", "day.resume", "kill.set", "stop.emergency", "risk.set", "mode.set", "carry.decide", "brain.use", "brain.rollback",
+                "brain.reload", "brain.role", "brain.profile", "llm.provider", "exchange.set", "notify.set", "notify.test", "intel.refresh", "report.ack")
+# какие ключи аргументов пропускаем до validate_args (лишние отбрасываются; для настроечных и notify.set строгая проверка у самого validate_args)
+FULL_KEYS = {
+    "day.start": DAY_KEYS, "day.stop": (), "day.resume": (), "kill.set": ("flatten", "reason"), "stop.emergency": ("flatten", "reason"),
+    "risk.set": ("level", "accepted"), "mode.set": ("mode",), "carry.decide": ("plan", "decision"),
+    "brain.use": ("team", "profile", "agent", "role", "accepted", "to", "from_config", "all"),
+    "brain.rollback": ("team", "profile", "agent", "role", "accepted", "to", "from_config", "all"),
+    "brain.reload": ("team", "profile", "agent", "role", "accepted", "to", "from_config", "all"),
+    "notify.test": (), "intel.refresh": ("source",), "report.ack": ("day_id",),
+}
+LLMKEY_MAX = 512
+RE_PID = keyweb.RE_ID
 
 
 def clean(x, depth=0):
@@ -59,9 +80,30 @@ class CtlBridge(object):
         ok, why = self.availability()
         if not ok:
             return {"enabled": False, "reason": why}
-        ck, s = self.web.new_session(self.clock(), "open")
+        full = self.full_enabled()
+        ck, s = self.web.new_session(self.clock(), "full" if full else "open")
         self.sess[ws] = (ck, s)
-        return {"enabled": True, "csrf": s["csrf"]}
+        return {"enabled": True, "csrf": s["csrf"], "full": full, "modes": (list(FULL_ACTIONS) + ["llmkey"]) if full else ["day.start", "day.stop"]}
+
+    def full_enabled(self):
+        """Расширенный режим владельца: auth.dash2_full строго true в config/control.json. Нет ключа, не bool или битый файл = выключено (fail closed)."""
+        try:
+            a = self.web.conf().get("auth")
+            return isinstance(a, dict) and a.get("dash2_full") is True
+        except Exception:
+            return False
+
+    def _audit(self, label, action, code, now, args=None, result="rejected", cid="-"):
+        """Аудит из нового дашборда: источник dash2, в журнале только хеш аргументов (ни ключа LLM, ни nonce). Не чаще 30 записей в минуту, как у ctlweb."""
+        w = self.web
+        w.audit_flood = [t for t in w.audit_flood if now - t < 60]
+        if len(w.audit_flood) >= 30:
+            return
+        w.audit_flood.append(now)
+        try:
+            client.audit_append(self.root, cid or "-", SRC, label, (action or "-")[:24], client.args_digest(action or "-", args if isinstance(args, dict) else {}), result, code, now=now)
+        except Exception:
+            pass
 
     def close(self, ws):
         ent = self.sess.pop(ws, None)
@@ -84,30 +126,140 @@ class CtlBridge(object):
         if ent is None:
             return self._reply(cid, kind, action, "E_AUTH", "управление недоступно в этом режиме входа: используйте старый дашборд")
         s = ent[1]
-        tok = m.get("csrf") if isinstance(m.get("csrf"), str) else ""
-        if not hmac.compare_digest(tok.encode("utf-8", "replace"), s["csrf"].encode("ascii")):
-            self.web.audit(None, s["label"], "ws:" + action[:12], "E_CSRF", now)
-            return self._reply(cid, kind, action, "E_CSRF")
-        s["posts"] = [t for t in s["posts"] if now - t < 60]
-        if len(s["posts"]) >= int(self.web.conf()["max_post_per_min"]):
-            self.web.audit(None, s["label"], "ws:" + action[:12], "E_RATE", now)
-            return self._reply(cid, kind, action, "E_RATE")
-        s["posts"].append(now)
-        args, code = self.allowed(action, m.get("args"))
+        bad = self._gate(s, m, "ws:" + action[:12], now)
+        if bad:
+            return self._reply(cid, kind, action, bad)
+        full = self._session_full(s)
+        if s.get("level") == "full" and not full:          # флаг сняли, пока соединение живо: полномочия пропадают сразу
+            self._audit(s["label"], action[:24], "E_AUTH", now)
+            return self._reply(cid, kind, action, "E_AUTH", "расширенное управление выключено в настройках: обновите страницу")
+        if full:
+            args, code = self.allowed_full(action, m.get("args"))
+        else:
+            args, code = self.allowed(action, m.get("args"))
         if code:
-            self.web.audit(None, s["label"], action[:24] or "-", code, now, m.get("args") if isinstance(m.get("args"), dict) else {})
+            self._audit(s["label"], action[:24] or "-", code, now, m.get("args"))
             msg = "live запускается в старом дашборде: нужны токен и подтверждение фразами" if (code == "E_ELEVATE" and action == "day.start") else None
             return self._reply(cid, kind, action, code, msg)
         data = {"action": action, "args": args}
+        if full and kind == "command":
+            conf, why = self._confirm_of(m)
+            if why:
+                self._audit(s["label"], action[:24], why, now, args)
+                return self._reply(cid, kind, action, why)
+            data.update(conf)
         http, obj, _hdr = self.web.challenge(data, s, now) if kind == "challenge" else self.web.command(data, s, now)
-        out = self._reply(cid, kind, action, str(obj.get("code") or ("OK" if obj.get("ok") else "E_INTERNAL")), obj.get("msg"))
+        code = str(obj.get("code") or ("OK" if obj.get("ok") else "E_INTERNAL"))
+        out = self._reply(cid, kind, action, code, obj.get("msg"))
         out["ok"] = bool(obj.get("ok"))
         if kind == "challenge":
             d = obj.get("data") or {}
-            out["data"] = clean({k: d.get(k) for k in ("action", "danger", "gates", "warnings", "blocked", "pre_amber", "expires_in")})
+            if full:
+                out["data"] = clean({k: d.get(k) for k in ("action", "danger", "gates", "warnings", "blocked", "pre_amber", "expires_in", "min_delay", "phrases")})
+                n = d.get("nonce")
+                if isinstance(n, str) and 0 < len(n) <= 200:       # nonce нужен клиенту для подтверждения; привязан к соединению и аргументам, в аудит и логи не идёт
+                    out["data"]["nonce"] = n
+            else:
+                out["data"] = clean({k: d.get(k) for k in ("action", "danger", "gates", "warnings", "blocked", "pre_amber", "expires_in")})
+            if not out["ok"] and full:
+                self._audit(s["label"], action[:24], code, now, args)
         elif obj.get("ok") and obj.get("id"):
             out["accepted_id"] = obj["id"]
+            if full:
+                self._audit(s["label"], action[:24], "OK", now, args, "ok", obj["id"])
+        elif full:
+            self._audit(s["label"], action[:24], code, now, args)
         return out
+
+    def _gate(self, s, m, label, now):
+        """Проверки соединения: CSRF (константное сравнение), затем лимит частоты. -> код отказа или None."""
+        tok = m.get("csrf") if isinstance(m.get("csrf"), str) else ""
+        if not hmac.compare_digest(tok.encode("utf-8", "replace"), s["csrf"].encode("ascii")):
+            self._audit(s["label"], label, "E_CSRF", now)
+            return "E_CSRF"
+        s["posts"] = [t for t in s["posts"] if now - t < 60]
+        if len(s["posts"]) >= int(self.web.conf()["max_post_per_min"]):
+            self._audit(s["label"], label, "E_RATE", now)
+            return "E_RATE"
+        s["posts"].append(now)
+        return None
+
+    def _session_full(self, s):
+        """Полномочия full даёт только серверное состояние: уровень сессии, выданный при open(), И включённый флаг сейчас. От клиента уровень не зависит."""
+        return s.get("level") == "full" and self.full_enabled()
+
+    @staticmethod
+    def _confirm_of(m):
+        """Подтверждение от клиента: только nonce (строка) и phrases (до 3 строк); всё остальное отбрасывается. -> ({...}, код ошибки или None)."""
+        out = {}
+        n, ph = m.get("nonce"), m.get("phrases")
+        if n is not None:
+            if not (isinstance(n, str) and 0 < len(n) <= 200):
+                return {}, "E_BODY"
+            out["nonce"] = n
+        if ph is not None:
+            if not (isinstance(ph, list) and len(ph) <= 3 and all(isinstance(p, str) and len(p) <= 200 for p in ph)):
+                return {}, "E_BODY"
+            out["phrases"] = list(ph)
+        return out, None
+
+    def llmkey(self, ws, m, now=None):
+        """Запись ключа LLM-провайдера (write-only): {"id","csrf","provider","value"} -> ответ для `ctl_result` kind='llmkey'. Только в расширенном режиме.
+        Значение вынимается из сообщения сразу, нигде не хранится, не логируется, не попадает в аудит, ответ и текст исключений."""
+        now = self.clock() if now is None else now
+        value = m.pop("value", None) if isinstance(m, dict) else None
+        cid = str(m.get("id") or "")[:24]
+        pid = m.get("provider")
+
+        def rep(code, msg=None, **extra):
+            return self._reply(cid, "llmkey", "llm.key.set", code, msg, **extra)
+
+        try:
+            ent = self.sess.get(ws)
+            if ent is None:
+                return rep("E_AUTH", "управление недоступно в этом режиме входа: используйте старый дашборд")
+            s = ent[1]
+            bad = self._gate(s, m, "ws:llmkey", now)
+            if bad:
+                return rep(bad)
+            if not self._session_full(s):
+                self._audit(s["label"], "llm.key.set", "E_ELEVATE", now)
+                return rep("E_ELEVATE", "ввод ключа выключен: включите auth.dash2_full в config/control.json или используйте старый дашборд")
+            if not (isinstance(pid, str) and RE_PID.match(pid)):
+                self._audit(s["label"], "llm.key.set", "E_ARGS", now)
+                return rep("E_ARGS", "провайдер указан неверно")
+            if not (isinstance(value, str) and 0 < len(value) <= LLMKEY_MAX and value.isascii() and value.isprintable() and not any(c.isspace() for c in value)):
+                self._audit(s["label"], "llm.key.set", "E_ARGS", now, {"provider": pid})
+                return rep("E_ARGS", "ключ не принят: печатные символы ASCII без пробелов и переводов строк, не длиннее %d" % LLMKEY_MAX)
+            try:
+                http, obj, _h = keyweb.handle(self.root, self.environ, {"provider": pid, "value": value}, s["label"], now)
+            except Exception:                    # текст исключения может нести значение: наружу и в журнал не отдаём ничего
+                self._audit(s["label"], "llm.key.set", "E_INTERNAL", now, {"provider": pid})
+                return rep("E_INTERNAL", keyweb.TEXT["E_INTERNAL"], provider=pid)
+            ok = http == 200 and bool(obj.get("ok"))
+            code = "OK" if ok else str(obj.get("code") or "E_INTERNAL")
+            self._audit(s["label"], "llm.key.set", code, now, {"provider": pid}, "ok" if ok else "rejected")
+            return rep(code, "ключ сохранён" if ok else keyweb.TEXT.get(code, keyweb.TEXT["E_INTERNAL"]), provider=pid)
+        finally:
+            value = None
+
+    @staticmethod
+    def allowed_full(action, args):
+        """Белый список расширенного режима. -> (аргументы, код отказа или None). platform.shutdown всегда E_ELEVATE, неизвестное E_UNKNOWN.
+        Ключи аргументов фильтруются по FULL_KEYS, затем строгая protocol.validate_args (у настроечных действий и notify.set она сама отвергает лишние поля)."""
+        if action == "platform.shutdown":
+            return None, "E_ELEVATE"
+        if action not in FULL_ACTIONS:
+            return None, "E_UNKNOWN"
+        args = args if isinstance(args, dict) else {}
+        if action in FULL_KEYS:
+            args = {k: args[k] for k in FULL_KEYS[action] if k in args}
+        ok, _msg, norm = client.validate_args(action, args)
+        if not ok:
+            return None, "E_ARGS"
+        if action == "day.stop":
+            norm = {"mode": "soft"}
+        return norm, None
 
     @staticmethod
     def allowed(action, args):
