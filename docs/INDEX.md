@@ -21,6 +21,8 @@ Most documents are in Russian. English entry points: `README.md`, `SECURITY.md`,
 | `SPEC.md`, `SPEC_FEED.md` | earlier spec and feed spec |
 | `HARNESS.md` | session harness: types, cycle |
 | `BACKLOG.md` | open work items |
+| `FRONTEND_PLAN.md` | new dashboard (Vue 3, WebSocket): decisions and stages |
+| `DESKTOP.md` | brief: desktop app (Tauri 2 + Python sidecar), stages D0-D4, owner decisions |
 
 ## Safety and control
 | file | what |
