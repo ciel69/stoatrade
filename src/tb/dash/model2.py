@@ -286,6 +286,20 @@ def trigger_info(spec, rt, price, now):
     return info
 
 
+def last_bar(trig, lv, now):
+    """Последняя закрытая свеча 5м (levels.json bar_5m от исполнителя) для свечного условия: {h, l, c, pierced}, pierced = свеча заходила за уровень, но закрылась обратно.
+    Только свежая (закрылась не раньше двух свечей назад) и только для candle_close/candle_reject 5м; иначе None."""
+    b = _d(lv.get("bar_5m"))
+    lvl, d = _n(trig.get("level")), trig.get("dir")
+    if trig.get("kind") not in ("candle_close", "candle_reject") or trig.get("eta_tf") not in ("5м", "5m") or lvl is None or d not in ("above", "below"):
+        return None
+    h, l, c, st = _n(b.get("h")), _n(b.get("l")), _n(b.get("c")), _n(b.get("start"))
+    if None in (h, l, c, st) or now - (st + 300) > 600:
+        return None
+    pierced = (h >= lvl and c < lvl) if d == "above" else (l <= lvl and c > lvl)
+    return {"h": h, "l": l, "c": c, "pierced": pierced}
+
+
 def entry_text(spec):
     entry = _d(spec.get("entry"))
     how = _d(entry.get("how"))
@@ -467,6 +481,7 @@ def plan_card(item, mkt, sp, levels, snap, now, chase_cap=15.0):
     price, stale, page, psrc = _price_for(mkt, sp, sym, levels, snap)
     trig = trigger_info(spec, rt, price, now) if status in ("draft", "armed") else {"has_when": False, "text": "", "dist_pct": None, "level": None, "eta_s": None,
                                                                                    "eta_tf": None, "missing": [], "met_n": 0, "leaf_n": 0, "seq": None, "limit_px": None, "price": price}
+    trig["last_bar"] = last_bar(trig, _d(levels.get(sym)), now)
     ttl_left = _ttl_left(spec, rt, now) if status in ("draft", "armed") else None
     col = _classify(status, trig, rt, price, ttl_left)
     ts = _d(rt.get("ts"))
@@ -1011,7 +1026,7 @@ def events_feed(root, query):
 
 # ---------------------------------------------------------------- досье
 _BRIEF_ALLOW = ("brief_id", "ts", "scope", "trunc", "system", "account", "session", "room", "positions", "plans", "market", "hot", "levels", "ideas", "recent",
-                "lessons", "checklist", "since_last", "unacked", "struct", "limits", "risk_level", "economics", "experiments", "intel", "news_digest", "flash", "flow", "playbook")
+                "lessons", "checklist", "since_last", "unacked", "struct", "limits", "risk_level", "economics", "experiments", "intel", "news_digest", "flash", "flow", "playbook", "cands")
 
 
 def _clean_brief(x, depth=0):

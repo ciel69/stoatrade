@@ -54,6 +54,21 @@ class TestEntryAndFees(unittest.TestCase):
         self.assertAlmostEqual(ex["fee"], pos["avg"] * 1.0 * 0.001, 6)
         self.assertEqual(ex["link_id"], "tbx-1-1")
 
+    def test_stale_quote_not_used(self):
+        """Котировка старше QUOTE_MAX_AGE_S (сохранённая в paper_port.json, тиков нет): ни quote, ни рыночный вход по ней (2026-10-31: SOL 100.34 двухдневной давности)."""
+        from tb.executor import paper_port
+        p = make()
+        tick(p, 100.0)
+        self.assertEqual(p.quote("SOL")[2], 100.0)
+        p.clk.advance(paper_port.QUOTE_MAX_AGE_S + 1)
+        with self.assertRaises(PortError):
+            p.quote("SOL")
+        with self.assertRaises(PortError):
+            p.place_entry("SOL", "long", 1.0, "tbx-1-1", "market", sl=95.0)
+        self.assertEqual(p.positions(), [])
+        tick(p, 95.8)                                                            # свежий тик: снова можно
+        self.assertEqual(p.quote("SOL")[2], 95.8)
+
     def test_short_market_entry_sells_at_bid_minus_slip(self):
         p = make()
         tick(p, 100.0)

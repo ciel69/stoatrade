@@ -29,11 +29,14 @@ ENTRY_DECISIONS = ("skip", "propose")
 ENTRY_SKIP_CODES = ("no_setup", "no_confirm", "blackout", "pause", "busy", "rr_low", "wide_stop", "no_slots", "no_data", "no_levels", "kill", "other")
 ENTRY_TAGS = ("no-confirm", "blackout")
 ENTRY_PROPOSE_KEYS = ("sym", "side", "horizon", "level", "stop", "tp", "setup", "hypothesis", "ttl_min", "confirm", "thesis")
-ENTRY_OPTIONAL_KEYS = ("zone", "size_mult", "tags")
+ENTRY_OPTIONAL_KEYS = ("zone", "size_mult", "tags", "entry_type")
 ENTRY_MIN_RR = 2.0                                  # риск/прибыль брутто не ниже 2, когда в досье нет порога сессии (по средней цене целей при равных долях)
 ENTRY_PRECHECK_CODES = ("WIDE_RANGE", "DAY_NO_PLANS", "NO_SLOTS", "ROOM_CLOSED", "SYM_BUSY", "PAUSE_SYM", "PAUSE_ALL", "MIN_SIZE_SYM")   # отказы по данным досье без вызова модели
 ENTRY_SIZE_MULT_MAX = 0.5                           # потолок size_mult, который вообще может назвать модель (только уменьшение)
-ENTRY_MIN_STOP_PCT = 0.1                            # стоп не ближе 0.1% к уровню входа (и не ближе ATR(5м) и трёх спредов)
+ENTRY_MIN_STOP_PCT = 0.1                            # стоп не ближе 0.1% к уровню входа (и не ближе ENTRY_STOP_ATR_MULT*ATR(5м) и трёх спредов)
+ENTRY_STOP_ATR_MULT = 1.5                           # стоп не ближе 1.5 ATR(5м): стоп в одну свечу выбивало шумом за минуты (разбор paper 2026-10-29/30: LIT, USELESS, ERA, XPL)
+FADE_SETUPS = ("range_fade", "level_reject")        # входы против движения события
+FADE_SURGE_X = 3.0                                  # оборот 5м от этого множителя при движении против входа = импульс, фейд без реакции запрещён
 ENTRY_MAX_STOP_PCT = 10.0
 ENTRY_MAX_LEVEL_DIST_PCT = 3.0                      # уровень входа не дальше 3% от цены
 ENTRY_MAX_LEVEL_DIST_LOOSE_PCT = 5.0                # на уровнях риска 4-5 (paper-разведка входов): до 5%, лимитная заявка ждёт у уровня до ttl
@@ -87,7 +90,7 @@ ENTRY = {"type": "object", "required": ["schema", "event_seq", "decision", "why"
     "zone": {"type": "object", "required": ["low", "high"], "properties": {"low": {"type": "number", "minimum": 1e-12}, "high": {"type": "number", "minimum": 1e-12}}},
     "stop": {"type": "number", "minimum": 1e-12}, "tp": {"type": "array", "minItems": 1, "maxItems": 3, "items": {"type": "number", "minimum": 1e-12}},
     "setup": {"enum": list(SETUPS)}, "hypothesis": {"type": "string", "pattern": RE_TAG}, "ttl_min": {"type": "integer", "minimum": 5, "maximum": 240},
-    "confirm": {"enum": ["candle", "none"]}, "size_mult": {"type": "number", "minimum": 0.1, "maximum": ENTRY_SIZE_MULT_MAX},
+    "confirm": {"enum": ["candle", "none"]}, "entry_type": {"enum": ["market", "limit"]}, "size_mult":{"type": "number", "minimum": 0.1, "maximum": ENTRY_SIZE_MULT_MAX},
     "tags": {"type": "array", "maxItems": 2, "items": {"enum": list(ENTRY_TAGS)}}, "thesis": _s(280, 10),
     "why": _s(200, 1), "conf": {"type": "number", "minimum": 0, "maximum": 1}}}
 
@@ -269,6 +272,7 @@ def entry_context(brief, event=None):
     ctx["a5_pct"] = a5
     ctx["spread_bps"] = _num(st.get("sp")) if _num(st.get("sp")) is not None else _num(d.get("spread_bps"))
     ctx["range_5m_pct"] = _num(d.get("range_5m_pct"))
+    ctx["surge_x"], ctx["ret_5m"] = _num(d.get("turn_surge_5m")), _num(d.get("ret_5m_pct"))
     bo = (brief.get("market") or {}).get("blackout") if isinstance(brief.get("market"), dict) else None
     if isinstance(bo, dict):
         ctx["blackout_min"] = _num(bo.get("in_min"))
@@ -289,7 +293,7 @@ def entry_context(brief, event=None):
     rl = _num((brief.get("risk_level") or {}).get("level")) if isinstance(brief.get("risk_level"), dict) else None
     ctx["risk_level"] = int(rl) if rl is not None else None
     sm_ = brief.get("struct_missing") if isinstance(brief.get("struct_missing"), list) else []
-    ctx["struct_missing"] = bool(sym and sym in sm_ and not isinstance(lv, dict))      # структуры по монете события ещё нет (свечи подтягиваются)
+    ctx["struct_missing"] = bool(sym and sym in sm_)      # структуры по монете события ещё нет (свечи подтягиваются): раннер ждёт её, а не зовёт модель без уровней (levels без struct бывает пустым)
     nc = (brief.get("risk_level") or {}).get("no_confirm") if isinstance(brief.get("risk_level"), dict) else None
     if isinstance(nc, dict):
         ctx["no_confirm_allowed"] = nc.get("allowed") if isinstance(nc.get("allowed"), bool) else None
@@ -309,7 +313,54 @@ def entry_context(brief, event=None):
     ctx["day_max_new_plans"] = mnp if isinstance(mnp, int) and not isinstance(mnp, bool) else None
     ctx["day_size_mult"] = _num(day.get("size_mult"))
     ctx["max_horizon"] = day.get("max_horizon") if day.get("max_horizon") in SESSION_ORDER else None
+    sb = (brief.get("struct") or {}).get("s") if isinstance(brief.get("struct"), dict) else None
+    regs = [((sb or {}).get(s) or {}).get("reg") for s in ([sym] if sym else []) + ["BTC"]] if isinstance(sb, dict) else []
+    ctx["day_shift"] = regime_shift(day.get("regime"), day.get("bias"), regs)
+    ctx["off_plan_ok"] = off_plan_allowed(ctx)
     return ctx
+
+
+OFF_PLAN_FREE_LEVEL = 4         # с этого уровня риска план дня только сценарий: его рамку (сетапы, avoid, горизонт, число планов) можно нарушать всегда
+OFF_PLAN_SHIFT_LEVEL = 2        # уровни 2-3: рамку можно нарушать, когда рынок сменил режим/направление против утреннего сценария; уровень 1: рамка жёсткая
+_REG_CLASS = {"trend_up": ("trend", "long"), "trend_down": ("trend", "short"), "range": ("range", None), "storm": ("volatile", None)}
+
+
+def regime_shift(day_regime, day_bias, regs):
+    """Смена рынка против утреннего сценария по struct.reg монеты события и BTC -> reg или None.
+    Сдвиг: класс режима другой (trend/range/volatile; из unclear в тренд), или тренд против bias плана (long/short)."""
+    if day_regime not in ("trend", "range", "volatile", "unclear"):
+        return None
+    for r in regs:
+        cls = _REG_CLASS.get(r)
+        if not cls:
+            continue
+        if day_regime == "unclear":
+            if cls[0] == "trend":
+                return r
+        elif cls[0] != day_regime or (cls[1] and day_bias in ("long", "short") and cls[1] != day_bias):
+            return r
+    return None
+
+
+def off_plan_allowed(ctx):
+    """Можно ли нарушить рамку плана дня (план = один из сценариев, а не запрет): уровни 4-5 всегда, уровни 2-3 при смене режима (regime_shift)."""
+    lvl = ctx.get("risk_level") or 0
+    return lvl >= OFF_PLAN_FREE_LEVEL or (lvl >= OFF_PLAN_SHIFT_LEVEL and bool(ctx.get("day_shift")))
+
+
+def day_frame_breaks(o, ctx):
+    """Коды рамки плана дня, которые нарушает ответ entry/1 (размер дня сюда не входит: он жёсткий всегда)."""
+    out = []
+    if ctx.get("day_max_new_plans") == 0:
+        out.append("DAY_NO_PLANS")                           # план дня: новых планов нет
+    if ctx.get("day_setups") and o.get("setup") not in ctx["day_setups"]:
+        out.append("SETUP_NOT_ALLOWED")                      # сетап вне списка allowed_setups плана дня
+    if o.get("sym") in (ctx.get("day_avoid") or []):
+        out.append("SYM_AVOID")                              # монета в списке avoid плана дня
+    mh, h = ctx.get("max_horizon"), o.get("horizon")
+    if mh and h in SESSION_ORDER and SESSION_ORDER.index(h) > SESSION_ORDER.index(mh):
+        out.append("HORIZON_ABOVE_DAY")                      # план дня ограничил горизонт на сегодня
+    return out
 
 
 def _loose(ctx):
@@ -324,7 +375,7 @@ def entry_precheck(ctx):
     ctx = ctx or {}
     if not ctx.get("has_brief"):
         return None
-    if ctx.get("day_max_new_plans") == 0:
+    if ctx.get("day_max_new_plans") == 0 and not ctx.get("off_plan_ok"):
         return "DAY_NO_PLANS"
     r5, ms = ctx.get("range_5m_pct"), ctx.get("max_stop_pct")
     if r5 is not None and ms is not None and r5 > ms and not _loose(ctx):
@@ -439,6 +490,15 @@ def _pm(o, ctx):
     return errs[:8]
 
 
+def exec_stop_pct(level, px, stop, entry_type=None):
+    """Ширина стопа так, как её мерит шлюз исполнителя (plan_schema.entry_ref: ref_price = цена при решении, у limit цена заявки), и не меньше, чем от уровня.
+    Цена ещё не дошла до уровня -> стоп от неё шире (PENDLE 2026-10-31: 0.89% от цены при 0.8% scalp, шлюз отклонил E_STOP_PCT)."""
+    d = abs(level - stop) / level * 100.0
+    if entry_type != "limit" and px:
+        d = max(d, abs(px - stop) / px * 100.0)
+    return d
+
+
 def _entry_rr(side, level, px, stop, tps):
     """Риск/прибыль по худшей цене входа (long: max(уровень, цена); short: min) и средней цене целей (равные доли) -> число или None."""
     ref = level if px is None else (max(level, px) if side == "long" else min(level, px))
@@ -514,9 +574,8 @@ def _entry(o, ctx):
             errs.append("HORIZON_UNKNOWN")
     elif ctx.get("session_type") in SESSION_ORDER and h != ctx["session_type"]:
         errs.append("HORIZON_MISMATCH")                      # сессия одного горизонта: план только этого горизонта (шлюз исполнителя отклонит иначе)
-    mh = ctx.get("max_horizon")
-    if mh and h in SESSION_ORDER and SESSION_ORDER.index(h) > SESSION_ORDER.index(mh):
-        errs.append("HORIZON_ABOVE_DAY")                     # план дня ограничил горизонт на сегодня
+    if not ctx.get("off_plan_ok"):
+        errs += day_frame_breaks(o, ctx)                     # рамка плана дня жёсткая только на уровне 1 и на 2-3 без смены режима (off_plan_allowed)
     if rr is None:
         errs.append("RR_LOW")
     elif min_rr is not None and cost is not None:
@@ -526,18 +585,16 @@ def _entry(o, ctx):
             errs += ["RR_LOW", "RR_NET:%.2f_NEED:%.2f" % (net, min_rr)]
     elif rr < ENTRY_MIN_RR - 1e-9:
         errs += ["RR_LOW", "RR_GROSS:%.2f_NEED:%.2f" % (rr, ENTRY_MIN_RR)]
-    floor = max(ENTRY_MIN_STOP_PCT, ctx.get("a5_pct") or 0.0, 3.0 * (ctx.get("spread_bps") or 0.0) / 100.0)
+    floor = max(ENTRY_MIN_STOP_PCT, ENTRY_STOP_ATR_MULT * (ctx.get("a5_pct") or 0.0), 3.0 * (ctx.get("spread_bps") or 0.0) / 100.0)
     if dist < floor:
-        errs += ["STOP_TIGHT", "STOP_PCT:%.2f_MIN:%.2f" % (dist, floor)]      # стоп не вплотную: не ближе ATR(5м), трёх спредов и 0.1%
+        errs += ["STOP_TIGHT", "STOP_PCT:%.2f_MIN:%.2f" % (dist, floor)]      # стоп не вплотную: не ближе 1.5 ATR(5м), трёх спредов и 0.1%
+    surge, ret5 = ctx.get("surge_x"), ctx.get("ret_5m")
+    if o.get("setup") in FADE_SETUPS and surge is not None and ret5 and surge >= FADE_SURGE_X and ret5 * sign < 0:
+        errs += ["FADE_IMPULSE", "SURGE_X:%.1f_MAX:%.1f" % (surge, FADE_SURGE_X)]      # фейд против импульса на всплеске оборота: пропускают или ждут отката/сетапа с реакцией
     stop_max = max_stop if max_stop is not None else ENTRY_MAX_STOP_PCT
-    if dist > stop_max + 1e-9:
-        errs += ["STOP_WIDE", "STOP_PCT:%.2f_MAX:%.2f" % (dist, stop_max)]     # шире допустимого для типа сессии (guard отклонит так же): пропускают, а не сжимают
-    if ctx.get("day_max_new_plans") == 0:
-        errs.append("DAY_NO_PLANS")                          # план дня: новых планов нет
-    if ctx.get("day_setups") and o.get("setup") not in ctx["day_setups"]:
-        errs.append("SETUP_NOT_ALLOWED")                     # сетап вне списка allowed_setups плана дня
-    if sym in (ctx.get("day_avoid") or []):
-        errs.append("SYM_AVOID")                             # монета в списке avoid плана дня
+    wide = exec_stop_pct(lvl, px, stop, o.get("entry_type"))
+    if wide > stop_max + 1e-9:
+        errs += ["STOP_WIDE", "STOP_PCT:%.2f_MAX:%.2f" % (wide, stop_max)]     # шире допустимого для типа сессии (guard отклонит так же): пропускают, а не сжимают
     dsm = ctx.get("day_size_mult")
     if dsm is not None and dsm < 1.0 and not (isinstance(o.get("size_mult"), (int, float)) and o["size_mult"] <= dsm + 1e-9):
         errs.append("DAY_SIZE")                              # план дня ограничил размер: size_mult обязателен и не выше потолка дня
@@ -557,6 +614,8 @@ def _entry(o, ctx):
                 errs.append("BLACKOUT_TAG")
     elif "blackout" in tags:
         errs.append("TAG_MISMATCH:blackout")
+    if o.get("entry_type") == "limit" and o.get("confirm") != "candle":
+        errs.append("LIMIT_NEEDS_CANDLE")                    # лимит по уровню ставится после закрытия свечи за уровнем (цена на стороне отката, post_only не пересекает рынок)
     if o.get("confirm") == "none":
         cap = ENTRY_SIZE_MULT_MAX if ctx.get("no_confirm_max") is None else min(ENTRY_SIZE_MULT_MAX, ctx["no_confirm_max"])
         if ctx.get("no_confirm_allowed") is False:

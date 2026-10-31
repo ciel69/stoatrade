@@ -475,6 +475,23 @@ class TestDayplan(unittest.TestCase):
         self.assertEqual(errs, [])                                                # запасной план сам проходит валидатор
 
 
+class TestAggressiveFallback(unittest.TestCase):
+    def test_conservative_plan_not_narrowed_at_levels_4_5(self):
+        """Запасной план на уровнях 4-5 несёт все сетапы и не меньше 4 новых планов; на уровне 3 остаются умолчания."""
+        from unittest import mock
+        from tb.core import risklevels
+        e = _lc.LC(self)
+        e.ready()
+        d = {"day_id": "D-20261027-1", "session": {"type": "intraday", "minutes": 360}, "agent": "api", "mode": "paper"}
+        ctx = runtime.Ctx(e.root, NOW)
+        for lvl, plans, n_setups in ((3, 2, 2), (4, 4, 6), (5, 4, 6)):
+            with mock.patch.object(risklevels, "current_level", return_value={"level": lvl}):
+                env = briefing.make_env(ctx, d, {})
+            p = briefing.conservative_plan(env)
+            self.assertEqual((p["limits"]["max_new_plans"], len(p["allowed_setups"])), (plans, n_setups), lvl)
+            self.assertEqual(briefing.validate_dayplan(p, env)[1], [], lvl)
+
+
 class TestBrainRoles(unittest.TestCase):
     def test_invalid_then_valid_second_attempt(self):
         e = _lc.LC(self)

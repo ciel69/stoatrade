@@ -20,6 +20,7 @@ from tb.core import pending
 from tb.core import portfolio
 from tb.core import risklevels
 from tb.core import session
+from tb.core.stops import loss_stop
 
 
 def _venue_cap(venue):
@@ -47,7 +48,7 @@ def day_state(prof, today):
     realized += sum(min(0.0, (t.get("realized_parts") or 0.0) - (t.get("fees_parts") or 0.0)) for t in open_t if (t.get("ts_part") or "").startswith(today))
     streak = 0
     for t in sorted(closed_today, key=lambda x: x["ts_close"], reverse=True):
-        if t.get("reason") == "sl":
+        if loss_stop(t):                          # стоп, подтянутый в прибыль, не убыток: серию рвёт
             streak += 1
         else:
             break

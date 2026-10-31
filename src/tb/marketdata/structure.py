@@ -3,9 +3,10 @@
 Зачем: runtime/levels.json исполнитель пишет только при планах/позициях, а EMA/режим в market.json фида нужен прогрев в десятки минут, поэтому мозг на старте дня
 видел `regime: unknown` и ни одного уровня. Здесь свечи берутся из ПУБЛИЧНОГО REST Bybit (kline 5м и 1ч, без ключа), поэтому данные есть сразу и не зависят от планов.
 
-Состав символов (по приоритету): BTC, ETH, SOL; символы открытых позиций (exec_snapshot.json); монеты по запросу (runtime/structure_req.json: их пишут сканер при
+Состав символов (по приоритету): BTC, ETH, SOL; символы открытых позиций (exec_snapshot.json); монеты плана дня (state/control/day_limits.json symbols: патруль
+и сценарий дня, мозг должен видеть их полностью); монеты по запросу (runtime/structure_req.json: их пишут сканер при
 сигнале, досье мозга и get_brief, когда по монете события структуры нет; запрос живёт REQ_TTL_S); топ-`hot_n` горячих tradable монет из runtime/hot.json. Всего до `max_syms`
-(MAX_SYMS=16), монеты, ушедшие из состава, выбрасываются (свечи и запись в файле). Размер файла ограничен (~700 байт на монету).
+(MAX_SYMS=32), монеты, ушедшие из состава, выбрасываются (свечи и запись в файле). Размер файла ограничен (~700 байт на монету).
 Запрос на символ: kline 5м (300 свечей = 25 ч) раз в `every_s` (базовые и позиции) или `hot_every_s` (горячие и по запросу), kline 1ч (200 свечей = 8 дней, хватает на неделю
 с понедельника UTC) раз в `h1_every_s` / `hot_h1_every_s`. Между запросами к бирже пауза `pause_s` (по умолчанию 2 с): прогрев 11 монет ~1 мин, дальше ~6 запросов в минуту.
 Монета по запросу получает свечи вне очереди: цикл просыпается на новый запрос (не чаще раза в 5 с).
@@ -27,12 +28,12 @@ from tb.logic import levels as L
 SCHEMA = "tb.structure/1"
 FILE = "structure.json"
 BASE = ("BTC", "ETH", "SOL")
-MAX_SYMS = 16
+MAX_SYMS = 32                 # базовые 3 + позиции + план дня (до 12) + запросы (6) + горячие (8)
 HOT_N = 8                     # сколько горячих монет держать в структуре помимо базовых и позиций
-HARD_MAX_SYMS = 24            # потолок размера файла независимо от конфига
+HARD_MAX_SYMS = 32            # потолок размера файла независимо от конфига (~700 байт на монету)
 HOT_EVERY_S = 180.0
 HOT_H1_EVERY_S = 1800.0
-PAUSE_S = 2.0                 # пауза между запросами свечей к публичному REST (лимит биржи многократно выше)
+PAUSE_S = 1.0                 # пауза между запросами свечей к публичному REST (лимит биржи многократно выше): 32 монеты ~1 мин на круг
 LIMIT_5M = 300
 LIMIT_1H = 200
 EXTRA_PAUSE_S = 0.15
@@ -228,6 +229,12 @@ def _pos_syms(root):
     return [p.get("sym") for p in (snap.get("positions") if isinstance(snap, dict) and isinstance(snap.get("positions"), list) else []) if isinstance(p, dict)]
 
 
+def _day_syms(root):
+    """Монеты плана дня (state/control/day_limits.json symbols): их будит патруль, мозгу по ним нужна полная структура."""
+    d = read_json(paths.control_dir("day_limits.json", root=root))
+    return [s for s in (d.get("symbols") if isinstance(d, dict) and isinstance(d.get("symbols"), list) else []) if isinstance(s, str)]
+
+
 def read_requests(root, now=None):
     """-> [SYM] живых запросов на структуру (новые первыми), без просроченных."""
     now = time.time() if now is None else now
@@ -265,7 +272,7 @@ def request(root, syms, now=None):
 
 
 def wanted_symbols(root, extra=(), n=MAX_SYMS, hot_n=HOT_N, now=None):
-    """-> [(SYM, SYMUSDT)]: BTC, ETH, SOL, extra, символы позиций, монеты по запросу, затем до hot_n tradable из hot.json; без дублей, до n."""
+    """-> [(SYM, SYMUSDT)]: BTC, ETH, SOL, extra, символы позиций, монеты плана дня, монеты по запросу, затем до hot_n tradable из hot.json; без дублей, до n."""
     out = []
     n = max(1, min(int(n), HARD_MAX_SYMS))
 
@@ -279,6 +286,8 @@ def wanted_symbols(root, extra=(), n=MAX_SYMS, hot_n=HOT_N, now=None):
     for s in extra:
         add(s)
     for s in _pos_syms(root):
+        add(s)
+    for s in _day_syms(root):
         add(s)
     for s in read_requests(root, now):
         add(s)

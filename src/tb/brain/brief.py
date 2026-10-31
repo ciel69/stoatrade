@@ -20,6 +20,7 @@ import sys
 import time
 
 from tb import paths
+from tb.brain import cands as cands_mod
 from tb.brain import common
 from tb.core import blackout
 from tb.core import bus
@@ -27,6 +28,7 @@ from tb.core import exec_cfg
 from tb.core import ideas as ideas_core
 from tb.core import portfolio
 from tb.core import plan_schema
+from tb.core.stops import loss_stop
 
 DEFAULT_BUDGET = 2500
 EVENT_BUDGET = 900
@@ -51,7 +53,7 @@ _LEVEL_NUMS = ("px", "atr_5m", "vol_med_5m")
 _LEVEL_ALIAS = {"px": "price", "atr_5m": "atr_5m_14", "vol_med_5m": "vol_med_5m_20"}        # так ключи называет logic/levels.key_levels (исполнитель пишет их в levels.json)
 STRUCT_FRESH_S = 300.0
 STRUCT_BUDGET = 600           # токенов на блок struct при scope=start (цель WP «данные мозга»: не больше +600)
-STRUCT_EVENT_BUDGET = 260
+STRUCT_EVENT_BUDGET = 420     # монета события и BTC без подрезки уровней и вторичных чисел: мозгу нужен полный контекст для входа (указание владельца 2026-10-31)
 STRUCT_MAX_SYMS = 8
 _STRUCT_NUMS = ("a5_pct", "a1h_pct", "r1h", "r4h", "r24h", "vx", "te", "dpos", "dx", "tx", "t24_musd")
 _STRUCT_REG = ("trend_up", "trend_down", "range", "storm", "unknown")
@@ -157,7 +159,7 @@ def _b_account(c):
     closed_today = [t for t in live if t["status"] == "closed" and str(t.get("ts_close") or "").startswith(c.today)]
     streak = 0
     for t in sorted(closed_today, key=lambda x: str(x.get("ts_close") or ""), reverse=True):
-        if t.get("reason") == "sl":
+        if loss_stop(t):
             streak += 1
         else:
             break
@@ -165,7 +167,7 @@ def _b_account(c):
     out = {"equity": _r(portfolio.total(c.port)), "free": _r(sum(common.num(v.get("free"), 0.0) for v in venues.values() if isinstance(v, dict))),
            "dd_pct": _r(100.0 * portfolio.drawdown(c.port), 1),
            "day_pnl": _r(sum(t.get("pnl_usdt") or 0.0 for t in closed_today)),
-           "stops_today": sum(1 for t in closed_today if t.get("reason") == "sl"), "stop_streak": streak,
+           "stops_today": sum(1 for t in closed_today if loss_stop(t)), "stop_streak": streak,
            "day_trades": sum(1 for t in live if str(t.get("ts_open") or "").startswith(c.today))}
     try:
         out["dd_mult"] = _r(portfolio.dd_mult(c.port, c.prof), 2)
@@ -223,6 +225,14 @@ def _b_economics(c):
     out = {"llm_usd_day": _r(usd, 4)}
     for m, v in pnl.items():
         out["pnl_%s_day" % m], out["net_%s_day" % m] = _r(v, 4), _r(v - usd, 4)
+    try:                                         # минимум входов за сутки по уровню риска (risk_levels.json min_trades_day): без него мозг «умирает»
+        from tb.core import risklevels
+        need = int(risklevels.limits_summary(c.root).get("min_trades_day") or 0)
+    except (KeyError, TypeError, ValueError, OSError):
+        need = 0
+    if need:
+        done = sum(1 for t in c.trades if t.get("mode") in ("paper", "live") and str(t.get("ts_open") or "").startswith(c.today))
+        out.update(min_trades_day=need, trades_day=done, trades_left=max(0, need - done))
     return out
 
 
@@ -253,6 +263,8 @@ def _b_experiments(c):
 
 
 _DAY_SETUPS = ("level_reclaim", "level_reject", "sweep_reject", "breakout_retest", "range_fade", "trend_pullback", "none")   # как validate.SETUPS (проверяет тест)
+_DAY_REGIMES = ("trend", "range", "volatile", "unclear")
+_DAY_BIASES = ("long", "short", "neutral")
 DAY_LIMITS_MAX_AGE_S = 36 * 3600.0     # план дня старше полутора суток не действует (файл остаётся от прошлого дня)
 
 
@@ -269,7 +281,8 @@ def _b_day(c):
     avoid = [x for x in (d.get("avoid") or []) if _sym(x)] if isinstance(d.get("avoid"), list) else []
     syms = [x for x in (d.get("symbols") or []) if _sym(x)] if isinstance(d.get("symbols"), list) else []
     mnp = d.get("max_new_plans")
-    return _drop_none({"id": common.ident(d.get("day_id")), "setups": setups, "avoid": avoid or None, "symbols": syms or None,
+    return _drop_none({"id": common.ident(d.get("day_id")), "regime": d.get("regime") if d.get("regime") in _DAY_REGIMES else None,
+                       "bias": d.get("bias") if d.get("bias") in _DAY_BIASES else None, "setups": setups, "avoid": avoid or None, "symbols": syms or None,
                        "max_new_plans": mnp if isinstance(mnp, int) and not isinstance(mnp, bool) else None,
                        "max_horizon": d.get("max_horizon") if d.get("max_horizon") in _HORIZONS else None,
                        "max_risk_usdt": _r(common.num(d.get("max_risk_usdt"))), "size_mult": _r(common.num(d.get("size_mult")), 2)})
@@ -286,7 +299,7 @@ def _b_pause(c, syms):
     left = {}
     for t in closed:
         ts = common.parse_ts(t.get("ts_close"))
-        if ts is None or t.get("reason") != "sl":
+        if ts is None or not loss_stop(t):
             continue
         sym = _sym(t.get("sym"))
         mn = PAUSE_SYM_MIN - (c.now - ts) / 60.0
@@ -294,7 +307,7 @@ def _b_pause(c, syms):
             left[sym] = max(left.get(sym, 0), int(math.ceil(mn)))
     streak, last_ts = 0, None
     for t in reversed(closed):
-        if t.get("reason") != "sl":
+        if not loss_stop(t) or not str(t.get("ts_close") or "").startswith(c.today):      # серия только за сегодня (как account.stop_streak и guard): без сделок вчерашние стопы не держат паузу всю ночь
             break
         streak += 1
         last_ts = last_ts or common.parse_ts(t.get("ts_close"))
@@ -365,7 +378,13 @@ def _b_session(c):
     if not c.active:
         return None
     v = _model().session_view(c.active, c.trades, c.prof, c.now)
-    types = c.prof.get("session_types") if isinstance(c.prof.get("session_types"), dict) else {}
+    prof = c.prof
+    try:
+        from tb.core import risklevels
+        prof = risklevels.effective(c.prof, c.root)      # пороги горизонтов выбранного уровня риска (max_stop_mult, min_rr), как у guard и шлюза исполнителя
+    except Exception:
+        prof = c.prof
+    types = prof.get("session_types") if isinstance(prof.get("session_types"), dict) else {}
     out = {"id": common.ident(v["id"]), "type": common.ident(v["type"]),
            "min_left": None if v["left_s"] is None else int(v["left_s"] // 60), "budget": _r(v["budget_usdt"]),
            "realized": _r(v["realized"]), "open_risk": _r(v["open_risk"]), "trades": v["trades"], "max_trades": v["max_trades"],
@@ -1181,7 +1200,7 @@ def _trim_struct(b):
 TRIM_STEPS = (
     ("lessons", _drop("lessons")), ("missing", _drop("missing")), ("memory", _drop("memory")), ("playbook", _drop("playbook")), ("flow", _drop("flow")), ("since_last", _drop("since_last")), ("paper_history", _drop("paper_history")), ("checklist_text", _checklist_ids), ("recent>5", _trim_recent(5)),
     ("hot>3", _trim_hot(3)), ("ideas>4", _trim_ideas(4)), ("struct>3", _trim_struct), ("levels", _trim_levels), ("recent>3", _trim_recent(3)), ("pending", _drop("pending")),
-    ("hot", _drop("hot")), ("ideas", _drop("ideas")), ("experiments", _drop("experiments")), ("struct", _drop("struct")), ("news_digest", _drop("news_digest")), ("intel", _drop("intel")), ("recent>1", _trim_recent(1)), ("checklist", _drop("checklist")), ("market", _drop("market")),
+    ("hot", _drop("hot")), ("ideas", _drop("ideas")), ("experiments", _drop("experiments")), ("cands", _drop("cands")), ("struct", _drop("struct")), ("news_digest", _drop("news_digest")), ("intel", _drop("intel")), ("recent>1", _trim_recent(1)), ("checklist", _drop("checklist")), ("market", _drop("market")),
     ("recent", _drop("recent")),
 )
 
@@ -1301,6 +1320,7 @@ def build(scope="start", since=None, budget_tokens=None, root=None, now=None, co
         _merge_blackout({"intel": _safe("intel", lambda: intel_block(root, now), missing), "market": mk})
         b["market"] = mk or None
         b["playbook"] = _safe("playbook", lambda: _b_playbook(c, b, job_sym), missing) if (job_sym and not involved) else None      # только поиск входа: у событий планов карточки не нужны
+        b["cands"] = _safe("cands", lambda: cands_mod.candidates(b, job_sym), missing) if (job_sym and not involved) else None      # предрасчёт входов (уровень, стоп, цели, RR, горизонт): модель выбирает, а не считает
     else:
         pid = scope_plan.group(1)
         full = _safe("plan", lambda: _b_plan_full(c, pid), missing)

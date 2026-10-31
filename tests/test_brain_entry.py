@@ -10,7 +10,7 @@ import _bootstrap  # noqa: F401
 import _platform_helpers as H
 from _brain import BrainBase, FakeGateway
 from tb import paths
-from tb.brain import brief as brief_mod, entryplan, guards, plan_cli, roles_runtime, validate
+from tb.brain import brief as brief_mod, cands, entryplan, guards, plan_cli, roles_runtime, validate
 from tb.core import bus
 from tb.llm import schema as schema_mod
 from tb.platform import dispatcher as D
@@ -120,6 +120,33 @@ class EntrySchema(unittest.TestCase):
         b["recent"][0]["d"]["range_5m_pct"] = 2.0
         self.assertIn("RANGE5_GT_STOP", check(propose(), b)[1])
 
+    def test_stop_floor_is_one_and_half_atr(self):
+        """Стоп не ближе 1.5 ATR(5м): a5=0.25% -> минимум 0.375%; 0.34% отказ, 0.5% проходит."""
+        self.assertIn("STOP_TIGHT", check(propose(stop=144.5, tp=[148.2, 150.5]))[1])          # 0.34% от уровня 145.0
+        self.assertNotIn("STOP_TIGHT", check(propose(stop=144.2, tp=[148.2, 150.5]))[1])       # 0.55%
+
+    def test_stop_wide_measured_like_executor(self):
+        """Стоп мерится и от цены при решении (ref_price шлюза), не только от уровня: PENDLE 2026-10-31, 0.89% от цены при 0.8% scalp -> E_STOP_PCT у шлюза."""
+        b = with_brief(session={"id": "S-1", "type": "scalp", "min_rr": 1.0, "max_stop_pct": 0.8, "cost_rt_pct": 0.24})
+        b["levels"]["SOL"]["px"] = b["struct"]["s"]["SOL"]["px"] = 145.9                       # цена выше уровня шорта 145.0
+        short = dict(side="short", horizon="scalp", level=145.0, stop=146.1, tp=[143.0])          # 0.76% от уровня, 0.14% от цены
+        self.assertNotIn("STOP_WIDE", check(propose(**short), brief=b)[1])
+        b["levels"]["SOL"]["px"] = b["struct"]["s"]["SOL"]["px"] = 144.9                       # цена ниже уровня: от неё стоп 0.83%
+        self.assertIn("STOP_WIDE", check(propose(**short), brief=b)[1])
+        self.assertNotIn("STOP_WIDE", check(propose(entry_type="limit", **short), brief=b)[1])    # лимит: ref = цена заявки = уровень
+
+    def test_fade_against_impulse_forbidden(self):
+        """Фейд (range_fade/level_reject) против движения события на всплеске оборота >= 3x запрещён; по движению и другие сетапы можно."""
+        b = copy.deepcopy(SCAN_BRIEF)
+        b["recent"][0]["d"].update({"turn_surge_5m": 4.0, "ret_5m_pct": 1.0})
+        short = dict(side="short", level=145.0, stop=146.6, tp=[142.0, 140.0])
+        self.assertIn("FADE_IMPULSE", check(propose(setup="range_fade", **short), b)[1])        # цена выросла, шорт против неё
+        self.assertIn("FADE_IMPULSE", check(propose(setup="level_reject", **short), b)[1])
+        self.assertNotIn("FADE_IMPULSE", check(propose(setup="sweep_reject", **short), b)[1])
+        self.assertNotIn("FADE_IMPULSE", check(propose(setup="range_fade"), b)[1])              # long по движению вверх
+        b["recent"][0]["d"]["turn_surge_5m"] = 2.0
+        self.assertNotIn("FADE_IMPULSE", check(propose(setup="range_fade", **short), b)[1])
+
     def test_loose_rules_at_risk_levels_4_5(self):
         """Уровни 4-5 (paper-разведка): широкая свеча события не закрывает вход с подтверждением свечой, уровень допустим до 5%; на уровне 3 прежние правила."""
         wide = copy.deepcopy(SCAN_BRIEF)
@@ -148,8 +175,8 @@ class EntrySchema(unittest.TestCase):
         b = with_brief(struct_missing=["SOL"], levels={})
         self.assertTrue(validate.entry_context(b, EV)["struct_missing"])
         self.assertFalse(validate.entry_context(SCAN_BRIEF, EV)["struct_missing"])
-        b2 = with_brief(struct_missing=["SOL"])                                              # есть записи в levels: структура не нужна
-        self.assertFalse(validate.entry_context(b2, EV)["struct_missing"])
+        b2 = with_brief(struct_missing=["SOL"])                                              # levels без struct бывает пустым (ночь 2026-10-30: BEAM, XPL): ждём структуру
+        self.assertTrue(validate.entry_context(b2, EV)["struct_missing"])
 
     def test_blackout_block_and_warn(self):
         self.assertIn("BLACKOUT", check(propose(), with_brief(market={"blackout": {"event": "x", "in_min": 20, "mode": "block"}}))[1])
@@ -541,10 +568,49 @@ class DispatcherWake(unittest.TestCase):
         self.assertEqual((len(r["cls3"]), len(r["norm"])), (1, 1))
 
 
+class Candidates(unittest.TestCase):
+    """Блок cands: код считает уровень, стоп, цели, RR и горизонт по struct/levels; кандидат ok=true проходит validate без кодов."""
+    B = {"session": {"id": "S-1", "type": "day", "cost_rt_pct": 0.28, "horizons": {"scalp": {"max_stop_pct": 0.8, "min_rr": 1.0}, "intraday": {"max_stop_pct": 3.0, "min_rr": 1.5},
+                                                                                "swing": {"max_stop_pct": 15.0, "min_rr": 2.0}}}}
+
+    def brief(self, **day):
+        b = copy.deepcopy(SCAN_BRIEF)
+        b.update(copy.deepcopy(self.B))
+        b["struct"]["s"]["SOL"].update(res=[[146.5, 0.9, 0.5, "dh"], [150.0, 3.3, 1.8, "wh"]], sup=[[144.0, -0.8, 0.4, "s1h"], [141.0, -2.9, 1.5, "pdl"]])
+        b["levels"]["SOL"]["swing_5m"] = [144.6, 145.0]
+        if day:
+            b["day"] = day
+        return b
+
+    def test_ok_candidates_pass_validator(self):
+        b = self.brief()
+        out = cands.candidates(b, "SOL")
+        self.assertTrue(any(r.get("ok") for r in out))
+        for r in out:
+            o = propose(side=r["side"], horizon=r["horizon"], level=r["level"], stop=r["stop"], tp=r["tp"])
+            if "size_mult" in r:
+                o["size_mult"] = r["size_mult"]
+            codes = check(o, brief=b)[1]
+            if r.get("ok"):
+                self.assertEqual(codes, [], r)
+            else:
+                self.assertTrue(codes, r)                                              # fail-кандидат валидатор тоже отклоняет
+        for r in out:
+            sign = 1 if r["side"] == "long" else -1
+            self.assertTrue((r["level"] - r["stop"]) * sign > 0 and all((t - r["level"]) * sign > 0 for t in r["tp"]), r)
+
+    def test_day_size_and_no_levels(self):
+        out = cands.candidates(self.brief(size_mult=0.5), "SOL")
+        self.assertTrue(all(r["size_mult"] == 0.5 for r in out))                       # размер дня копируется в кандидата
+        self.assertIsNone(cands.candidates(copy.deepcopy(SCAN_BRIEF), "SOL"))         # нет уровней: кандидатов нет, ничего не выдумывается
+        self.assertIsNone(cands.candidates(self.brief(), "ETH"))
+
+
 class BriefPause(unittest.TestCase):
     def test_pause_block_from_closed_stops(self):
         class C(object):
             now = 1_800_000_000.0
+            today = time.strftime("%Y-%m-%d", time.gmtime(now))
             trades = [{"status": "closed", "reason": "sl", "sym": "SOL", "ts_close": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(1_800_000_000.0 - 600))},
                       {"status": "closed", "reason": "sl", "sym": "ETH", "ts_close": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(1_800_000_000.0 - 300))}]
         p = brief_mod._b_pause(C, {"SOL", "BTC"})
@@ -557,6 +623,7 @@ class BriefPause(unittest.TestCase):
         """Бумажный режим: общая пауза после двух стопов подряд не действует (решение владельца), пауза по монете и счётчик серии остаются."""
         class C(object):
             now = 1_800_000_000.0
+            today = time.strftime("%Y-%m-%d", time.gmtime(now))
             health = {"data": {"mode": "paper"}}
             trades = [{"status": "closed", "reason": "sl", "sym": "SOL", "ts_close": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(1_800_000_000.0 - 600))},
                       {"status": "closed", "reason": "sl", "sym": "ETH", "ts_close": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(1_800_000_000.0 - 300))}]
@@ -565,6 +632,18 @@ class BriefPause(unittest.TestCase):
         self.assertEqual((p["syms"], p["streak"]), ({"SOL": 20}, 2))
         C.health = {"data": {"mode": "live"}}
         self.assertEqual(brief_mod._b_pause(C, {"SOL"})["all"], 55)                  # live: прежнее правило
+
+    def test_streak_counts_only_today(self):
+        """Серия стопов только за текущие сутки UTC: вчерашние два стопа без новых сделок не дают streak (ночью мозг пропускал входы «пауза после двух стопов»)."""
+        class C(object):
+            now = 1_800_000_000.0
+            today = time.strftime("%Y-%m-%d", time.gmtime(now))
+            health = {"data": {"mode": "paper"}}
+            trades = [{"status": "closed", "reason": "sl", "sym": "SOL", "ts_close": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(1_800_000_000.0 - 90000))},
+                      {"status": "closed", "reason": "sl", "sym": "ETH", "ts_close": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(1_800_000_000.0 - 89000))}]
+        self.assertNotIn("streak", brief_mod._b_pause(C, {"SOL"}) or {})
+        C.trades = C.trades + [{"status": "closed", "reason": "sl", "sym": "BTC", "ts_close": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(1_800_000_000.0 - 300))}]
+        self.assertEqual(brief_mod._b_pause(C, {"SOL"})["streak"], 1)
 
 
 if __name__ == "__main__":
@@ -682,6 +761,28 @@ class SessionAndDayFrame(unittest.TestCase):
         self.assertIn("DAY_NO_PLANS", check(propose(setup="range_fade"), brief=b)[1])
         self.assertEqual(check(skip(), brief=b)[1], [])                            # skip рамка не трогает
 
+    def test_day_plan_is_scenario(self):
+        """План дня = сценарий: уровни 4-5 нарушают рамку всегда, уровни 2-3 при смене режима (struct.reg против day.regime/bias), уровень 1 никогда; размер дня жёсткий."""
+        frame = {"id": "D-20261028-1", "regime": "range", "bias": "neutral", "setups": ["range_fade"], "avoid": ["SOL"], "max_new_plans": 0, "max_horizon": "scalp"}
+        breaks = ("SETUP_NOT_ALLOWED", "SYM_AVOID", "DAY_NO_PLANS", "HORIZON_ABOVE_DAY")
+        for lvl, reg, free in ((5, "range", True), (4, "range", True), (3, "range", False), (3, "trend_down", True), (2, "trend_up", True), (1, "trend_down", False)):
+            b = with_brief(day=dict(frame))
+            b["risk_level"]["level"] = lvl
+            b["struct"]["s"]["SOL"]["reg"] = reg
+            codes = check(propose(), brief=b)[1]
+            self.assertEqual(any(c in codes for c in breaks), not free, (lvl, reg, codes))
+            self.assertEqual(validate.entry_precheck(validate.entry_context(b, EV)) == "DAY_NO_PLANS", not free, (lvl, reg))
+        b = with_brief(day=dict(frame, size_mult=0.5))
+        b["risk_level"]["level"] = 5
+        self.assertIn("DAY_SIZE", check(propose(), brief=b)[1])                    # размер дня остаётся жёстким
+        b = with_brief(day={"regime": "trend", "bias": "long", "setups": ["trend_pullback"]})
+        b["struct"]["s"]["BTC"] = {"px": 70000.0, "reg": "trend_down"}
+        self.assertNotIn("SETUP_NOT_ALLOWED", check(propose(), brief=b)[1])        # уровень 3: BTC развернулся против bias плана
+        ctx = validate.entry_context(b, EV)
+        ctx["event_seq"] = 1
+        self.assertIn("off-plan", entryplan.build(propose(), ctx)["tags"]["extra"])     # вход вне сценария помечен для разбора
+        self.assertNotIn("extra", entryplan.build(propose(setup="trend_pullback"), ctx)["tags"])
+
     def test_entry_precheck(self):
         self.assertIsNone(validate.entry_precheck(validate.entry_context(SCAN_BRIEF, EV)))
         self.assertIsNone(validate.entry_precheck(validate.entry_context({}, EV)))             # нет досье: решает Gate
@@ -767,6 +868,21 @@ class HorizonChoice(unittest.TestCase):
         b = with_brief(session=copy.deepcopy(self.DAY))
         b["recent"][0]["d"]["range_5m_pct"] = 5.0
         self.assertIsNone(validate.entry_precheck(validate.entry_context(b, EV)))        # порог у горизонта, решает _entry по ответу
+
+    def test_limit_entry_type(self):
+        """entry_type=limit: maker post_only по цене уровня после свечного подтверждения; без свечи отказ; план проходит статическую проверку схемы."""
+        from tb.core import plan_schema
+        self.assertEqual(check(propose(entry_type="limit"))[1], [])
+        self.assertIn("LIMIT_NEEDS_CANDLE", check(propose(entry_type="limit", confirm="none", size_mult=0.4, tags=["no-confirm"], zone={"low": 144.9, "high": 145.1}))[1])
+        self.assertTrue(check(propose(entry_type="stop"))[0])                                   # вне enum схема не пускает
+        ctx = validate.entry_context(SCAN_BRIEF, EV)
+        ctx["event_seq"] = 1
+        p = entryplan.build(propose(entry_type="limit"), ctx)
+        self.assertEqual(p["entry"]["how"], {"type": "limit", "price": 145.0, "post_only": True})
+        self.assertEqual(entryplan.build(propose(), ctx)["entry"]["how"], {"type": "market"})
+        plan, _ = plan_schema.normalize(p)
+        errs = [i for i in plan_schema.validate_static(plan) if i.get("level", "error") == "error" and str(i.get("code", "")).startswith("E_")]
+        self.assertEqual(errs, [])
 
     def test_entryplan_takes_horizon_from_answer(self):
         ctx = validate.entry_context(with_brief(session=copy.deepcopy(self.DAY)), EV)

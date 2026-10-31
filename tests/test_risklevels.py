@@ -66,6 +66,20 @@ class EffectiveTest(W.Base):
         self.assertTrue(e["risk_level"]["identity"])
         self.assertFalse(R.level_changes_behavior(e))
 
+    def test_wider_stop_on_top_levels(self):
+        """max_stop_mult: уровень 5 = x1.5 (scalp 0.8% -> 1.2%), уровень 4 = x1.25, уровни 1-3 без изменений; множитель не выше ceilings.max_stop_mult."""
+        p = self.prof()
+        base = p["session_types"]["scalp"]["max_stop_pct"]
+        for lvl, m in ((1, 1.0), (2, 1.0), (3, 1.0), (4, 1.25), (5, 1.5)):
+            e = R.effective(p, self.root, level=lvl)
+            self.assertAlmostEqual(e["session_types"]["scalp"]["max_stop_pct"], round(base * m, 4), msg=lvl)
+            self.assertAlmostEqual(e["session_types"]["intraday"]["max_stop_pct"], round(p["session_types"]["intraday"]["max_stop_pct"] * m, 4), msg=lvl)
+        c = W.jload(os.path.join(W.ROOT, "config", "risk_levels.json"))
+        c["levels"]["5"]["max_stop_mult"] = 9.0
+        self.put_cfg(c)
+        self.assertAlmostEqual(R.effective(p, self.root, level=5)["session_types"]["scalp"]["max_stop_pct"], round(base * 1.5, 4))      # потолок 1.5
+        self.assertEqual(R.limits_summary(self.root, level=5)["max_stop_mult"], 1.5)
+
     def test_monotonic_levels(self):
         p = self.prof()
         rows = [R.effective(p, self.root, level=n) for n in range(1, 6)]

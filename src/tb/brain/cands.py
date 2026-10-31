@@ -1,0 +1,131 @@
+"""Кандидаты на вход для entry_scout (блок досье `cands`): код заранее считает уровень, стоп, цели, расстояния, RR после издержек и горизонт,
+чтобы модель выбирала сетап, а не считала. Чистый модуль: без файлов и сети, формулы те же, что у validate._entry (кандидат ok=true проходит его числовые проверки).
+
+Пул уровней монеты события: struct.s[sym] res/sup, day/pd/wk, levels[sym] swing_5m/swing_1h и day/prev_day/week. Близкие уровни (ближе CLUSTER_PCT) сливаются.
+Кандидат long: уровень в пределах допустимой дистанции от цены, стоп за ближайшим уровнем ниже (не ближе пола стопа validate), цели = следующие уровни выше цены;
+short зеркально. Без уровня для стопа или цели кандидата нет (стоп и цели не выдумываются).
+"""
+from tb.brain import validate as V
+
+CLUSTER_PCT = 0.15          # уровни ближе этого (% цены) считаются одним
+STOP_BUF_FRAC = 0.1         # стоп за уровнем на 0.1 ATR(5м) (не вплотную к уровню)
+MAX_OK = 3
+MAX_FAIL = 2
+
+
+def _num(x):
+    return float(x) if isinstance(x, (int, float)) and not isinstance(x, bool) else None
+
+
+def _px(x):
+    return float("%.6g" % x)
+
+
+def pool(brief, sym):
+    """-> отсортированный список цен уровней монеты (без дублей ближе CLUSTER_PCT)."""
+    raw = []
+    st = (((brief.get("struct") or {}).get("s") or {}).get(sym)) if isinstance(brief.get("struct"), dict) else None
+    if isinstance(st, dict):
+        for k in ("res", "sup"):
+            raw += [r[0] for r in (st.get(k) or []) if isinstance(r, list) and r]
+        for k in ("day", "wk"):
+            raw += list(st.get(k) or [])[:2]
+        raw += list(st.get("pd") or [])[:2]
+    lv = (brief.get("levels") or {}).get(sym) if isinstance(brief.get("levels"), dict) else None
+    if isinstance(lv, dict):
+        raw += list(lv.get("swing_5m") or []) + list(lv.get("swing_1h") or [])
+        for k in ("day", "prev_day", "week"):
+            v = lv.get(k)
+            if isinstance(v, dict):
+                raw += [v.get("hi"), v.get("lo")]
+    out = []
+    for p in sorted(x for x in (_num(v) for v in raw) if x and x > 0):
+        if not out or (p - out[-1]) / out[-1] * 100.0 > CLUSTER_PCT:
+            out.append(p)
+    return out
+
+
+def _horizon(ctx, stop_pct, rr, wide_pct=None):
+    """-> (горизонт, rr_net, причина отказа или None): самый короткий горизонт, где стоп не шире max_stop_pct и RR после издержек не ниже min_rr.
+    stop_pct: от уровня (для RR, как validate); wide_pct: как мерит шлюз исполнителя (validate.exec_stop_pct), для max_stop_pct."""
+    wide_pct = stop_pct if wide_pct is None else wide_pct
+    cost = ctx.get("cost_rt_pct")
+    hz = ctx.get("horizons")
+    if hz:
+        order = [h for h in V.SESSION_ORDER if h in hz]
+        mh = ctx.get("max_horizon")
+        if mh in V.SESSION_ORDER and not ctx.get("off_plan_ok"):
+            order = [h for h in order if V.SESSION_ORDER.index(h) <= V.SESSION_ORDER.index(mh)]
+        geos = [(h, hz[h].get("max_stop_pct"), hz[h].get("min_rr")) for h in order]
+    else:
+        geos = [(ctx.get("session_type"), ctx.get("max_stop_pct"), ctx.get("min_rr"))]
+    net = rr if cost is None else (rr * stop_pct - cost) / (stop_pct + cost)
+    near = None                                        # горизонт, где стоп помещается и RR ближе всего к порогу (для отказа с числом)
+    for h, ms, mr in geos:
+        ms = V.ENTRY_MAX_STOP_PCT if ms is None else ms
+        need = mr if (mr is not None and cost is not None) else V.ENTRY_MIN_RR
+        val = net if (mr is not None and cost is not None) else rr
+        if wide_pct > ms + 1e-9:
+            continue
+        if val >= need - 1e-9:
+            return h, round(val, 2), None
+        if near is None or val - need > near[2]:
+            near = (h, val, val - need, need)
+    if near is None:
+        return (geos[-1][0] if geos else None), round(net, 2), "stop_wide"
+    return near[0], round(near[1], 2), "rr_low:need_%.2f" % near[3]
+
+
+def candidates(brief, sym, ctx=None):
+    """-> [кандидат] (ok сначала, по убыванию rr_net) или None. ctx: validate.entry_context(brief, {"sym": sym}) (считается сам, если не передан)."""
+    if not isinstance(brief, dict) or not sym:
+        return None
+    ctx = ctx or V.entry_context(brief, {"sym": sym})
+    px = ctx.get("px")
+    lv = pool(brief, sym)
+    if not px or len(lv) < 2:
+        return None
+    a5 = ctx.get("a5_pct") or 0.0
+    floor = max(V.ENTRY_MIN_STOP_PCT, V.ENTRY_STOP_ATR_MULT * a5, 3.0 * (ctx.get("spread_bps") or 0.0) / 100.0)
+    max_dist = V.ENTRY_MAX_LEVEL_DIST_LOOSE_PCT if V._loose(ctx) else V.ENTRY_MAX_LEVEL_DIST_PCT
+    buf = STOP_BUF_FRAC * a5 / 100.0
+    dsm = ctx.get("day_size_mult")
+    size_mult = round(min(dsm, V.ENTRY_SIZE_MULT_MAX), 2) if dsm is not None and dsm < 1.0 else None      # план дня ограничил размер: validate требует size_mult не выше
+    ok, bad = [], []
+    for side, sign in (("long", 1), ("short", -1)):
+        for L in lv:
+            dist = abs(L - px) / px * 100.0
+            if dist > max_dist:
+                continue
+            stops = sorted((s for s in lv if (L - s) * sign > 0 and abs(L - s) / L * 100.0 >= floor), key=lambda s: abs(L - s))      # ближайший уровень с другой стороны за полом стопа
+            if not stops:
+                continue
+            stop = _px(stops[0] * (1 - sign * buf))
+            if (px - stop) * sign <= 0:
+                continue                                   # цена уже за стопом (validate: STOP_WRONG_SIDE)
+            ref = max(L, px) if sign > 0 else min(L, px)
+            tps = sorted((t for t in lv if (t - ref) * sign > 0), key=lambda t: abs(t - ref))[:2]      # цели за худшей ценой входа: validate не даст TP_REACHED
+            if not tps:
+                continue
+            rr = V._entry_rr(side, L, px, stop, tps)
+            if rr is None or rr <= 0:
+                continue
+            stop_pct = abs(L - stop) / L * 100.0
+            wide = V.exec_stop_pct(L, px, stop)
+            h, net, why = _horizon(ctx, stop_pct, rr, wide)
+            row = {"side": side, "level": _px(L), "stop": stop, "tp": [_px(t) for t in tps], "dist_pct": round(dist, 2), "stop_pct": round(wide, 2),
+                   "rr_net": net, "horizon": h}
+            if size_mult is not None:
+                row["size_mult"] = size_mult
+            if ctx.get("range_5m_pct") is not None and ctx["range_5m_pct"] > stop_pct and not V._loose(ctx):
+                why = why or "range_gt_stop"
+            if why:
+                row["fail"] = why
+                bad.append(row)
+            else:
+                row["ok"] = True
+                ok.append(row)
+    ok.sort(key=lambda r: -r["rr_net"])
+    bad.sort(key=lambda r: -r["rr_net"])
+    out = ok[:MAX_OK] + bad[:MAX_FAIL]
+    return out or None

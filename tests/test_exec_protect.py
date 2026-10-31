@@ -82,3 +82,16 @@ class ProtectEndToEnd(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProfitStop(unittest.TestCase):
+    def test_stop_in_profit_breaks_streak_and_no_pause(self):
+        """Стоп, подтянутый в прибыль (JCT 2026-10-31, +0.698 USDT), не убыточный: серию стопов рвёт, паузы по монете не даёт."""
+        t = [{"sym": "SOL", "reason": "sl", "pnl_usdt": -0.5, "ts_close": "2026-10-28T10:00:00Z"},
+             {"sym": "JCT", "reason": "sl", "pnl_usdt": 0.698, "ts_close": "2026-10-28T10:10:00Z"}]
+        self.assertEqual(protect.stop_streak(t)[0], 0)
+        now = protect.parse_ts("2026-10-28T10:15:00Z")
+        self.assertIsNone(protect.symbol_cooldown(t, "JCT", now, 30))
+        self.assertIsNotNone(protect.symbol_cooldown(t, "SOL", now, 30))
+        t[1]["pnl_usdt"] = -0.2
+        self.assertEqual(protect.stop_streak(t)[0], 2)

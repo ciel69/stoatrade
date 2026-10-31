@@ -145,6 +145,19 @@ class TestEconomics(Base):
             self.assertEqual([x["hyp"] for x in ex["open"]], ["probe-x"])
             self.assertEqual(ex["min_n"], 30)
 
+    def test_min_trades_quota(self):
+        """Квота входов за сутки по уровню риска (min_trades_day): сколько вошли сегодня и сколько ещё нужно; без квоты полей нет."""
+        from unittest import mock
+        from tb.core import risklevels
+        with mock.patch.object(risklevels, "limits_summary", return_value={"min_trades_day": 5}):
+            base = self.build("event")["economics"]["trades_day"]          # сделки фикстуры Base
+            with open(self.R("state", "trades.jsonl"), "a", encoding="utf-8") as f:
+                f.write("".join(json.dumps(r) + "\n" for r in self.trade(0, "q", 1.0, 0.2, iso(NOW - 600)) + self.trade(1, "q", 1.0, 0.2, iso(NOW - 86400))))
+            eco = self.build("event")["economics"]
+        self.assertEqual((eco["min_trades_day"], eco["trades_day"], eco["trades_left"]), (5, base + 1, max(0, 4 - base)))      # вчерашний вход не считается
+        with mock.patch.object(risklevels, "limits_summary", return_value={"min_trades_day": 0}):
+            self.assertNotIn("trades_left", self.build("event")["economics"])
+
     def test_no_hypotheses_no_block(self):
         self.assertNotIn("experiments", self.build())
 

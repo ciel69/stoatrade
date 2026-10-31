@@ -12,8 +12,11 @@
   "max_open_positions": 3,
   "total_open_risk_frac": 0.12,
   "margin_per_trade_frac": 0.30,
+  "max_stop_mult": 1.5,
   "_note": "ПОДТВЕРДИТЬ ВЛАДЕЛЬЦУ. Плечо не выше risk_profile.session_types[*].max_leverage и max_leverage."
  },
+ "_max_stop_note": "max_stop_mult: множитель max_stop_pct горизонтов (scalp 0.8%, intraday 3% ...) на уровне, не выше ceilings.max_stop_mult (указание владельца 2026-10-31: на верхних уровнях стоп шире); риск в деньгах не меняется, размер считается от стопа.",
+ "_min_trades_note": "min_trades_day: минимум входов за сутки UTC (указание владельца 2026-10-31): мозг ищет сделки активнее, чем выше уровень; правила стопа, RR и лимитов не ослабляет.",
  "auto_downgrade": {"daily_loss_ratio": 0.7, "on_drawdown_step": true},
  "setup_aggr": {
   "level_reclaim": "low", "range_fade": "low",
@@ -24,22 +27,22 @@
   "1": {"name": "Защитный", "risk_per_trade_frac": 0.01, "daily_loss_frac": 0.04, "session_budget_mult": 0.5, "max_open_positions": 1, "total_open_risk_frac": 0.02, "leverage_mult": 0.5, "min_net_rr_add": 0.5, "size_mult_cap": 0.5,
         "pyramid": {"allowed": false}, "no_confirm": {"allowed": false},
         "carry": {"policy": "never", "scalp": false, "max_positions": 0, "max_total_risk_frac": 0, "max_risk_frac_of_trade": 0.5, "event_hours": 12, "max_funding_frac_of_risk": 0.25},
-        "setups": {"aggr": "low"}},
+        "setups": {"aggr": "low"}, "min_trades_day": 0},
   "2": {"name": "Осторожный", "risk_per_trade_frac": 0.02, "daily_loss_frac": 0.07, "session_budget_mult": 0.75, "max_open_positions": 1, "total_open_risk_frac": 0.04, "leverage_mult": 0.75, "min_net_rr_add": 0.25, "size_mult_cap": 0.75,
         "pyramid": {"allowed": false}, "no_confirm": {"allowed": false},
         "carry": {"policy": "owner_confirm", "scalp": false, "max_positions": 1, "max_total_risk_frac": 0.3, "max_risk_frac_of_trade": 0.5, "event_hours": 12, "max_funding_frac_of_risk": 0.25},
-        "setups": {"aggr": "low"}},
+        "setups": {"aggr": "low"}, "min_trades_day": 1},
   "3": {"name": "Базовый (как сейчас)", "risk_per_trade_frac": 0.03, "daily_loss_frac": 0.10, "session_budget_mult": 1.0, "max_open_positions": 2, "total_open_risk_frac": 0.06, "leverage_mult": 1.0, "min_net_rr_add": 0.0, "size_mult_cap": 1.0,
         "pyramid": {"allowed": false}, "no_confirm": {"allowed": true, "size_mult_max": 0.5},
         "carry": {"policy": "owner_confirm", "scalp": false, "max_positions": 2, "max_total_risk_frac": 0.5, "max_risk_frac_of_trade": 0.5, "event_hours": 12, "max_funding_frac_of_risk": 0.25},
-        "setups": {"aggr": "mid"}},
-  "4": {"name": "Активный", "risk_per_trade_frac": 0.04, "daily_loss_frac": 0.13, "session_budget_mult": 1.25, "max_open_positions": 3, "total_open_risk_frac": 0.09, "leverage_mult": 1.0, "min_net_rr_add": 0.0, "size_mult_cap": 1.0,
+        "setups": {"aggr": "mid"}, "min_trades_day": 2},
+  "4": {"name": "Активный", "risk_per_trade_frac": 0.04, "daily_loss_frac": 0.13, "session_budget_mult": 1.25, "max_open_positions": 3, "total_open_risk_frac": 0.09, "leverage_mult": 1.0, "min_net_rr_add": 0.0, "size_mult_cap": 1.0, "max_stop_mult": 1.25,
         "pyramid": {"allowed": true, "max_adds": 1, "max_add_risk_frac": 0.5}, "no_confirm": {"allowed": true, "size_mult_max": 0.5},
         "carry": {"policy": "agent", "scalp": false, "max_positions": 2, "max_total_risk_frac": 0.6, "max_risk_frac_of_trade": 0.75, "event_hours": 8, "max_funding_frac_of_risk": 0.35},
-        "setups": {"aggr": "high"}},
-  "5": {"name": "Агрессивный", "risk_per_trade_frac": 0.05, "daily_loss_frac": 0.15, "session_budget_mult": 1.5, "max_open_positions": 3, "total_open_risk_frac": 0.12, "leverage_mult": 1.0, "min_net_rr_add": 0.0, "size_mult_cap": 1.0,
+        "setups": {"aggr": "high"}, "min_trades_day": 4},
+  "5": {"name": "Агрессивный", "risk_per_trade_frac": 0.05, "daily_loss_frac": 0.15, "session_budget_mult": 1.5, "max_open_positions": 3, "total_open_risk_frac": 0.12, "leverage_mult": 1.0, "min_net_rr_add": 0.0, "size_mult_cap": 1.0, "max_stop_mult": 1.5,
         "pyramid": {"allowed": true, "max_adds": 2, "max_add_risk_frac": 1.0}, "no_confirm": {"allowed": true, "size_mult_max": 0.75},
         "carry": {"policy": "agent", "scalp": false, "max_positions": 3, "max_total_risk_frac": 0.8, "max_risk_frac_of_trade": 1.0, "event_hours": 6, "max_funding_frac_of_risk": 0.5},
-        "setups": {"aggr": "high"}}
+        "setups": {"aggr": "high"}, "min_trades_day": 5}
  }
 }

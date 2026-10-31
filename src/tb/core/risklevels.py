@@ -245,6 +245,13 @@ def _rr(base, add):
     return base if add <= 0 else max(1.0, base + add)
 
 
+def stop_mult(cfg, L):
+    """Множитель max_stop_pct уровня (необязательное поле max_stop_mult, по умолчанию 1): не ниже 1 и не выше ceilings.max_stop_mult (нет потолка -> 1)."""
+    m = _num(L.get("max_stop_mult")) and float(L["max_stop_mult"]) or 1.0
+    ceil = _num((cfg.get("ceilings") or {}).get("max_stop_mult")) and float(cfg["ceilings"]["max_stop_mult"]) or 1.0
+    return max(1.0, min(m, ceil))
+
+
 def effective(prof, root=None, level=None):
     """Профиль с применённым уровнем: -> новый dict (база не меняется); ключ `risk_level` = метаданные (level, name, source, identity, warnings, clamped).
     Нет risk_levels.json -> возвращается сам prof. Для identity_level (3) значения базы остаются, только проверяется потолок."""
@@ -285,6 +292,9 @@ def effective(prof, root=None, level=None):
             q["max_leverage"] = _lev(prof["max_leverage"], L["leverage_mult"])
         if _num(prof.get("min_rr")):
             q["min_rr"] = _rr(prof["min_rr"], L["min_net_rr_add"])
+        sm = stop_mult(cfg, L)
+        if _num(prof.get("max_stop_pct")) and sm != 1.0:
+            q["max_stop_pct"] = round(prof["max_stop_pct"] * sm, 4)
         if isinstance(prof.get("session_types"), dict):
             st = {}
             for name, c0 in prof["session_types"].items():
@@ -297,6 +307,8 @@ def effective(prof, root=None, level=None):
                     c["max_leverage"] = _lev(c0["max_leverage"], L["leverage_mult"])
                 if _num(c0.get("min_rr")):
                     c["min_rr"] = _rr(c0["min_rr"], L["min_net_rr_add"])
+                if _num(c0.get("max_stop_pct")) and sm != 1.0:
+                    c["max_stop_pct"] = round(c0["max_stop_pct"] * sm, 4)      # верхние уровни: стоп шире (риск в деньгах тот же, размер меньше)
                 st[name] = c
             q["session_types"] = st
     # суммарный открытый риск: ограничение вводим только когда оно строже неявного (число слотов x риск сделки)
@@ -435,7 +447,8 @@ def limits_summary(root=None, agent_limits=None, equity=None, level=None):
            "session_budget_mult": L["session_budget_mult"], "leverage_mult": L["leverage_mult"], "min_net_rr_add": L["min_net_rr_add"],
            "size_mult_cap": size_mult_cap(root, agent_limits, lvl), "risk_cap_usdt": cap_usd, "sources": src,
            "pyramid": pyramid_policy(root, None, agent_limits, lvl), "no_confirm": no_confirm_policy(root, None, lvl),
-           "carry": carry_policy(root, lvl), "setups_aggr": L["setups"]["aggr"], "warnings": list(cur.get("warnings", []))}
+           "carry": carry_policy(root, lvl), "setups_aggr": L["setups"]["aggr"], "min_trades_day": int(L.get("min_trades_day") or 0), "max_stop_mult": stop_mult(cfg, L),
+           "warnings": list(cur.get("warnings", []))}
     if equity is not None and _num(equity) and equity > 0:
         t = rpt * equity
         out["risk_per_trade_usdt"] = round(min(t, cap_usd) if cap_usd else t, 4)

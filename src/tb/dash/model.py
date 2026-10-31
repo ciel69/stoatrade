@@ -19,6 +19,7 @@ from tb.core import ideas as ideas_core
 from tb.marketdata import ideawatch
 from tb.core import portfolio
 from tb.core import tradepath
+from tb.core.stops import loss_stop
 
 
 def session_cfg(stype, prof):
@@ -809,7 +810,7 @@ def risk_room(root, trades, prof, port, active, now):
     realized = sum(t.get("pnl_usdt") or 0.0 for t in closed_today)
     streak = 0
     for t in sorted(closed_today, key=lambda x: str(x.get("ts_close") or ""), reverse=True):
-        if t.get("reason") == "sl":
+        if loss_stop(t):                          # как guard: стоп в плюс серию рвёт
             streak += 1
         else:
             break

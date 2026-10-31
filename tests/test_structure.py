@@ -213,6 +213,14 @@ class TestCollector(unittest.TestCase):
         self.assertEqual(len(S.wanted_symbols(self.root, n=5)), 5)
         self.assertLessEqual(len(S.wanted_symbols(self.root, n=999)), S.HARD_MAX_SYMS)
 
+    def test_day_plan_symbols_always_kept(self):
+        """Монеты плана дня (day_limits.json symbols) держатся в структуре постоянно: после позиций, до запросов и горячих."""
+        self.hot(["H%d" % i for i in range(10)])
+        TB.w(paths.control_dir("day_limits.json", root=self.root), {"symbols": ["BEAM", "XPL", "ETH", "bad sym"]})
+        S.request(self.root, ["CBRS"], now=NOW)
+        syms = [x[0] for x in S.wanted_symbols(self.root, hot_n=2, now=NOW)]
+        self.assertEqual(syms, ["BTC", "ETH", "SOL", "BEAM", "XPL", "CBRS", "H0", "H1"])
+
     def test_requests_go_before_hot_and_expire(self):
         self.hot(["H%d" % i for i in range(10)])
         S.request(self.root, ["CBRS", "XAN", "BTC", "bad sym"], now=NOW)
