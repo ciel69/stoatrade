@@ -336,6 +336,22 @@ def market(root=None, now=None):
             "coins": {"ok": bool(mk.get("ok")), "at": _at(now, mk.get("age_s")), "rows": coins}}
 
 
+def news(root=None, now=None):
+    """Новости для ленты «Рынка»: очищенные заголовки с разметкой карантинного читателя, статус источников и календаря. Источник тот же, что у старой вкладки (intel.dashapi.news).
+    Текст третьих лиц уходит как данные и вставляется без HTML. Возрасты не отдаём: метка времени заголовка и момент события календаря (`at`, до минуты) считаются на клиенте."""
+    from tb.intel import dashapi
+    now = time.time() if now is None else now
+    j = dashapi.news(root, {"limit": ["60"]}, now)
+    items = [{k: v for k, v in i.items() if k != "age_s"} for i in j.get("items") or []]
+    cal = j.get("calendar") or {}
+    nxt = [{"id": e.get("id"), "type": e.get("type"), "impact": e.get("impact"), "verified": e.get("verified"),
+            "at": round((now + (_num(e.get("in_min")) or 0.0) * 60.0) / 60.0) * 60} for e in cal.get("next") or []]
+    rd = j.get("reader") or {}
+    return {"items": items, "sources": [{k: v for k, v in s.items() if k != "age_s"} for s in j.get("sources") or []], "degraded": j.get("degraded") or [],
+            "calendar": {"next": nxt, "blackout": cal.get("blackout")},
+            "reader": {"enabled": bool(rd.get("enabled")), "status": rd.get("status"), "stale": bool(rd.get("stale"))}}
+
+
 def _round(x, n):
     return round(x, n) if isinstance(x, (int, float)) and not isinstance(x, bool) else x
 
@@ -449,8 +465,8 @@ def ctl(root=None, now=None):
             "banner": ({"level": banner.get("level"), "text": str(banner.get("text") or "")[:160]} if banner else None), "day": day}
 
 
-TOPICS = {"brain": brain, "ctl": ctl, "events": events, "market": market}
-INTERVAL = {"decisions": 3.0, "models": 30.0, "ideas": 10.0, "market": 5.0}        # тема -> не чаще раза в N секунд (по умолчанию HEAVY_S сервера)
+TOPICS = {"brain": brain, "ctl": ctl, "events": events, "market": market, "news": news}
+INTERVAL = {"decisions": 3.0, "models": 30.0, "ideas": 10.0, "market": 5.0, "news": 15.0}        # тема -> не чаще раза в N секунд (по умолчанию HEAVY_S сервера)
 MODE_TOPICS = {"home": home, "trades": trades, "decisions": decisions, "models": models, "plans": plans, "ideas": ideas}        # зависят от режима клиента: строятся для каждого режима, который сейчас смотрит хотя бы один клиент
 
 
