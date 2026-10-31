@@ -270,6 +270,51 @@ class Scout(BrainBase):
         d = [x for x in self.decisions() if x["what"] == "brain_decision"]
         self.assertEqual(d[-1]["res"]["code"], "OK")
 
+    def tool_brief(self):
+        b = copy.deepcopy(Candidates.B)
+        b = dict(copy.deepcopy(SCAN_BRIEF), **b)
+        b["struct"]["s"]["SOL"].update(res=[[146.5, 0.9, 0.5, "dh"], [150.0, 3.3, 1.8, "wh"]], sup=[[144.0, -0.8, 0.4, "s1h"], [141.0, -2.9, 1.5, "pdl"]])
+        b["levels"]["SOL"]["swing_5m"] = [144.6, 145.0]
+        b["cands"] = cands.candidates(b, "SOL")
+        return b
+
+    def test_es_take_builds_plan_from_candidate(self):
+        """es_take: модель называет номер кандидата и сетап; уровень, стоп, цели, горизонт код берёт из кандидата (без JSON entry/1 из 15 полей)."""
+        from fakes.fake_llm import Tool
+        self.gw.brief = self.tool_brief()
+        ok = [c for c in self.gw.brief["cands"] if c.get("ok")]
+        bad = [c for c in self.gw.brief["cands"] if c.get("fail")]
+        self.assertTrue(ok and all(c["n"] == i + 1 for i, c in enumerate(self.gw.brief["cands"])))
+        calls = ([Tool("es_take", {"candidate": bad[0]["n"], "setup": "level_reclaim", "why": "x"})] if bad else []) + \
+                [Tool("es_take", {"candidate": ok[0]["n"], "setup": "level_reclaim", "why": "возврат уровня | RR %.2f | стоп за свингом" % ok[0]["rr_net"]})]
+        r = self.runner({"ds-flash": calls + ["готово"]})
+        j, s = self.scan_job()
+        r.step()
+        c = self.gw.tool_calls("submit_plan")
+        self.assertEqual(len(c), 1, self.get_job(j["id"])["result"])
+        plan = c[0]["args"]["plan"]
+        self.assertEqual((plan["side"], plan["stop"]["price"], [t["price"] for t in plan["targets"]], plan["session_type"]),
+                         (ok[0]["side"], ok[0]["stop"], ok[0]["tp"], ok[0]["horizon"]))
+        self.assertEqual(plan["mode"], "paper")
+        self.assertIn("es_take", [t["name"] for t in r.client_for("ds-flash").calls[0]["req"].tools])
+
+    def test_es_skip_and_es_watch(self):
+        from fakes.fake_llm import Tool
+        from tb.core import ideas
+        self.gw.brief = self.tool_brief()
+        r = self.runner({"ds-flash": [Tool("es_skip", {"code": "no_setup", "why": "нет сетапа | цена между уровнями | риск"})]})
+        j, s = self.scan_job()
+        r.step()
+        self.assertEqual(self.get_job(j["id"])["result"]["roles"][0]["code"], "SKIP")
+        self.assertEqual(self.gw.tool_calls("submit_plan"), [])
+        n = self.gw.brief["cands"][0]["n"]
+        r = self.runner({"ds-flash": [Tool("es_watch", {"candidate": n, "why": "жду уровень | до него 0.2% | риск"})]})
+        j, s = self.scan_job(jid="J-s2")
+        r.step()
+        rows = [i for i in ideas.load_ideas(self.root) if i.get("src") == "entry_scout"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["level"], self.gw.brief["cands"][0]["level"])
+
     def test_struct_missing_defers_instead_of_skipping(self):
         """Структуры по монете события ещё нет: задание откладывается (модель не зовём), а не получает skip no_levels; на последней попытке идёт к модели."""
         self.gw.brief = with_brief(struct_missing=["SOL"], levels={})

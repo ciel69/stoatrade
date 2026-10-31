@@ -91,6 +91,8 @@ def candidates(brief, sym, ctx=None):
     lv = pool(brief, sym)
     ch = chase(ctx, lv) if px else None
     if not px or len(lv) < 2:
+        if ch:
+            ch["n"] = 1
         return [ch] if ch else None
     a5 = ctx.get("a5_pct") or 0.0
     floor = max(V.ENTRY_MIN_STOP_PCT, V.ENTRY_STOP_ATR_MULT * a5, 3.0 * (ctx.get("spread_bps") or 0.0) / 100.0)
@@ -137,6 +139,8 @@ def candidates(brief, sym, ctx=None):
     ok.sort(key=lambda r: -r["rr_net"])
     bad.sort(key=lambda r: -r["rr_net"])
     out = ([ch] if ch else []) + ok[:MAX_OK] + bad[:MAX_FAIL]      # импульс первым: он живёт минуты
+    for i, r in enumerate(out):
+        r["n"] = i + 1                                                # номер для es_take / es_watch (модели не нужно считать позиции)
     return out or None
 
 
