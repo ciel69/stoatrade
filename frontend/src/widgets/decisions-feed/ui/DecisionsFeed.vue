@@ -4,7 +4,9 @@ import { actorKey, filterDecisions, humanAction, planShort, useTradingStore, typ
 import { UiChip, UiSegment } from '@/shared/ui'
 import { price, signed } from '@/shared/lib'
 
-/** Лента решений: кто решил, что сделал, почему и чем кончилось. Фильтры: исполнитель, только отказы, план, поиск по тексту. Строка раскрывается: параметры, основание, ответ, идентификаторы. */
+/** Лента решений: кто решил, что сделал, почему и чем кончилось. Фильтры: исполнитель, только отказы, план, поиск по тексту. Строка выбирается: параметры, основание, ответ и идентификаторы показывает страница боковой панелью. */
+defineProps<{ selected: number | null }>()
+const emit = defineEmits<{ select: [seq: number] }>()
 const trading = useTradingStore()
 const FIRST = 40
 const STEP = 60
@@ -24,15 +26,7 @@ const snap = computed(() => trading.decisions)
 const filtered = computed(() => filterDecisions(snap.value?.items ?? [], { actor: actor.value, onlyFail: onlyFail.value === 'fail', plan: plan.value, q: q.value }))
 const visible = computed(() => filtered.value.slice(0, shown.value))
 
-const opened = ref(new Set<number>())
-function flip(seq: number): void {
-  const next = new Set(opened.value)
-  if (!next.delete(seq)) next.add(seq)
-  opened.value = next
-}
-
 const timeFmt = new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
-const fullFmt = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
 const at = (d: DecisionItem, f: Intl.DateTimeFormat) => (d.t != null ? f.format(new Date(d.t * 1000)) : d.ts.slice(11, 19))
 
 function result(d: DecisionItem): { text: string; tone: 'ok' | 'bad' | 'warn' | 'neutral' } {
@@ -41,26 +35,6 @@ function result(d: DecisionItem): { text: string; tone: 'ok' | 'bad' | 'warn' | 
   if (d.noop) return { text: `пропуск ${d.code ?? ''}`.trim(), tone: 'warn' }
   if (d.ok === true) return { text: 'OK', tone: 'ok' }
   return { text: KIND_RU[d.kind] ?? d.kind, tone: 'neutral' }
-}
-const flat = (o: Record<string, unknown>): string => Object.entries(o).map(([k, v]) => `${k}=${v}`).join(' · ')
-
-function rowsOf(d: DecisionItem): Array<[string, string]> {
-  const out: Array<[string, string]> = [
-    ['Номер · вид', `#${d.seq} · ${KIND_RU[d.kind] ?? d.kind} · ${d.what}`],
-    ['Время', `${at(d, fullFmt)}${d.ts ? ` (UTC ${d.ts})` : ''}`],
-    ['Кто решил', d.actor],
-    ['План', d.plan ? `${d.plan}${d.rev != null ? ` · r${d.rev}` : ''}${d.mode ? ` · ${d.mode}` : ''}` : '–'],
-    ['Причина', d.why || '–'],
-  ]
-  if (Object.keys(d.args).length) out.push(['Параметры', flat(d.args)])
-  if (Object.keys(d.basis).length) out.push(['Основание', flat(d.basis)])
-  if (d.px != null || d.r != null) out.push(['Цена · R на момент', `${d.px != null ? price(d.px) : '–'} · ${d.r != null ? signed(d.r) + 'R' : '–'}`])
-  if (Object.keys(d.res).length) out.push(['Ответ', flat(d.res)])
-  if (d.link_id) out.push(['link_id', d.link_id])
-  if (d.exch_ms != null) out.push(['Ответ биржи', `${d.exch_ms} мс`])
-  if (d.action_id) out.push(['action_id', d.action_id])
-  if (d.h) out.push(['Хеш записи', d.h])
-  return out
 }
 </script>
 
@@ -82,7 +56,7 @@ function rowsOf(d: DecisionItem): Array<[string, string]> {
 
     <ul v-if="visible.length" class="list">
       <li v-for="d in visible" :key="d.seq" class="row" :class="{ bad: d.denied }">
-        <button type="button" class="line" :aria-expanded="opened.has(d.seq)" :aria-controls="`dec-${d.seq}`" @click="flip(d.seq)">
+        <button type="button" class="line" :aria-pressed="selected === d.seq" @click="emit('select', d.seq)">
           <span class="time">{{ at(d, timeFmt) }}</span>
           <span class="body">
             <span class="top">
@@ -95,11 +69,6 @@ function rowsOf(d: DecisionItem): Array<[string, string]> {
             <span v-if="d.why" class="why">{{ d.why }}</span>
           </span>
         </button>
-        <div :id="`dec-${d.seq}`" class="more" :class="{ on: opened.has(d.seq) }">
-          <div class="inner">
-            <dl class="kv"><template v-for="[k, v] in rowsOf(d)" :key="k"><dt>{{ k }}</dt><dd>{{ v }}</dd></template></dl>
-          </div>
-        </div>
       </li>
     </ul>
     <p v-else-if="snap" class="empty">{{ snap.items.length ? 'Нет решений по этим фильтрам.' : 'Решений пока нет.' }}</p>
@@ -125,7 +94,7 @@ function rowsOf(d: DecisionItem): Array<[string, string]> {
 .row { border-top: 1px solid var(--line); }
 .row:first-child { border-top: 0; }
 .line { display: grid; grid-template-columns: 62px minmax(0, 1fr); column-gap: var(--space-3); width: 100%; padding: var(--space-2) var(--space-2); background: transparent; border: 0; border-radius: var(--radius-sm); color: inherit; font: inherit; font-size: 12px; text-align: left; cursor: pointer; transition: background-color var(--dur-fast) ease; }
-.line[aria-expanded='true'] { background: var(--panel2); }
+.line[aria-pressed='true'] { background: var(--panel2); box-shadow: inset 3px 0 0 var(--accent); }
 @media (hover: hover) and (pointer: fine) {
   .line:hover { background: var(--panel2); }
 }
@@ -138,21 +107,11 @@ function rowsOf(d: DecisionItem): Array<[string, string]> {
 .res { margin-left: auto; display: inline-flex; align-items: center; gap: var(--space-2); }
 .px { color: var(--muted); font-variant-numeric: tabular-nums; }
 .why { color: var(--muted); line-height: 1.4; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.more { display: grid; grid-template-rows: 0fr; transition: grid-template-rows var(--dur-enter) var(--ease-out); }
-.more.on { grid-template-rows: 1fr; }
-.inner { overflow: hidden; min-height: 0; }
-.more.on .inner { padding: var(--space-2) var(--space-2) var(--space-3) calc(var(--space-2) + 62px + var(--space-3)); }
-.kv { display: grid; grid-template-columns: minmax(110px, 0.5fr) minmax(0, 2fr); gap: 3px var(--space-3); margin: 0; font-size: 12px; }
-.kv dt { color: var(--muted); }
-.kv dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .empty { margin: 0; padding: var(--space-5) 0; text-align: center; color: var(--muted); font-size: 13px; }
 .skel { height: 160px; border-radius: var(--radius-sm); background: var(--panel2); }
 .more-row { display: flex; justify-content: center; margin-top: var(--space-4); }
 .btn { padding: 6px 16px; background: var(--panel2); color: var(--text); border: 1px solid var(--line2); border-radius: var(--radius-sm); font-size: 12px; cursor: pointer; transition: border-color var(--dur-fast) ease; }
 @media (hover: hover) and (pointer: fine) {
   .btn:hover { border-color: var(--muted); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .more { transition: none; }
 }
 </style>

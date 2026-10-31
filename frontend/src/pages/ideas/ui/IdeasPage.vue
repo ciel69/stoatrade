@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { defaultTab, TAB_LABEL, tabCount, useIdeaStore, type IdeaTab } from '@/entities/idea'
+import { defaultTab, IdeaDetailPanel, TAB_LABEL, tabCount, useIdeaStore, type IdeaTab } from '@/entities/idea'
 import { IdeasAuto } from '@/widgets/ideas/ideas-auto'
 import { IdeasList } from '@/widgets/ideas/ideas-list'
-import { UiSegment } from '@/shared/ui'
+import { UiSegment, UiSidePanel } from '@/shared/ui'
 
 /**
  * Страница «Идеи»: четыре вкладки как на старом дашборде (ждут уровня, стали планом, не сработали, авто-история сканера). Выбор вкладки хранится в адресе (?tab=), вкладка по умолчанию
@@ -25,6 +25,15 @@ const options = computed(() => TABS.map((t) => ({ value: t, label: `${TAB_LABEL[
 function pick(t: IdeaTab): void {
   void router.replace({ query: { tab: t } })
 }
+/** Выбранная идея хранится в адресе (?idea=ID); повторный клик закрывает панель. */
+const selectedId = computed(() => (typeof route.query.idea === 'string' && route.query.idea ? route.query.idea : null))
+const idea = computed(() => snap.value?.items.find((i) => i.id === selectedId.value) ?? null)
+function pickIdea(id: string): void {
+  void router.replace({ query: { ...route.query, idea: selectedId.value === id ? undefined : id } })
+}
+function closeIdea(): void {
+  void router.replace({ query: { ...route.query, idea: undefined } })
+}
 const share = computed(() => (snap.value?.stats.agent.taken_share != null ? `${Math.round(snap.value.stats.agent.taken_share * 100)}%` : '–'))
 </script>
 
@@ -41,7 +50,10 @@ const share = computed(() => (snap.value?.stats.agent.taken_share != null ? `${M
       <UiSegment :model-value="tab" :options="options" label="Вкладка идей" @update:model-value="pick" />
     </header>
     <IdeasAuto v-if="tab === 'auto'" />
-    <IdeasList v-else :tab="tab" />
+    <IdeasList v-else :tab="tab" :selected="selectedId" @select="pickIdea" />
+    <UiSidePanel :open="!!idea" label="Идея" @close="closeIdea">
+      <IdeaDetailPanel v-if="idea" :idea="idea" @close="closeIdea" />
+    </UiSidePanel>
   </main>
 </template>
 

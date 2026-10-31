@@ -3,8 +3,10 @@ import { computed, ref, watch } from 'vue'
 import { TradeCardView, useTradingStore } from '@/entities/trading'
 import { UiSegment } from '@/shared/ui'
 
-/** История закрытых сделок режима: фильтр по результату, карточки с разбором по клику, «показать ещё» порциями. */
+/** История закрытых сделок режима: фильтр по результату, карточки (разбор открывает страница боковой панелью), «показать ещё» порциями. */
 type Res = 'all' | 'win' | 'loss'
+defineProps<{ selected: string | null }>()
+const emit = defineEmits<{ select: [id: string] }>()
 const FIRST = 12
 const STEP = 24
 const trading = useTradingStore()
@@ -32,7 +34,7 @@ const older = computed(() => Math.max(0, (trading.trades?.total ?? 0) - all.valu
     </header>
 
     <div v-if="visible.length" class="grid">
-      <TradeCardView v-for="t in visible" :key="t.id" :trade="t" />
+      <TradeCardView v-for="t in visible" :key="t.id" :trade="t" :selected="selected === t.id" @select="emit('select', t.id)" />
     </div>
     <p v-else-if="trading.trades" class="empty">{{ all.length ? 'Нет сделок по этому фильтру.' : 'Закрытых сделок в этом режиме ещё нет.' }}</p>
     <div v-else class="skel" aria-busy="true" />

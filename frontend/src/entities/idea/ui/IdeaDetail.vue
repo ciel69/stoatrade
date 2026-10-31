@@ -44,7 +44,7 @@ const tradeText = computed(() => {
 </template>
 
 <style scoped>
-.det { margin-top: var(--space-3); padding: var(--space-3); border-radius: var(--radius-sm); background: var(--panel2); display: grid; gap: var(--space-2); font-size: 12px; }
+.det { display: grid; gap: var(--space-3); font-size: 12px; }
 .note { margin: 0; color: var(--text); font-size: 13px; line-height: 1.45; }
 .kv { display: grid; gap: 4px; margin: 0; }
 .kv > div { display: flex; gap: var(--space-3); }

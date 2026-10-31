@@ -4,14 +4,13 @@ import { UiChip } from '@/shared/ui'
 import { duration, fixed, price } from '@/shared/lib'
 import { ideaRisk, ideaRoute, levelWait } from '../lib/idea'
 import type { IdeaItem } from '../model/types'
-import IdeaDetail from './IdeaDetail.vue'
 
 /**
  * Идея, которая ждёт цену у уровня: тот же язык, что у плана. Полоса от стопа к тейку, уровень акцентом с ценой над ним, цена белой меткой, между ними синий отрезок «осталось дойти».
- * В заголовке процент до уровня (зелёный у уровня) и срок идеи; слов одна строка: тезис. Подробности (замеры, пометки, идентификатор) раскрываются кликом.
+ * В заголовке процент до уровня (зелёный у уровня) и срок идеи; слов одна строка: тезис. Подробности (замеры, пометки, идентификатор) открываются боковой панелью по клику.
  */
-const props = defineProps<{ idea: IdeaItem; now: number; open: boolean }>()
-const emit = defineEmits<{ toggle: [] }>()
+const props = defineProps<{ idea: IdeaItem; now: number; selected: boolean }>()
+const emit = defineEmits<{ select: [] }>()
 
 const r = computed(() => ideaRoute(props.idea))
 const k = computed(() => ideaRisk(props.idea))
@@ -24,8 +23,8 @@ const tip = computed(() => [props.idea.tag, props.idea.note, k.value.rr != null 
 </script>
 
 <template>
-  <li class="card" :class="{ near: idea.zone }">
-    <button type="button" class="hit" :aria-expanded="open" :title="tip" @click="emit('toggle')">
+  <li class="card" :class="{ near: idea.zone, sel: selected }">
+    <button type="button" class="hit" :aria-pressed="selected" :title="tip" @click="emit('select')">
       <span class="head">
         <span class="sym">{{ idea.sym }}</span>
         <UiChip>{{ idea.side === 'long' ? 'лонг' : idea.side === 'short' ? 'шорт' : '?' }}</UiChip>
@@ -55,13 +54,13 @@ const tip = computed(() => [props.idea.tag, props.idea.note, k.value.rr != null 
 
       <span v-if="idea.note" class="note">{{ idea.note }}</span>
     </button>
-    <IdeaDetail v-if="open" :idea="idea" />
   </li>
 </template>
 
 <style scoped>
 .card { padding: var(--space-3) 0; border-top: 1px solid var(--line); }
 .card:first-child { border-top: 0; padding-top: 0; }
+.card.sel { box-shadow: inset 3px 0 0 var(--accent); padding-left: var(--space-3); }
 .hit { display: block; width: 100%; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: var(--radius-sm); }
 .hit:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
 .head { display: flex; align-items: center; gap: var(--space-2); }

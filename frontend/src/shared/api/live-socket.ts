@@ -11,6 +11,9 @@ export interface LiveMessage {
   data: unknown
 }
 
+/** Разовые сообщения (ответ на команду, пульс связи): повторять новому подписчику их нельзя. */
+const EPHEMERAL = new Set(['pong', 'link', 'plan_detail', 'ctl_result', 'ctl_final'])
+
 type MessageHandler = (m: LiveMessage) => void
 type StateHandler = (s: LinkState) => void
 
@@ -27,6 +30,7 @@ export interface LiveSocketOptions {
 export class LiveSocket {
   private ws: WebSocket | null = null
   private handlers = new Map<string, Set<MessageHandler>>()
+  private last = new Map<string, LiveMessage>()
   private stateHandlers = new Set<StateHandler>()
   private attempt = 0
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
@@ -47,10 +51,16 @@ export class LiveSocket {
     }
   }
 
+  /**
+   * Подписка на тему. Сервер шлёт снимок один раз при подключении и дальше только изменения, а виджеты страниц подписываются позже (при заходе на страницу):
+   * поэтому новому подписчику сразу отдаётся последнее полученное состояние темы. Разовые ответы (EPHEMERAL) не повторяются.
+   */
   subscribe(topic: string, handler: MessageHandler): () => void {
     let set = this.handlers.get(topic)
     if (!set) this.handlers.set(topic, (set = new Set()))
     set.add(handler)
+    const last = this.last.get(topic)
+    if (last) handler(last)
     return () => set.delete(handler)
   }
 
@@ -130,6 +140,7 @@ export class LiveSocket {
         return
       }
       if (!m || typeof m.topic !== 'string') return
+      if (!EPHEMERAL.has(m.topic)) this.last.set(m.topic, m)
       this.handlers.get(m.topic)?.forEach((h) => h(m))
     }
     ws.onclose = () => {

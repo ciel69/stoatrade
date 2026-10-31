@@ -2,19 +2,18 @@
 import { computed, ref } from 'vue'
 import { dirTone, filterNews, importance, markState, NEWS_DIR, NEWS_TYPE, useNewsStore, weightOf, type NewsFilter, type NewsItem } from '@/entities/headline'
 import { UiChip, UiSegment } from '@/shared/ui'
-import { ageText, countdown, fixed, useNow } from '@/shared/lib'
+import { ageText, countdown, useNow } from '@/shared/lib'
 
 /**
  * Лента новостей в «Рынке»: очищенные заголовки с разметкой карантинного читателя (тип, важность, направление, монеты). Слева полоса важности (красная от 4, янтарная 3). Монета в разметке
- * выбирает её на карте. Сверху календарь событий и окно блокировки. Заголовки это текст третьих лиц: показываются как текст, мозгу не передаются, ссылок нет (только домен).
+ * выбирает её на карте; клик по заголовку открывает новость боковой панелью (её держит страница). Сверху календарь событий и окно блокировки. Заголовки это текст третьих лиц: показываются как текст, мозгу не передаются, ссылок нет (только домен).
  */
-const props = defineProps<{ coin: string | null }>()
-const emit = defineEmits<{ selectCoin: [sym: string] }>()
+const props = defineProps<{ coin: string | null; selected: string | null }>()
+const emit = defineEmits<{ selectCoin: [sym: string]; select: [ref: string] }>()
 const store = useNewsStore()
 const now = useNow()
 
 const filter = ref<NewsFilter>('all')
-const open = ref<string | null>(null)
 const limit = ref(15)
 const snap = computed(() => store.snapshot)
 const all = computed(() => snap.value?.items ?? [])
@@ -32,7 +31,6 @@ const blackout = computed(() => snap.value?.calendar.blackout ?? null)
 
 const markText = (i: NewsItem): string => ({ ok: '', struct: 'структурно (факты)', waiting: 'ждёт читателя', susp: 'подозрение: текст модели не передавался', fail: 'формат разметки не принят', raw: 'без модели' })[markState(i)]
 const typeText = (i: NewsItem): string => (i.cls?.type ? (NEWS_TYPE[i.cls.type] ?? i.cls.type) : '')
-const toggle = (ref_: string): void => { open.value = open.value === ref_ ? null : ref_ }
 const when = (s: number): string => { const d = s - now.value; return d > 86400 ? `через ${Math.round(d / 86400)} дн` : `через ${countdown(d)}` }
 </script>
 
@@ -55,8 +53,8 @@ const when = (s: number): string => { const d = s - now.value; return d > 86400 
 
     <template v-if="snap">
       <ul v-if="shown.length" class="list">
-        <li v-for="i in shown" :key="i.ref" class="item" :class="`w-${weightOf(importance(i))}`">
-          <button type="button" class="hit" :aria-expanded="open === i.ref" @click="toggle(i.ref)">
+        <li v-for="i in shown" :key="i.ref" class="item" :class="[`w-${weightOf(importance(i))}`, { sel: selected === i.ref }]">
+          <button type="button" class="hit" :aria-pressed="selected === i.ref" @click="emit('select', i.ref)">
             <span class="meta">{{ ageText(i.ts, now) }} · {{ i.src }}</span>
             <span class="head">{{ i.title }}</span>
           </button>
@@ -70,18 +68,6 @@ const when = (s: number): string => { const d = s - now.value; return d > 86400 
             <UiChip v-else-if="markState(i) === 'susp'" tone="bad">подозрение</UiChip>
             <span v-else class="muted">{{ markText(i) }}</span>
           </span>
-          <div v-if="open === i.ref" class="det">
-            <p v-if="i.snip" class="snip">{{ i.snip }}</p>
-            <dl class="kv">
-              <div><dt>Источник</dt><dd>{{ i.src }}{{ i.domain ? ' · ' + i.domain : '' }}</dd></div>
-              <div><dt>Подтверждений с других доменов</dt><dd>{{ i.seen }}</dd></div>
-              <template v-if="i.cls && i.cls.st === 'ok'">
-                <div><dt>Актуально</dt><dd>{{ countdown((i.cls.ttl_min ?? 0) * 60) === '–' ? '–' : (i.cls.ttl_min ?? 0) + ' мин' }}, уверенность {{ fixed(i.cls.conf, 2) }}</dd></div>
-              </template>
-              <div v-if="i.susp"><dt>Фильтр инъекций</dt><dd>сработал: текст не передавался модели, важность 1</dd></div>
-              <div><dt>Идентификатор</dt><dd class="mono">{{ i.ref }}</dd></div>
-            </dl>
-          </div>
         </li>
       </ul>
       <p v-else class="empty">{{ all.length ? 'В этом фильтре заголовков нет.' : 'Заголовков пока нет: их собирает сервис intel из RSS (./tb up --services ...,intel).' }}</p>
@@ -117,13 +103,7 @@ const when = (s: number): string => { const d = s - now.value; return d > 86400 
 .dir.down { color: var(--neg); }
 .sym { padding: 1px 8px; border: 1px solid var(--line2); border-radius: 99px; background: none; color: var(--text); font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; }
 .sym:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.det { margin-top: var(--space-3); padding: var(--space-3); border-radius: var(--radius-sm); background: var(--panel2); display: grid; gap: var(--space-2); font-size: 12px; }
-.snip { margin: 0; font-size: 13px; line-height: 1.45; }
-.kv { margin: 0; display: grid; gap: 4px; }
-.kv > div { display: flex; gap: var(--space-3); justify-content: space-between; }
-dt { color: var(--muted); }
-dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
-.mono { font-family: var(--mono, ui-monospace, monospace); font-size: 11px; }
+.item.sel { background: color-mix(in srgb, var(--accent) 7%, transparent); }
 .empty { margin: 0; font-size: 13px; color: var(--muted); max-width: 60ch; }
 .more { justify-self: start; padding: 6px 14px; border: 1px solid var(--line2); border-radius: var(--radius-sm); background: var(--panel2); color: var(--text); font: inherit; font-size: 12px; cursor: pointer; }
 .more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

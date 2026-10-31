@@ -4,15 +4,15 @@ import { IdeaCard, IdeaResultRow, ideasOf, useIdeaStore, type IdeaTab } from '@/
 import { useNow } from '@/shared/lib'
 
 /**
- * Идеи одной вкладки: «Ждут уровня» карточками с полосой до уровня, «Стали планом» и «Не сработали» строками с исходом. Подробности раскрываются кликом (по одной), список по 10 с кнопкой «Показать ещё».
+ * Идеи одной вкладки: «Ждут уровня» карточками с полосой до уровня, «Стали планом» и «Не сработали» строками с исходом. Подробности выбранной идеи показывает страница в боковой панели, список по 10 с кнопкой «Показать ещё».
  */
-const props = defineProps<{ tab: Exclude<IdeaTab, 'auto'> }>()
+const props = defineProps<{ tab: Exclude<IdeaTab, 'auto'>; selected: string | null }>()
+const emit = defineEmits<{ select: [id: string] }>()
 const store = useIdeaStore()
 const now = useNow()
 const STEP = 20
 const limit = ref(10)
-const openId = ref<string | null>(null)
-watch(() => props.tab, () => { limit.value = 10; openId.value = null })
+watch(() => props.tab, () => { limit.value = 10 })
 
 const rows = computed(() => (store.snapshot ? ideasOf(store.snapshot, props.tab) : []))
 const shown = computed(() => rows.value.slice(0, limit.value))
@@ -21,7 +21,6 @@ const EMPTY: Record<Exclude<IdeaTab, 'auto'>, string> = {
   taken: 'Появится, когда по идее будет подан план.',
   skipped: 'Появится, когда идея истечёт или не сработает.',
 }
-const toggle = (id: string) => { openId.value = openId.value === id ? null : id }
 </script>
 
 <template>
@@ -29,8 +28,8 @@ const toggle = (id: string) => { openId.value = openId.value === id ? null : id 
     <template v-if="store.snapshot">
       <ul v-if="rows.length" class="list">
         <template v-for="i in shown" :key="i.id">
-          <IdeaCard v-if="tab === 'active'" :idea="i" :now="now" :open="openId === i.id" @toggle="toggle(i.id)" />
-          <IdeaResultRow v-else :idea="i" :now="now" :open="openId === i.id" @toggle="toggle(i.id)" />
+          <IdeaCard v-if="tab === 'active'" :idea="i" :now="now" :selected="selected === i.id" @select="emit('select', i.id)" />
+          <IdeaResultRow v-else :idea="i" :now="now" :selected="selected === i.id" @select="emit('select', i.id)" />
         </template>
       </ul>
       <p v-else class="empty">{{ EMPTY[tab] }}</p>

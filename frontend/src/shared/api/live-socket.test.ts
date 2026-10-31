@@ -47,6 +47,22 @@ describe('LiveSocket', () => {
     expect(states).toEqual(['closed', 'connecting', 'open'])
   })
 
+  it('поздний подписчик сразу получает последнее состояние темы, разовые ответы не повторяются', () => {
+    const s = make()
+    s.start()
+    const ws = FakeWS.all[0]
+    ws.open()
+    ws.push('ideas', { n: 1 })
+    ws.push('ideas', { n: 2 }, 2)
+    ws.push('plan_detail', { id: 'P' })
+    const got: unknown[] = []
+    s.subscribe('ideas', (m) => got.push(m.data))
+    s.subscribe('plan_detail', (m) => got.push(m.data))
+    expect(got).toEqual([{ n: 2 }])
+    ws.push('ideas', { n: 3 }, 3)
+    expect(got).toEqual([{ n: 2 }, { n: 3 }])
+  })
+
   it('переподключается с нарастающей паузой и обнуляет её после успешного открытия', () => {
     const s = make()
     s.start()

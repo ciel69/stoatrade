@@ -4,14 +4,13 @@ import { UiChip } from '@/shared/ui'
 import { ageText, fixed, signed } from '@/shared/lib'
 import { lastOutcome, STATUS_RU } from '../lib/idea'
 import type { IdeaItem } from '../model/types'
-import IdeaDetail from './IdeaDetail.vue'
 
 /**
  * Строка идеи, у которой есть исход: «стала планом» (результат сделки, если дошло) и «не сработала» (что было бы по стороне идеи после издержек).
- * Одна строка: монета, сторона, статус, когда записана и результат справа; тезис ниже одной строкой; клик раскрывает подробности.
+ * Одна строка: монета, сторона, статус, когда записана и результат справа; тезис ниже одной строкой; клик открывает подробности боковой панелью.
  */
-const props = defineProps<{ idea: IdeaItem; now: number; open: boolean }>()
-const emit = defineEmits<{ toggle: [] }>()
+const props = defineProps<{ idea: IdeaItem; now: number; selected: boolean }>()
+const emit = defineEmits<{ select: [] }>()
 
 const last = computed(() => lastOutcome(props.idea.outcomes))
 const tr = computed(() => props.idea.trade)
@@ -20,8 +19,8 @@ const statusTone = computed(() => (props.idea.status === 'taken' || props.idea.s
 </script>
 
 <template>
-  <li class="row">
-    <button type="button" class="hit" :aria-expanded="open" @click="emit('toggle')">
+  <li class="row" :class="{ sel: selected }">
+    <button type="button" class="hit" :aria-pressed="selected" @click="emit('select')">
       <span class="head">
         <span class="sym">{{ idea.sym }}</span>
         <UiChip>{{ idea.side === 'long' ? 'лонг' : idea.side === 'short' ? 'шорт' : '?' }}</UiChip>
@@ -44,13 +43,13 @@ const statusTone = computed(() => (props.idea.status === 'taken' || props.idea.s
       </span>
       <span v-if="idea.note" class="note">{{ idea.note }}</span>
     </button>
-    <IdeaDetail v-if="open" :idea="idea" />
   </li>
 </template>
 
 <style scoped>
 .row { padding: var(--space-3) 0; border-top: 1px solid var(--line); }
 .row:first-child { border-top: 0; padding-top: 0; }
+.row.sel { box-shadow: inset 3px 0 0 var(--accent); padding-left: var(--space-3); }
 .hit { display: block; width: 100%; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: var(--radius-sm); }
 .hit:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
 .head { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); }
