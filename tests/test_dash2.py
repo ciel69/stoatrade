@@ -208,10 +208,10 @@ class ServerTest(Fx, unittest.IsolatedAsyncioTestCase):
     async def test_snapshot_then_only_changes(self):
         self.hb()
         async with connect("ws://127.0.0.1:%d/ws" % self.port) as ws:
-            first = [await self.recv(ws) for _ in range(10)]
-            self.assertEqual([m["topic"] for m in first], ["hello", "brain", "ctl", "events", "decisions", "home", "ideas", "models", "plans", "trades"])
+            first = [await self.recv(ws) for _ in range(11)]
+            self.assertEqual([m["topic"] for m in first], ["hello", "brain", "ctl", "events", "market", "decisions", "home", "ideas", "models", "plans", "trades"])
             self.assertEqual(first[1]["data"]["status"], "idle")
-            self.assertEqual((first[0]["data"]["mode"], first[5]["data"]["mode"]), ("paper", "paper"))
+            self.assertEqual((first[0]["data"]["mode"], first[6]["data"]["mode"]), ("paper", "paper"))
             self.assertIn("enabled", first[0]["data"]["ctl"])
             with self.assertRaises(asyncio.TimeoutError):                         # без изменений сервер молчит (опроса нет)
                 await self.recv(ws, 0.8)
@@ -224,7 +224,7 @@ class ServerTest(Fx, unittest.IsolatedAsyncioTestCase):
     async def test_mode_switch_sends_home_for_that_mode_only(self):
         self.hb()
         async with connect("ws://127.0.0.1:%d/ws" % self.port) as a, connect("ws://127.0.0.1:%d/ws" % self.port) as b:
-            for _ in range(10):
+            for _ in range(11):
                 await self.recv(a)
                 await self.recv(b)
             await a.send(json.dumps({"op": "mode", "mode": "live"}))
@@ -239,7 +239,7 @@ class ServerTest(Fx, unittest.IsolatedAsyncioTestCase):
     async def test_plan_detail_op_answers_only_asker_and_rejects_bad_id(self):
         self.hb()
         async with connect("ws://127.0.0.1:%d/ws" % self.port) as a, connect("ws://127.0.0.1:%d/ws" % self.port) as b:
-            for _ in range(10):
+            for _ in range(11):
                 await self.recv(a)
                 await self.recv(b)
             await a.send(json.dumps({"op": "plan", "id": "../../etc/passwd"}))
@@ -265,6 +265,24 @@ class ServerTest(Fx, unittest.IsolatedAsyncioTestCase):
         it = t["items"][0]
         self.assertEqual((t["mode"], it["dist_level_pct"], it["expires_epoch"]), ("paper", 1.235, 2010))
         self.assertTrue(all(k not in it for k in ("now_age_s", "now_src", "ttl_h")))
+
+    def test_market_topic_is_stable_between_seconds(self):
+        from tb.dash import model
+        def derivs(root, now):          # файлы записаны в момент 997: возраст растёт вместе с now
+            return {"heat": {"available": True, "age_s": now - 997.0, "rows": [{"sym": "SOL"}]}, "liq": {"available": False},
+                    "flow": {"available": True, "age_s": now - 997.0, "xex_ok": True, "syms": [{"sym": "SOL", "age_s": 2, "walls": [{"side": "bid", "usd": 5, "age_s": now, "stable": True}]}]}}
+        o = (model.deriv_info, model.hot_info, model.market_info)
+        model.deriv_info = derivs
+        model.hot_info = lambda root, now: {"available": False}
+        model.market_info = lambda root=None, now=None: {"ok": False, "symbols": {}}
+        try:
+            a, b = topics.market(None, 1000.0), topics.market(None, 1001.0)
+        finally:
+            model.deriv_info, model.hot_info, model.market_info = o
+        self.assertEqual(a, b)                                       # через секунду тема та же: возрастов в ней нет, только моменты
+        self.assertEqual(a["heat"]["at"], 997)
+        self.assertNotIn("age_s", a["flow"]["syms"][0]["walls"][0])
+        self.assertTrue(a["flow"]["syms"][0]["walls"][0]["stable"])
 
     def test_plans_topic_lists_all_cards_in_order_with_counts(self):
         now = 1000.0

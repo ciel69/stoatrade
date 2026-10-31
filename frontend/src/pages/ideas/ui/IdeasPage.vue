@@ -2,8 +2,8 @@
 import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { defaultTab, TAB_LABEL, tabCount, useIdeaStore, type IdeaTab } from '@/entities/idea'
-import { IdeasAuto } from '@/widgets/ideas-auto'
-import { IdeasList } from '@/widgets/ideas-list'
+import { IdeasAuto } from '@/widgets/ideas/ideas-auto'
+import { IdeasList } from '@/widgets/ideas/ideas-list'
 import { UiSegment } from '@/shared/ui'
 
 /**

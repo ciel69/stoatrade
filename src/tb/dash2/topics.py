@@ -311,6 +311,31 @@ def ideas(root=None, now=None, mode=None):
             "pending": info.get("pending"), "costs": info.get("costs")}
 
 
+def _at(now, age):
+    """Момент обновления файла по его возрасту (возраст менялся бы каждую секунду, момент нет)."""
+    a = _num(age)
+    return round(now - a) if a is not None else None
+
+
+def market(root=None, now=None):
+    """Страница «Рынок»: тепловая карта (топ монет по обороту), ликвидации, ордерфлоу, горячие монеты сканера и отслеживаемые монеты фида. Источники те же, что у старой вкладки
+    (model.deriv_info, hot_info, market_info). Возрасты отдаём моментами `at`, у стен стакана убран возраст: тема меняется только вместе с данными."""
+    from tb.dash import model
+    now = time.time() if now is None else now
+    d = model.deriv_info(root, now)
+    heat, liq, flow = d["heat"], d["liq"], d["flow"]
+    hot = model.hot_info(root, now)
+    mk = model.market_info(root, now)
+    coins = [{k: v for k, v in r.items() if k != "age_s"} for r in model._market_rows(mk, None)]
+    return {"heat": {"available": bool(heat.get("available")), "at": _at(now, heat.get("age_s")), "rows": heat.get("rows") or []},
+            "liq": {"available": bool(liq.get("available")), "at": _at(now, liq.get("age_s")), "totals": liq.get("totals") or {}, "syms": liq.get("syms") or []},
+            "flow": {"available": bool(flow.get("available")), "at": _at(now, flow.get("age_s")), "xex_ok": flow.get("xex_ok"),
+                     "syms": [dict({k: v for k, v in s.items() if k not in ("age_s", "walls")}, walls=[{k: v for k, v in w.items() if k != "age_s"} for w in (s.get("walls") or []) if isinstance(w, dict)])
+                              for s in flow.get("syms") or []]},
+            "hot": {"available": bool(hot.get("available")), "at": _at(now, hot.get("age_s")), "warm": hot.get("warm"), "stats": hot.get("stats") or {}, "top": hot.get("top") or [], "blocked": hot.get("blocked") or []},
+            "coins": {"ok": bool(mk.get("ok")), "at": _at(now, mk.get("age_s")), "rows": coins}}
+
+
 def _round(x, n):
     return round(x, n) if isinstance(x, (int, float)) and not isinstance(x, bool) else x
 
@@ -424,8 +449,8 @@ def ctl(root=None, now=None):
             "banner": ({"level": banner.get("level"), "text": str(banner.get("text") or "")[:160]} if banner else None), "day": day}
 
 
-TOPICS = {"brain": brain, "ctl": ctl, "events": events}
-INTERVAL = {"decisions": 3.0, "models": 30.0, "ideas": 10.0}        # тема -> не чаще раза в N секунд (по умолчанию HEAVY_S сервера)
+TOPICS = {"brain": brain, "ctl": ctl, "events": events, "market": market}
+INTERVAL = {"decisions": 3.0, "models": 30.0, "ideas": 10.0, "market": 5.0}        # тема -> не чаще раза в N секунд (по умолчанию HEAVY_S сервера)
 MODE_TOPICS = {"home": home, "trades": trades, "decisions": decisions, "models": models, "plans": plans, "ideas": ideas}        # зависят от режима клиента: строятся для каждого режима, который сейчас смотрит хотя бы один клиент
 
 
