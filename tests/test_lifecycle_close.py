@@ -704,6 +704,7 @@ class TestEmergencyAndTime(unittest.TestCase):
         day = day_with(e)
         d = e.day()
         d["runner"] = {"pid": 1, "hb": e.t[0]}
+        d["mode"] = "testnet"                                                    # live/testnet: после рестарта торговля только по подтверждению
         days.save(e.root, d)
         e.w("runtime/platform/supervisor.json", {"pid": os.getpid(), "started": e.t[0] + 5})
         with mock.patch("tb.lifecycle.api._supervisor_started", return_value=e.t[0] + 5):
@@ -715,6 +716,27 @@ class TestEmergencyAndTime(unittest.TestCase):
         self.assertTrue(r["ok"])
         self.assertTrue(e.r("state/control/trading.json")["enabled"])
         self.assertEqual(api.resume_day(e.root, {}, e.t[0])["code"], "E_STATE")
+
+    def test_paper_restart_needs_no_resume(self):
+        """Paper: рестарт платформы не выключает флаг и не вешает баннер; день, уже помеченный needs_resume, снимается сам (баннер рестарта тоже)."""
+        e = _lc.LC(self)
+        day_with(e)
+        d = e.day()
+        d["runner"] = {"pid": 1, "hb": e.t[0]}
+        days.save(e.root, d)
+        with mock.patch("tb.lifecycle.api._supervisor_started", return_value=e.t[0] + 5):
+            api.tick(e.root, e.t[0] + 10)
+        self.assertFalse(e.day().get("needs_resume"))
+        self.assertTrue(e.r("state/control/trading.json")["enabled"])
+        d = e.day()
+        d["needs_resume"] = True                                                 # день, застрявший до исправления
+        days.save(e.root, d)
+        days.set_trading(e.root, False, d)
+        days.set_banner(e.root, "warn", api.RESTART_BANNER + ": торговля выключена до подтверждения (день %s)" % d["day_id"], d["day_id"])
+        api.tick(e.root, e.t[0] + 20)
+        self.assertFalse(e.day().get("needs_resume"))
+        self.assertTrue(e.r("state/control/trading.json")["enabled"])
+        self.assertIsNone(days.banner(e.root))
 
 
 class TestEdges(unittest.TestCase):

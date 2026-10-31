@@ -162,6 +162,9 @@ def notify_set(root, args, now):
 
 
 # ------------------------------------------------------------------ перезапуск, время, возобновление
+RESTART_BANNER = "Платформа перезапущена"
+
+
 def _supervisor_started(root):
     try:
         from tb.platform import status as ST
@@ -234,12 +237,20 @@ def _tick(root, now):
                 else:
                     threading.Thread(target=starter.run_start, args=(ctx, d), daemon=True).start()
     elif d["state"] == "running":
+        paper = d.get("mode") == "paper"          # paper: шлюз пускает планы без trading.json (registry.trading_allowed), подтверждать после рестарта нечего
+        if paper and d.get("needs_resume"):
+            d["needs_resume"] = False
+            days.set_trading(root, True, d)
+            b = days.banner(root)
+            if b and b.get("day_id") == d["day_id"] and str(b.get("text") or "").startswith(RESTART_BANNER):
+                days.clear_banner(root)
+            days.save(root, d)
         if d.get("runner", {}).get("pid") != _pid() and not d.get("needs_resume"):
             sup = _supervisor_started(root)
-            if sup is not None and sup > float(d.get("started") or 0):
+            if sup is not None and sup > float(d.get("started") or 0) and not paper:
                 d["needs_resume"] = True
                 days.set_trading(root, False, d)
-                days.set_banner(root, "warn", "Платформа перезапущена: торговля выключена до подтверждения (день %s)" % d["day_id"], d["day_id"])
+                days.set_banner(root, "warn", RESTART_BANNER + ": торговля выключена до подтверждения (день %s)" % d["day_id"], d["day_id"])
             d["runner"] = {"pid": _pid(), "hb": round(now, 1)}
             days.save(root, d)
         why = _auto_stop_reason(ctx, d, now)
