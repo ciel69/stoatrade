@@ -164,6 +164,7 @@ class TestRealLifecycleViaCtl(Base):
         self.assertEqual(self.e.ex.ops("close"), [("close", "PL-1-SOL-01")])
 
     def test_watch_auto_stop_by_time(self):
+        self.c.cfg["auto_roll_paper"] = False                                       # без автостарта следующего дня: платформа остаётся остановленной
         self.e.w("config/lifecycle.json", {"preflight": {"require_supervisor": False}, "max_day_hours": 1})
         day = self.start()
         self.e.brain.avail = False
@@ -174,6 +175,36 @@ class TestRealLifecycleViaCtl(Base):
         self.e.advance_t(3)
         self.c.watch()
         self.assertEqual(self.plat()["state"], "stopped")
+
+    def test_paper_day_rolls_over_after_auto_stop(self):
+        """Paper: день закрылся сам (max_day_hours) -> следующий стартует тем же путём, что «Старт» (без дыры между днями: 2026-10-30 01:05-04:37 NO_SESSION)."""
+        self.e.w("config/lifecycle.json", {"preflight": {"require_supervisor": False}, "max_day_hours": 1})
+        day = self.start()
+        self.e.brain.avail = False
+        self.e.advance_t(3700)
+        self.e.ready()                                                              # живой исполнитель и свежие данные к старту следующего дня
+        self.c.watch()
+        api._LAST_CLOSE.clear()
+        self.e.advance_t(3)
+        self.c.watch()
+        p = self.plat()
+        self.assertEqual((p["state"], p["mode"]), ("running", "paper"), p)
+        self.assertNotEqual(p["day_id"], day)
+        self.assertEqual(self.e.r("state/days/%s/day.json" % day)["state"], "stopped")
+        self.assertEqual(self.c.last[0]["action"], "day.start")
+
+    def test_paper_roll_rejected_shows_banner(self):
+        """Автостарт отклонён проверками (исполнитель молчит): платформа остановлена, баннер просит запустить день вручную."""
+        self.e.w("config/lifecycle.json", {"preflight": {"require_supervisor": False}, "max_day_hours": 1})
+        self.start()
+        self.e.brain.avail = False
+        self.e.advance_t(3700)
+        self.c.watch()
+        api._LAST_CLOSE.clear()
+        self.e.advance_t(3)
+        self.c.watch()
+        self.assertEqual(self.plat()["state"], "stopped")
+        self.assertIn("Автостарт", (self.c.banner or {}).get("text", ""))
 
     def test_kill_halts_day_and_writes_emergency_report(self):
         day = self.start()

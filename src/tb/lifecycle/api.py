@@ -271,7 +271,10 @@ def _tick(root, now):
         if exec_cfg.kill_state(root) is None:
             days.set_state(root, d, "stopped", now, code="kill_cleared")
     d = days.load(root, d["day_id"]) or d
-    return {"day_id": d["day_id"], "state": d["state"], "changed": d["state"] != before, "mode": d.get("mode"), "agent": d.get("agent")}
+    a = d.get("args") if isinstance(d.get("args"), dict) else {}
+    return {"day_id": d["day_id"], "state": d["state"], "changed": d["state"] != before, "mode": d.get("mode"), "agent": d.get("agent"),
+            "auto": (d.get("closing") or {}).get("auto_reason"),      # день закрылся сам (конец дня, max_day_hours, конец сессии): ctl может начать следующий
+            "args": {k: a.get(k) for k in ("mode", "session", "allow_amber", "team") if a.get(k) is not None}}
 
 
 def _pid():

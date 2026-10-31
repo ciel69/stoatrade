@@ -540,6 +540,30 @@ class Ctl(object):
             if st.get("mode") == "live":
                 ctlstate.note_live_stop(self.root, self.now())
             self.save_platform(state="stopped", since=now, mode="observe", day_id=None, step=None, live_waivers=[], trading=False)
+            if r.get("auto") and st.get("mode") == "paper" and self.cfg.get("auto_roll_paper", True):
+                self.auto_roll(r)
+
+    def auto_roll(self, r):
+        """Paper: день закрылся сам (конец дня, max_day_hours, конец сессии) -> следующий стартует тем же путём, что кнопка «Старт» (gates, исполнитель, план дня).
+        Без дыры между днями (2026-10-30 01:05-04:37 сессии не было, 13 входов на дне обвала BTC получили NO_SESSION). Мягкие предупреждения paper принимаются
+        автоматически (записаны в аудит, src=auto); жёсткий запрет (KILL, gates) -> баннер и без старта. Live и testnet только командой владельца."""
+        a = dict(r.get("args") or {}, mode="paper")
+        ok, _msg, args = protocol.validate_args("day.start", a)
+        if not ok:
+            return None
+        req = self.requirements("day.start", args)
+        if req["blocked"] or exec_cfg.kill_state(self.root) is not None:
+            self.banner = {"level": "warn", "text": "Paper-день закрыт по концу дня, следующий не запущен автоматически: есть запрет (см. проверки старта)", "day_report": None}
+            return None
+        args["accepted"] = sorted(w["id"] for w in req["warnings"])
+        cmd = {"id": "K-%s-%s" % (time.strftime("%Y%m%dT%H%M%S", time.gmtime(self.now())), uuid.uuid4().hex[:6]), "action": "day.start", "args": args, "src": "auto", "sess": None}
+        try:
+            res = self.h_day_start(cmd)
+        except Reject as e:
+            res = {"status": "rejected", "code": e.code}
+        if isinstance(res, dict) and res.get("status") in ("rejected", "failed"):
+            self.banner = {"level": "warn", "text": "Автостарт следующего paper-дня отклонён (%s): запустите день кнопкой «Старт»" % res.get("code"), "day_report": None}
+        return res
 
     def downgrade(self, bad):
         st = self.platform()
