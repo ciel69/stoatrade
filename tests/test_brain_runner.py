@@ -171,6 +171,17 @@ class ToolFirst(BrainBase):
         self.assertEqual(self.gw.tool_calls("stop_plan") + self.gw.tool_calls("close_plan"), [])
         self.assertEqual(self.get_job("J-1")["result"]["outcome"], "hold")
 
+    def test_extend_hold_tool_amends_max_hold(self):
+        """pm_extend_hold: явный инструмент продления срока (BTC 2026-10-31: на hold_expiring модель ответила pm_hold, таймер закрыл позицию в плюсе)."""
+        from fakes.fake_llm import Tool
+        r = self.runner({"ds-pro": [Tool("pm_extend_hold", {"minutes": 120, "reason": "OTHER"}), '{"why": "тезис цел | r +0.1 | риск без изменений"}']})
+        self.job("J-1")
+        r.step()
+        c = self.gw.tool_calls("amend_plan")
+        self.assertEqual(len(c), 1)
+        self.assertEqual((c[0]["args"]["patch"], c[0]["args"]["id"]), ({"lifecycle": {"max_hold_min": 120}}, PLAN))
+        self.assertIn("pm_extend_hold", [t["name"] for t in self.factory.clients["ds-pro"].calls[0]["req"].tools])
+
     def test_old_json_answer_still_accepted(self):
         r = self.runner({"ds-pro": [pm("move_stop", {"to": "be"}, why="ушла +1R")]})
         self.job("J-1")

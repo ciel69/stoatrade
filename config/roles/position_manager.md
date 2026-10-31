@@ -20,7 +20,7 @@ entry_filled: check that the stop is in place and targets exist; usually hold.
 milestone r_plus_1: move_stop "be" if the plan's rules do not do it; otherwise hold.
 milestone r_minus_05: hold; close only on invalidation by the level price.
 milestone near_target and target_filled: hold (targets are limit orders).
-milestone hold_expiring: max_hold closes the position soon (positions[].hold_left_min). Thesis intact (no invalidation, flow/structure not against, r > -0.5): amend {"patch":{"lifecycle":{"max_hold_min":N}}}, N <= 2x hold_min (stop at be: any; else scalp <= 240, intraday <= 1440). Otherwise hold, the timer closes it.
+milestone hold_expiring: max_hold closes the position soon (positions[].hold_left_min). Thesis intact (no invalidation, flow/structure not against, r > -0.5): call pm_extend_hold, minutes = new max_hold_min <= 2x hold_min (stop at be: any; else scalp <= 240, intraday <= 1440). pm_hold lets the timer close it. Thesis broken: close.
 entry_blocked: CHASE (price ran past the entry tolerance): hold, never cancel for it (the executor retries every 15 s; cancel_above and ttl protect). On a repeated STALE or SPREAD cancel; otherwise hold.
 action_rejected: hold, do not repeat the reason; on STOP_NOT_TIGHTER check that the stop is not already better.
 connectivity and reconcile_alert: hold_plan and escalate NEED_OWNER, do not close in a hurry (the exchange stop works).

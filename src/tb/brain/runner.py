@@ -51,6 +51,7 @@ def _spec(name, desc, props=None, req=()):
 
 
 PM_TOOL_DECISION = {"pm_hold": "hold", "pm_move_stop": "move_stop", "pm_partial_close": "partial_close", "pm_close": "close", "pm_cancel": "cancel", "pm_amend": "amend",
+                    "pm_extend_hold": "amend",
                     "pm_hold_plan": "hold_plan", "pm_release_plan": "release_plan", "pm_escalate": "escalate"}
 PM_TOOL_SPECS = [
     _spec("pm_hold", "Do nothing now (stops and rules work on their own)."),
@@ -59,11 +60,14 @@ PM_TOOL_SPECS = [
     _spec("pm_close", "Close the whole position at market."),
     _spec("pm_cancel", "Cancel the entry while there is no position."),
     _spec("pm_amend", "Patch the plan (tightening, targets, ttl; never size).", {"patch": {"type": "object"}}, ("patch",)),
+    _spec("pm_extend_hold", "Extend the holding time so the executor does not close the position at max_hold (on milestone hold_expiring). minutes: the new total "
+                            "max_hold_min (up to 2x hold_min; without stop at breakeven at most 240 for scalp, 1440 for intraday).",
+          {"minutes": {"type": "integer", "minimum": 1, "maximum": 43200}}, ("minutes",)),
     _spec("pm_hold_plan", "Pause your own plan."),
     _spec("pm_release_plan", "Lift your own pause."),
     _spec("pm_escalate", "Hand over to the owner.", {"reason_code": {"type": "string", "enum": ["SECRET_REQUEST", "NEED_OWNER", "DATA_GAP"]}}, ("reason_code",)),
 ]
-PM_TOOL_NOTE = ("\n\nTOOL MODE (this run). Act by calling exactly ONE tool: pm_hold, pm_move_stop, pm_partial_close, pm_close, pm_cancel, pm_amend, pm_hold_plan, pm_release_plan or pm_escalate "
+PM_TOOL_NOTE = ("\n\nTOOL MODE (this run). Act by calling exactly ONE tool: pm_hold, pm_move_stop, pm_partial_close, pm_close, pm_cancel, pm_amend, pm_extend_hold, pm_hold_plan, pm_release_plan or pm_escalate "
                 "(reason is a code from the enum; plan and rev are filled in by the platform). The tool is executed immediately. AFTER the tool result write one short JSON object "
                 "{\"why\": \"reason | fact | risk\"} with numbers from the brief: it is only the record of what you did. Do not output the pm/1 JSON. If a call is rejected with codes, "
                 "fix it with another call. After one action succeeded do not call another action tool.")
@@ -705,6 +709,11 @@ class Runner(object):
                     return {"ok": False, "errors": ["RANGE:args.to"]}
             elif d == "partial_close":
                 args["frac"] = a.get("frac")
+            elif name == "pm_extend_hold":
+                try:
+                    args["patch"] = {"lifecycle": {"max_hold_min": int(a.get("minutes"))}}      # продление срока удержания: правка плана, границы проверяет шлюз (E_HOLD_EXTEND)
+                except (TypeError, ValueError):
+                    return {"ok": False, "errors": ["RANGE:args.minutes"]}
             elif d == "amend":
                 args["patch"] = a.get("patch")
             elif d == "escalate":
