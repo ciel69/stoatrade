@@ -105,6 +105,8 @@ def event_class(ev, classes):
     t = ev.get("type")
     if t == "scanner_signal":
         k = str((ev.get("d") or {}).get("kind") or "")
+        if (ev.get("d") or {}).get("big") is True:
+            return 1                              # крупный рыночный сигнал (каскад ликвидаций 2026-10-29): как исполнение, вне лимита сигналов скана
         return 4 if k.startswith("idea_") else int(classes.get("scanner_signal", 3))
     return int(classes.get(t, 3))
 

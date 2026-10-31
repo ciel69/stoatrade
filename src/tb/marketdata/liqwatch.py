@@ -15,7 +15,10 @@ from collections import defaultdict, deque
 
 from tb import fsutil, paths
 
+# Громкость относительна монете: порог loud = max(min_usd*loud_mult, loud_turn_frac * средний оборот 5 мин); каскад от big_x порогов будит всегда, вне max_loud_per_hour
+# (2026-10-29: лимит 6/ч съели события BTC по 240 тыс., и каскады BTC 15 млн, ETH 7 млн, SOL 2.3 млн мозг не разбудили). Квота тратится на самые сильные относительно порога.
 DEFAULTS = {"enabled": True, "env": "mainnet", "min_usd": 100000.0, "window_s": 300.0, "cooldown_s": 900.0, "loud_mult": 2.0, "max_loud_per_hour": 6,
+            "loud_turn_frac": 0.1, "big_x": 10.0,
             "publish_s": 5.0, "resync_s": 600.0, "n_syms": 80, "keep_s": 86400.0, "cap_per_sym": 4000, "map_step_pct": 0.25, "map_top": 12}
 URLS = {"mainnet": "wss://stream.bybit.com/v5/public/linear", "testnet": "wss://stream-testnet.bybit.com/v5/public/linear"}
 SUFFIX = "USDT"
@@ -42,6 +45,7 @@ class LiqBook(object):
         self.last_event = {}                    # sym -> ts последнего каскада
         self.recent_loud = []
         self.last_px = {}
+        self.turn = {}                          # sym -> оборот 24 ч, USD (runtime/heat.json): от него порог громкости монеты
         self.n = 0
 
     def add(self, sym, side, size, px, t_s):
@@ -91,6 +95,12 @@ class LiqBook(object):
             out["n"] += 1
         return out
 
+    def loud_usd(self, sym):
+        """Порог громкого каскада монеты: не ниже min_usd*loud_mult и не ниже loud_turn_frac среднего 5-минутного оборота (для BTC сотни тысяч это шум)."""
+        c = self.cfg
+        t5 = (self.turn.get(sym) or 0.0) / 288.0
+        return max(c["min_usd"] * c["loud_mult"], c["loud_turn_frac"] * t5)
+
     def cascades(self, now):
         """Монеты, где за window_s односторонний объём >= min_usd и cooldown прошёл -> события liq_cascade (в порядке убывания объёма)."""
         c = self.cfg
@@ -102,15 +112,17 @@ class LiqBook(object):
             side = "long" if w["long"] >= w["short"] else "short"
             if w[side] >= c["min_usd"]:
                 cands.append((w[side], sym, side, w))
-        cands.sort(reverse=True)
+        cands.sort(key=lambda x: -x[0] / self.loud_usd(x[1]))           # квота громких сначала самым сильным относительно своего порога
         self.recent_loud = [t for t in self.recent_loud if now - t < 3600.0]
         out = []
         for usd, sym, side, w in cands:
             self.last_event[sym] = now
-            wake = usd >= c["min_usd"] * c["loud_mult"] and len(self.recent_loud) < c["max_loud_per_hour"]
+            thr = self.loud_usd(sym)
+            big = usd >= c["big_x"] * thr                                  # крупный каскад будит всегда
+            wake = big or (usd >= thr and len(self.recent_loud) < c["max_loud_per_hour"])
             if wake:
                 self.recent_loud.append(now)
-            out.append(make_event(sym, side, usd, w, self.last_px.get(sym), now, wake, c["window_s"]))
+            out.append(make_event(sym, side, usd, w, self.last_px.get(sym), now, wake, c["window_s"], big))
         return out
 
     def levels(self, sym, now, step_pct=None, top=None):
@@ -145,13 +157,23 @@ class LiqBook(object):
                 "syms": rows}
 
 
-def make_event(sym, side, usd, w, px, now, wake, window_s):
+def make_event(sym, side, usd, w, px, now, wake, window_s, big=False):
     """Событие скана liq_cascade. direction: куда вынуждены двигаться ликвидаторы (ликвидированы лонги -> продажи -> down); это описание уже случившегося, не прогноз."""
     d = "down" if side == "long" else "up"
-    return {"id": "%s-%s-liq" % (time.strftime("%d%H%M%S", time.gmtime(now)), sym), "wake": wake, "type": "liq_cascade", "sym": sym, "price": px, "score": round(usd / 1e5, 2),
-            "reasons": ["ликвидации %s %s за %d мин: %d USD (n=%d)" % ("лонгов" if side == "long" else "шортов", sym, int(window_s // 60), int(usd), w["n"])],
+    return {"id": "%s-%s-liq" % (time.strftime("%d%H%M%S", time.gmtime(now)), sym), "wake": wake, "big": bool(big), "type": "liq_cascade", "sym": sym, "price": px, "score": round(usd / 1e5, 2),
+            "reasons": ["%sликвидации %s %s за %d мин: %d USD (n=%d)" % ("КРУПНЫЙ каскад: " if big else "", "лонгов" if side == "long" else "шортов", sym, int(window_s // 60), int(usd), w["n"])],
             "direction": d, "liq_usd": round(usd), "liq_side": side, "ret_5m_pct": None, "range_5m_pct": None,
             "note": "информационно: не сигнал входа; каскад часто означает исчерпание движения или его продолжение: решает структура"}
+
+
+def read_turnover(root):
+    """runtime/heat.json -> {SYM: оборот 24 ч в USD} (поле turn_24h_musd); нет файла -> {}."""
+    try:
+        with open(paths.runtime("heat.json", root=root), encoding="utf-8") as f:
+            rows = (json.load(f) or {}).get("rows") or []
+    except (OSError, ValueError, AttributeError):
+        return {}
+    return {r["sym"]: float(r["turn_24h_musd"]) * 1e6 for r in rows if isinstance(r, dict) and isinstance(r.get("sym"), str) and _f(r.get("turn_24h_musd"))}
 
 
 def read_symbols(root, n):
@@ -198,6 +220,7 @@ class Runner(object):
 
     async def _resync(self, cl, now):
         want = set(read_symbols(self.root, int(self.cfg["n_syms"])))
+        self.book.turn.update(read_turnover(self.root))
         add, gone = sorted(want - self.subscribed), sorted(self.subscribed - want)
         for m in self._args(add, "subscribe") + self._args(gone, "unsubscribe"):
             await cl.send(m)

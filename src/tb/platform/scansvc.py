@@ -111,6 +111,8 @@ class Publisher(object):
         if isinstance(iid, str) and _IDEA.match(iid):
             d["idea"] = iid
         d["wake"] = wake
+        if r.get("big") is True:
+            d["big"] = True                       # крупное событие: диспетчер даёт класс 1, лимит сигналов сканера его не съедает
         return d, sym
 
     def publish(self, d, sym, now=None):

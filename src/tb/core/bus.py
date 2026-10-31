@@ -105,7 +105,7 @@ _RE_ROT = re.compile(r"^events-(\d{8})(?:-(\d+))?\.jsonl$")
 _ENUM_DIR = ("enum", ("up", "down", "long", "short"))
 D_FIELDS = {
     "scanner_signal": {"kind": ("enum", SCANNER_KINDS), "px": "num", "score": "num", "dir": _ENUM_DIR, "range_5m_pct": "num", "ret_5m_pct": "num",
-                       "turn_surge_5m": "num", "spread_bps": "num", "funding_pct": "num", "idea": "idea", "wake": "bool",
+                       "turn_surge_5m": "num", "spread_bps": "num", "funding_pct": "num", "idea": "idea", "wake": "bool", "big": "bool",      # big: крупное событие (каскад от big_x порогов монеты)
                        "oi_chg_15m_pct": "num", "oi_chg_1h_pct": "num", "liq_usd": "num", "liq_side": ("enum", ("long", "short")),
                        "cvd_pct": "num", "wall_usd": "num", "wall_dist_pct": "num", "wall_side": ("enum", ("bid", "ask")), "xex_bps": "num"},
     "plan_armed": {"rev": "num", "codes": "ids", "preview": "numdict"},
