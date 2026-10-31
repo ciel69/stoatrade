@@ -53,7 +53,8 @@ export function duration(seconds: number | null | undefined): string {
   const s = Math.max(0, Math.round(seconds))
   if (s < 60) return `${s} с`
   if (s < 3600) return `${Math.round(s / 60)} мин`
-  const h = Math.floor(s / 3600)
-  const m = Math.round((s % 3600) / 60)
+  const total = Math.round(s / 60)         // округляем минуты целиком, чтобы 3 ч 59,6 мин не стало «3 ч 60 мин»
+  const h = Math.floor(total / 60)
+  const m = total % 60
   return m ? `${h} ч ${m} мин` : `${h} ч`
 }

@@ -295,6 +295,26 @@ def plans(root=None, now=None, mode=None):
     return {"mode": mode, "counts": counts, "total": len(cards), "items": [_plan_row(c, now) for c in cards[:PLANS_PAGE_OUT]]}
 
 
+def ideas(root=None, now=None, mode=None):
+    """Страница «Идеи»: идеи агента (ждут уровня, стали планом, не сработали), авто-история сканера и статистика исходов. Источник тот же, что у старой вкладки (model.ideas_info);
+    возраст цены (меняется каждую секунду) не отдаём, срок идеи отдан моментом expires_epoch, поэтому тема молчит, пока не двинулась цена или не пришёл замер."""
+    from tb.dash import model
+    now = time.time() if now is None else now
+    info = model.ideas_info(root, now)
+    items = []
+    for i in info.get("items") or []:
+        r = {k: v for k, v in i.items() if k not in ("now_age_s", "now_src", "ttl_h")}
+        r["dist_level_pct"] = _round(r.get("dist_level_pct"), 3)
+        r["expires_epoch"] = round(r["expires_epoch"] / 30.0) * 30 if r.get("expires_epoch") is not None else None
+        items.append(r)
+    return {"mode": mode if mode in MODES else default_mode(root), "available": info.get("available"), "counts": info.get("counts"), "items": items, "stats": info.get("stats"), "auto_recent": info.get("auto_recent"),
+            "pending": info.get("pending"), "costs": info.get("costs")}
+
+
+def _round(x, n):
+    return round(x, n) if isinstance(x, (int, float)) and not isinstance(x, bool) else x
+
+
 def plan_detail(root, pid, now=None):
     """Подробности одного плана по запросу клиента (ревизии с различиями, решения, события, spec и runtime): -> {"id","ok","data"|"error"}."""
     from tb.dash import model, model2
@@ -405,8 +425,8 @@ def ctl(root=None, now=None):
 
 
 TOPICS = {"brain": brain, "ctl": ctl, "events": events}
-INTERVAL = {"decisions": 3.0, "models": 30.0}        # тема -> не чаще раза в N секунд (по умолчанию HEAVY_S сервера)
-MODE_TOPICS = {"home": home, "trades": trades, "decisions": decisions, "models": models, "plans": plans}        # зависят от режима клиента: строятся для каждого режима, который сейчас смотрит хотя бы один клиент
+INTERVAL = {"decisions": 3.0, "models": 30.0, "ideas": 10.0}        # тема -> не чаще раза в N секунд (по умолчанию HEAVY_S сервера)
+MODE_TOPICS = {"home": home, "trades": trades, "decisions": decisions, "models": models, "plans": plans, "ideas": ideas}        # зависят от режима клиента: строятся для каждого режима, который сейчас смотрит хотя бы один клиент
 
 
 def build(topic, root=None, now=None, mode=None):

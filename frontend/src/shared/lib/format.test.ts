@@ -37,5 +37,6 @@ describe('format', () => {
     expect(duration(720)).toBe('12 мин')
     expect(duration(7800)).toBe('2 ч 10 мин')
     expect(duration(7200)).toBe('2 ч')
+    expect(duration(3 * 3600 + 59 * 60 + 40)).toBe('4 ч')        // минуты переносятся в часы, а не «3 ч 60 мин»
   })
 })
