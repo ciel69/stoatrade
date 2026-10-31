@@ -70,6 +70,7 @@ MIN_SIZE_TTL_S = exec_cfg.MIN_SIZE_TTL_S
 
 
 QUIET_STOP_DENY = ("STOP_STEP", "STOP_INTERVAL", "STOP_RATE", "NOT_TIGHTER")      # отказы хода стопа по правилу, которые не пишутся в журнал на каждом тике
+SILENT_STOP_DENY = ("STOP_STEP", "STOP_INTERVAL", "NOT_TIGHTER")                   # из них не пишутся вообще (трейлу пока нечего двигать); STOP_RATE раз в 10 мин
 
 class Executor(object):
     def __init__(self, port, root=None, clock=time.time, sleep=None, profile="testnet", observe=False, cfg=None, keep_entries=False, venue_id="bybit"):
@@ -744,7 +745,10 @@ class Executor(object):
         spec, rt = p["spec"], p["rt"]
         key = (spec["id"], what, vd.code)
         now = self.clock()
-        if now - self.alerts.get(key, 0.0) >= 30.0 or vd.code in ("INVARIANT_VIOLATION",):
+        if what == "set_stop" and vd.code in SILENT_STOP_DENY:
+            return                                                      # «шаг мал / рано / не лучше» у трейла: обычное «пока нечего двигать», не отказ, в ленту не пишем
+        quiet = what == "set_stop" and vd.code in QUIET_STOP_DENY      # лимит ходов за час: полезный сигнал, но в ленту раз в 10 мин, а не раз в 30 с
+        if now - self.alerts.get(key, 0.0) >= (600.0 if quiet else 30.0) or vd.code in ("INVARIANT_VIOLATION",):
             self.alerts[key] = now
             self.decide("skip", what, plan=spec["id"], res={"ok": False, "code": vd.code}, why=("DENY:%s %s" % (vd.code, vd.detail))[:200])
             if (vd.code in G.WAKE_CODES and not entry) or vd.code == "E_BLACKOUT":      # E_BLACKOUT будит мозг и на входе (раз в 30 с на план)
