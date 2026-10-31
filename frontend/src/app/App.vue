@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ActionDialog } from '@/widgets/action-dialog'
 import { AppHeader } from '@/widgets/app-header'
 import { AppNav } from '@/widgets/app-nav'
 import { EventCloud } from '@/widgets/event-cloud'
@@ -18,6 +19,7 @@ import { StartDayButton } from '@/widgets/start-day'
     </div>
   </div>
   <EventCloud />
+  <ActionDialog />
 </template>
 
 <style scoped>

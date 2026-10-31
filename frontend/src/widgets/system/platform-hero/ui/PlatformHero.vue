@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useActionStore } from '@/entities/action'
 import { useControlStore, type PlatformState } from '@/entities/control'
 import { useSystemStore, verdict, worst } from '@/entities/system'
 import { UiChip } from '@/shared/ui'
@@ -11,6 +12,7 @@ import { UiChip } from '@/shared/ui'
  */
 const control = useControlStore()
 const sys = useSystemStore()
+const action = useActionStore()
 
 const STATE: Record<PlatformState, string> = { stopped: 'Платформа остановлена', starting: 'Платформа запускается', running: 'Платформа работает', closing: 'День завершается', halted: 'Аварийно остановлена', unknown: 'Состояние неизвестно' }
 const MODE: Record<string, string> = { observe: 'Наблюдение', paper: 'Бумага', testnet: 'Тестовая сеть', live: 'Реальные деньги' }
@@ -28,6 +30,18 @@ const sub = computed(() => {
   return [x.mode ? (MODE[x.mode] ?? x.mode) : null, x.day_id ? `день ${x.day_id}` : null, x.session ? `сессия «${x.session}»` : null, state.value === 'running' ? (x.trading ? 'торговля включена' : 'торговля выключена') : null].filter(Boolean).join(' · ')
 })
 const disabled = computed(() => btn.value.kind === 'unavailable' || btn.value.kind === 'blocked')
+
+/** Аварийная остановка: только при расширенном управлении (hello.full и kill.set в modes); если KILL уже активен, кнопки нет, а как снять, сказано в сводке выше. */
+const killShown = computed(() => action.can('kill.set') && !sys.snapshot?.kill && !control.ctl?.kill)
+/** Без закрытия позиций ctl считает остановку безрисковой: команда уходит сразу, итог придёт уведомлением. С закрытием откроется общий диалог рисков. */
+function stopNow(flatten: boolean): void {
+  action.run({
+    action: 'kill.set',
+    args: { flatten, reason: 'из дашборда' },
+    title: flatten ? 'Аварийная остановка с закрытием позиций' : 'Аварийная остановка',
+    what: flatten ? 'Торговля остановится, открытые позиции будут закрыты по рынку.' : 'Торговля остановится, открытые позиции остаются как есть.',
+  })
+}
 </script>
 
 <template>
@@ -41,6 +55,10 @@ const disabled = computed(() => btn.value.kind === 'unavailable' || btn.value.ki
       <div class="act">
         <button type="button" class="cta" :class="{ primary: btn.kind === 'start', stop: btn.kind === 'running' }" :disabled="disabled" @click="control.openDialog()">{{ LABEL[btn.kind] }}</button>
         <p v-if="btn.why" class="why">{{ btn.why }}</p>
+        <div v-if="killShown" class="kill">
+          <button type="button" class="stopbtn" @click="stopNow(false)">Аварийная остановка</button>
+          <button type="button" class="link" @click="stopNow(true)">С закрытием позиций</button>
+        </div>
       </div>
     </div>
 
@@ -73,6 +91,11 @@ const disabled = computed(() => btn.value.kind === 'unavailable' || btn.value.ki
 .cta:disabled { opacity: 0.5; cursor: not-allowed; }
 .cta:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .why { margin: 0; max-width: 260px; font-size: 12px; color: var(--muted); text-align: right; }
+.kill { display: flex; align-items: center; gap: var(--space-3); margin-top: var(--space-1); }
+.stopbtn, .link { padding: 4px 0; background: transparent; border: 0; font: inherit; font-size: 12px; cursor: pointer; transition: color var(--dur-fast) ease; }
+.stopbtn { color: var(--neg); font-weight: 600; }
+.link { color: var(--muted); text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--line2); }
+.stopbtn:focus-visible, .link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
 .verdict { margin: 0; font-size: 13px; color: var(--muted); }
 .verdict b { color: var(--text); }
 .note { margin: 0; padding: var(--space-3); border-radius: var(--radius-sm); background: var(--panel2); font-size: 12px; line-height: 1.5; }
@@ -84,6 +107,8 @@ const disabled = computed(() => btn.value.kind === 'unavailable' || btn.value.ki
 @media (hover: hover) and (pointer: fine) {
   .cta:hover:not(:disabled):not(.primary) { border-color: var(--muted); }
   .cta.primary:hover:not(:disabled) { filter: brightness(1.08); }
+  .link:hover { color: var(--text); }
+  .stopbtn:hover { text-decoration: underline; text-underline-offset: 3px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .cta:active:not(:disabled) { transform: none; }

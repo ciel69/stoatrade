@@ -39,6 +39,9 @@ export interface CtlHello {
   enabled: boolean
   csrf?: string
   reason?: 'no_key' | 'token_mode'
+  /** расширенное управление включено (auth.dash2_full); modes: какие действия доступны дашборду, плюс 'llmkey' */
+  full?: boolean
+  modes?: string[]
 }
 
 export interface ChallengeData {
