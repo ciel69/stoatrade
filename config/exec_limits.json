@@ -37,6 +37,8 @@
  "entry": {
   "max_price_age_s": 3,
   "max_chase_bps": 15,
+  "chase_atr_frac": 0.3,
+  "chase_rr_floor": 1.5,
   "no_confirm_max_size_mult": 0.5,
   "blocked_attempts_max": 3,
   "retry_after_s": 15,

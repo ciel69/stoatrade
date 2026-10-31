@@ -215,6 +215,19 @@ class LifecycleTest(unittest.TestCase):
         self.assertEqual((a[0]["type"], a[0]["reason"], a[0]["frac"]), ("close", "invalidation", 1.0))
         self.assertEqual(R.evaluate_lifecycle(p, managing_rt(), view(99.6), T0, LIM), [])
 
+    def test_chase_rr_floor_and_zone_tolerance(self):
+        """CHASE: дальше допуска вход разрешён, если RR от текущей цены после издержек >= chase_rr_floor; зона входа задаёт допуск не меньше половины своей ширины."""
+        lim = dict(LIM, entry=dict(LIM["entry"], chase_rr_floor=1.5), round_trip_fee_bps=18.0)
+        p = long_plan()                                                        # ref 100, стоп 99, цели 103/105
+        r = R.evaluate_entry(p, {"status": "armed"}, view(100.3), T0, lim)      # 30 б.п. > 15, RR ~2.4
+        self.assertTrue(r["fire"], r)
+        r = R.evaluate_entry(p, {"status": "armed"}, view(101.5), T0, lim)      # RR ~0.9
+        self.assertEqual(r["blocked"], "CHASE")
+        self.assertEqual(R.evaluate_entry(p, {"status": "armed"}, view(100.3), T0, LIM)["blocked"], "CHASE")     # без порога RR как раньше
+        z = long_plan()
+        z["entry"]["when"] = {"kind": "price_in_zone", "low": 99.7, "high": 100.3}
+        self.assertTrue(R.evaluate_entry(z, {"status": "armed"}, view(100.25), T0, LIM)["fire"])                 # 25 б.п. внутри зоны ±30 б.п.
+
     def test_max_hold(self):
         p = long_plan(lifecycle={"max_hold_min": 10})
         rt = managing_rt(entered=T0 - 600)

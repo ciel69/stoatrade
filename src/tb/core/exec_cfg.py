@@ -27,7 +27,7 @@ DEFAULTS = {
     "position_watch": {"enabled": True, "paper_only": True, "stalled_min": 15, "stalled_min_r": 0.5, "flow_turn_s": 30, "max_wakes_per_hour": 3},
     # WebSocket Trade API Bybit (executor/ws_trade.py): ордерные запросы (create/amend/cancel) по постоянному соединению. Выключено до проверки на testnet: ./tb exec wscheck
     "ws_trade": {"enabled": False, "request_timeout_s": 5.0, "ping_s": 20.0},
-    "entry": {"max_price_age_s": 3, "max_chase_bps": 15, "no_confirm_max_size_mult": 0.5, "blocked_attempts_max": 3,
+    "entry": {"max_price_age_s": 3, "max_chase_bps": 15, "chase_atr_frac": 0.3, "chase_rr_floor": 1.5, "no_confirm_max_size_mult": 0.5, "blocked_attempts_max": 3,
               "retry_after_s": 15, "fill_wait_s": 2, "max_level_distance_pct": 25},
     "protections": {"symbol_cooldown_after_stop_min": 30,
                     "pause_after_consecutive_stops": {"n": 2, "minutes": 60, "require_confirm": True},
@@ -55,7 +55,7 @@ SAFER = {
     "auto_protect.enabled": "bool_true", "auto_protect.be_r": "min", "auto_protect.trail_activate_r": "min", "auto_protect.trail_lock_frac": "max",
     "pyramid.min_gap_s": "max", "blackout.pre_min": "max", "stop_moves.max_moves_per_hour": "min", "paper.blackout_size_mult": "min",
     "entry.max_price_age_s": "min", "entry.max_chase_bps": "min", "entry.no_confirm_max_size_mult": "min",
-    "entry.blocked_attempts_max": "min", "entry.max_level_distance_pct": "min",
+    "entry.blocked_attempts_max": "min", "entry.max_level_distance_pct": "min", "entry.chase_atr_frac": "min", "entry.chase_rr_floor": "max",
     "protections.symbol_cooldown_after_stop_min": "max", "protections.pause_after_consecutive_stops.n": "min",
     "protections.pause_after_consecutive_stops.minutes": "max", "protections.pause_after_consecutive_stops.require_confirm": "bool_true",
     "protections.max_entries_per_hour": "min", "protections.max_entries_per_day": "min", "protections.max_plans_active": "min",

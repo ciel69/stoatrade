@@ -118,6 +118,42 @@ def r_now(rt, price):
     return C.r_multiple(p, price) if p else None
 
 
+def chase_tolerance_bps(bps, when, view, px, limits):
+    """Допуск входа вдогонку (б.п.): не меньше базового, не меньше entry.chase_atr_frac ATR(5м) монеты (15 б.п. для альта с ATR 0.5-1% меньше шума)
+    и для входа зоной (price_in_zone: momentum_chase и вход без подтверждения) не меньше половины ширины зоны."""
+    out = bps
+    frac = _f(_lim(limits, "entry", "chase_atr_frac", 0.0)) or 0.0
+    book = getattr(view, "book", None)
+    if frac > 0 and px and book is not None:
+        try:
+            a5 = _f(book.atr(5))
+        except Exception:
+            a5 = None
+        if a5:
+            out = max(out, frac * a5 / px * 1e4)
+    if isinstance(when, dict) and when.get("kind") == "price_in_zone":
+        lo, hi = _f(when.get("low")), _f(when.get("high"))
+        if lo and hi and hi > lo:
+            out = max(out, (hi - lo) / 2.0 / ((hi + lo) / 2.0) * 1e4)
+    return out
+
+
+def chase_rr_ok(plan, px, side, limits):
+    """Цена ушла дальше допуска, но сделка всё ещё выгодна: цена не за стопом, первая цель не достигнута, RR от текущей цены по средней цели
+    после издержек круга не ниже entry.chase_rr_floor -> входить без ожидания отката. Нет порога (0) -> только допуск."""
+    need = _f(_lim(limits, "entry", "chase_rr_floor", 0.0)) or 0.0
+    stop = _f((plan.get("stop") or {}).get("price"))
+    tps = [_f(t.get("price")) for t in plan.get("targets") or [] if isinstance(t, dict) and _f(t.get("price"))]
+    if need <= 0 or not stop or not tps or not px:
+        return False
+    risk = side * (px - stop)
+    if risk <= 0 or side * (tps[0] - px) <= 0:
+        return False
+    reward = side * (sum(tps) / len(tps) - px)
+    cost = float((limits or {}).get("round_trip_fee_bps", DEFAULT_BE_ROUND_TRIP_BPS)) / 1e4 * px      # издержки круга в цене
+    return (reward - cost) / (risk + cost) >= need - _EPS
+
+
 def _first_level(cond):
     """Первый встретившийся уровень в дереве условия (опорная цена для chase)."""
     if not isinstance(cond, dict):
@@ -188,9 +224,9 @@ def evaluate_entry(plan, rt, view, now, limits):
             ref = _f(entry.get("ref_price")) or _f(ent.get("ref_px")) or _first_level(when)
             cap = float(_lim(limits, "entry", "max_chase_bps", 15))
             mine = _f((entry.get("valid") or {}).get("max_chase_bps"))
-            bps = min(cap, mine) if mine is not None else cap
+            bps = chase_tolerance_bps(min(cap, mine) if mine is not None else cap, when, view, px, limits)
             side = _side(plan)
-            if ref and ref > 0 and side is not None and side * (px - ref) / ref * 1e4 > bps + _EPS:
+            if ref and ref > 0 and side is not None and side * (px - ref) / ref * 1e4 > bps + _EPS and not chase_rr_ok(plan, px, side, limits):
                 blocked = "CHASE"
     res["blocked"] = blocked
     res["fire"] = blocked is None
