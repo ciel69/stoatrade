@@ -851,7 +851,11 @@ def risk_room(root, trades, prof, port, active, now):
             sess_cfg = session_cfg(active.get("type"), prof)
         except (KeyError, TypeError):
             sess_cfg = {}
-        rows_s = [t for t in trades if t.get("session") == active["id"]]
+        if paper_day:          # paper-сделки исполнитель к сессии не привязывает (session только у live): справочно бумажные сделки с начала сессии, иначе полоса стоит на месте
+            st0 = num(active.get("start"), 0.0)
+            rows_s = [t for t in live if t.get("session") == active["id"] or (not t.get("session") and (t.get("ts_open_epoch") or 0.0) >= st0)]
+        else:
+            rows_s = [t for t in trades if t.get("session") == active["id"]]
         s_closed = [t for t in rows_s if t["status"] == "closed"]
         s_pend = [r for r in _pending_live_all(root) if r.get("session") == active["id"]]
         s_real = sum(t.get("pnl_usdt") or 0.0 for t in s_closed)
