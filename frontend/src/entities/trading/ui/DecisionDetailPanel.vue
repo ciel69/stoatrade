@@ -53,7 +53,7 @@ const rows = computed<Array<[string, string]>>(() => {
       <span v-if="decision.plan" class="plan" :title="decision.plan">{{ planShort(decision.plan) }}</span>
     </template>
     <p v-if="decision.why" class="why">{{ decision.why }}</p>
-    <RouterLink v-if="decision.brief_id" class="brief" :to="{ path: '/brief', query: { id: decision.brief_id } }">
+    <RouterLink v-if="decision.brief_id" class="brief" :to="{ path: '/brain/brief', query: { id: decision.brief_id } }">
       <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h9l4 4v14H6zM9 12h7M9 16h7M14 3v5h5" /></svg>
       <span>Досье, на которое смотрел мозг</span><b class="bid">{{ decision.brief_id }}</b>
     </RouterLink>

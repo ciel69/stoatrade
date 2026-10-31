@@ -2,7 +2,7 @@
 import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { UiLogo } from '@/shared/ui'
-import { NAV_GROUPS } from '../model/nav'
+import { NAV_GROUPS, isActive } from '@/shared/config'
 
 /**
  * Боковая колонка разделов. Развёрнутая: значок и название, группы с подписями; свёрнутая: только значки (название в подсказке и для скринридера), состояние помнится в браузере.
@@ -52,7 +52,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
     <nav class="groups">
       <div v-for="g in NAV_GROUPS" :key="g.id" class="group">
         <p v-if="NAV_GROUPS.length > 1" class="cap">{{ g.label }}</p>
-        <RouterLink v-for="it in g.items" :key="it.to" :to="it.to" class="item" :style="{ '--zc': `var(--zone-${it.zone})` }" :title="collapsed ? it.label : undefined" :aria-label="collapsed ? it.label : undefined">
+        <RouterLink v-for="it in g.items" :key="it.to" :to="it.to" class="item" :class="{ active: isActive(it, route.path) }" :aria-current="isActive(it, route.path) ? 'page' : undefined" :style="{ '--zc': `var(--zone-${it.zone})` }" :title="collapsed ? it.label : undefined" :aria-label="collapsed ? it.label : undefined">
           <span class="tile"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="it.icon" /></svg></span>
           <span class="label">{{ it.label }}</span>
         </RouterLink>
@@ -86,11 +86,11 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
 .item { --zc: var(--muted); display: flex; align-items: center; gap: 12px; padding: 8px; border-radius: 12px; color: var(--muted); font-size: 14px; font-weight: 600; text-decoration: none; white-space: nowrap; transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease; }
 .tile { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 9px; color: var(--zc); background: color-mix(in srgb, var(--zc) 16%, transparent); transition: background-color var(--dur-enter) var(--ease-out), color var(--dur-enter) var(--ease-out); }
 .label { transition: opacity var(--dur-enter) var(--ease-out); }
-.item.router-link-exact-active { color: var(--text); background: color-mix(in srgb, var(--zc) 13%, var(--panel)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--zc) 30%, transparent); }
-.item.router-link-exact-active .tile { background: var(--zc); color: var(--bg); }
+.item.active { color: var(--text); background: color-mix(in srgb, var(--zc) 13%, var(--panel)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--zc) 30%, transparent); }
+.item.active .tile { background: var(--zc); color: var(--bg); }
 .item:focus-visible, .icon-btn:focus-visible, .burger:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 @media (hover: hover) and (pointer: fine) {
-  .item:not(.router-link-exact-active):hover { color: var(--text); background: var(--panel2); }
+  .item:not(.active):hover { color: var(--text); background: var(--panel2); }
   .icon-btn:hover { color: var(--text); }
 }
 /* свёрнутая: подписи не только невидимы, но и не занимают места, иначе пункт шире колонки и его рамка обрезается */

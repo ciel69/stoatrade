@@ -134,7 +134,7 @@ const kvLine = (d: Record<string, unknown> | undefined) => Object.entries(d ?? {
           <div class="line">
             <router-link class="sym" :to="{ path: '/market', query: { coin: p.sym } }">{{ p.sym }}</router-link>
             <UiChip>{{ p.side === 'long' ? 'лонг' : 'шорт' }}</UiChip>
-            <router-link v-if="p.plan" class="lnk" :to="{ path: '/plans', query: { plan: p.plan } }">{{ planShort(p.plan) }}</router-link>
+            <router-link v-if="p.plan" class="lnk" :to="{ path: '/trading/plans', query: { plan: p.plan } }">{{ planShort(p.plan) }}</router-link>
             <b class="r" :class="tone(p.r)">{{ p.r != null ? signed(p.r) + 'R' : '–' }}</b>
           </div>
           <div v-if="routeOf(p)" class="rt">
@@ -159,7 +159,7 @@ const kvLine = (d: Record<string, unknown> | undefined) => Object.entries(d ?? {
             <router-link class="sym" :to="{ path: '/market', query: { coin: p.sym } }">{{ p.sym }}</router-link>
             <UiChip>{{ p.side === 'long' ? 'лонг' : 'шорт' }}</UiChip>
             <UiChip v-if="p.status">{{ p.status }}</UiChip>
-            <router-link class="lnk" :to="{ path: '/plans', query: { plan: p.id } }">{{ planShort(p.id) }}{{ p.rev != null ? ' r' + p.rev : '' }}</router-link>
+            <router-link class="lnk" :to="{ path: '/trading/plans', query: { plan: p.id } }">{{ planShort(p.id) }}{{ p.rev != null ? ' r' + p.rev : '' }}</router-link>
             <span v-if="p.dist_pct != null" class="muted end">до уровня {{ fixed(p.dist_pct) }}%</span>
           </div>
           <p v-if="p.entry" class="meta">{{ p.entry }}{{ p.ttl_left_min != null ? ` · TTL ${p.ttl_left_min} мин` : '' }}</p>
@@ -262,7 +262,7 @@ const kvLine = (d: Record<string, unknown> | undefined) => Object.entries(d ?? {
       <h3>Идеи</h3>
       <ul class="list">
         <li v-for="i in ideas" :key="i.id" class="line">
-          <router-link class="lnk" :to="{ path: '/ideas', query: { idea: i.id } }">{{ i.id }}</router-link>
+          <router-link class="lnk" :to="{ path: '/trading/ideas', query: { idea: i.id } }">{{ i.id }}</router-link>
           <router-link class="sym" :to="{ path: '/market', query: { coin: i.sym } }">{{ i.sym }}</router-link>
           <span class="muted">{{ i.side }} · уровень {{ price(i.level) }}{{ i.dist_pct != null ? ` (${fixed(i.dist_pct, 1)}%)` : '' }} · {{ i.status ?? '' }}{{ i.age_h != null ? ` · ${fixed(i.age_h, 1)} ч` : '' }}</span>
         </li>

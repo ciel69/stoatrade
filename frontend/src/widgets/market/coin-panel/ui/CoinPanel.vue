@@ -72,14 +72,16 @@ const regime = computed(() => (feed.value?.regime && feed.value.regime !== 'unkn
         <div><dt>Открытый интерес</dt><dd>{{ heat.oi_musd != null ? fixed(heat.oi_musd, 1) + ' млн' : '–' }}</dd></div>
       </dl>
 
+      <RouterLink class="news-link" :to="{ path: '/market/news', query: { coin: key } }">Новости по {{ key }}</RouterLink>
+
       <section v-if="plans.length || myIdeas.length" class="sec">
         <h4>План и идеи мозга</h4>
         <ul class="links">
           <li v-for="p in plans" :key="p.id">
-            <RouterLink :to="{ path: '/plans', query: { plan: p.id } }"><UiChip tone="accent">план</UiChip> {{ p.side === 'long' ? 'лонг' : 'шорт' }}<template v-if="p.dist_pct != null"> · до входа {{ fixed(p.dist_pct) }}%</template> · {{ p.col === 'in_trade' ? 'в сделке' : p.col === 'waiting' ? 'ждёт входа' : 'далеко' }}</RouterLink>
+            <RouterLink :to="{ path: '/trading/plans', query: { plan: p.id } }"><UiChip tone="accent">план</UiChip> {{ p.side === 'long' ? 'лонг' : 'шорт' }}<template v-if="p.dist_pct != null"> · до входа {{ fixed(p.dist_pct) }}%</template> · {{ p.col === 'in_trade' ? 'в сделке' : p.col === 'waiting' ? 'ждёт входа' : 'далеко' }}</RouterLink>
           </li>
           <li v-for="i in myIdeas" :key="i.id">
-            <RouterLink :to="{ path: '/ideas' }"><UiChip>идея</UiChip> {{ i.side === 'long' ? 'лонг' : 'шорт' }}<template v-if="i.level != null"> от {{ price(i.level) }}</template><template v-if="i.dist_level_pct != null"> · цена {{ signed(i.dist_level_pct) }}% от уровня</template></RouterLink>
+            <RouterLink :to="{ path: '/trading/ideas' }"><UiChip>идея</UiChip> {{ i.side === 'long' ? 'лонг' : 'шорт' }}<template v-if="i.level != null"> от {{ price(i.level) }}</template><template v-if="i.dist_level_pct != null"> · цена {{ signed(i.dist_level_pct) }}% от уровня</template></RouterLink>
           </li>
         </ul>
       </section>
@@ -163,6 +165,8 @@ dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; min-width
 .muted { margin: 0; font-size: 12px; color: var(--muted); }
 .up { color: var(--pos); }
 .down { color: var(--neg); }
+.news-link { justify-self: start; font-size: 12px; color: var(--accent); text-decoration: none; }
+.news-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .links { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 12px; }
 .links a { color: var(--text); text-decoration: none; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .links a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

@@ -2,6 +2,7 @@
 import { AppHeader } from '@/widgets/app-header'
 import { AppNav } from '@/widgets/app-nav'
 import { EventCloud } from '@/widgets/event-cloud'
+import { SectionTabs } from '@/widgets/section-tabs'
 import { StartDayButton } from '@/widgets/start-day'
 </script>
 
@@ -12,6 +13,7 @@ import { StartDayButton } from '@/widgets/start-day'
     </AppNav>
     <div class="col">
       <AppHeader />
+      <SectionTabs />
       <RouterView />
     </div>
   </div>
