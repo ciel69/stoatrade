@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { UiLogo } from '@/shared/ui'
+import { UiLogo, UiWordmark } from '@/shared/ui'
 import { NAV_GROUPS, isActive } from '@/shared/config'
 
 /**
@@ -40,7 +40,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
   <aside id="app-nav" class="nav" :class="{ collapsed, drawer }" aria-label="Разделы">
     <div class="brand">
       <UiLogo :size="30" />
-      <span class="name">open-trader</span>
+      <UiWordmark class="name" :height="17" />
       <button v-if="drawer" ref="closeBtn" type="button" class="icon-btn close" aria-label="Закрыть разделы" @click="drawer = false">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
       </button>
@@ -77,7 +77,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
 .nav.collapsed .item { width: 48px; box-sizing: border-box; }
 .brand { display: flex; align-items: center; gap: 10px; min-height: 34px; padding: 0 8px; }
 .brand :deep(svg) { flex: none; }
-.name { font-size: 15px; font-weight: 650; letter-spacing: -0.01em; white-space: nowrap; transition: opacity var(--dur-enter) var(--ease-out); }
+.name { color: var(--text); white-space: nowrap; transition: opacity var(--dur-enter) var(--ease-out); }
 .action { display: grid; }
 .action:empty { display: none; }
 .groups { display: grid; gap: var(--space-4); flex: 1 1 auto; align-content: start; overflow-y: auto; overflow-x: hidden; padding: 3px; margin: -3px; }        /* поле под обводку фокуса: иначе её режет overflow */

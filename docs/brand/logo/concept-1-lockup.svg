@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 214 34" role="img" aria-label="Open Trader">
+  <g transform="translate(0 1)" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round">
+  <!-- Концепция 1 «Проём»: буква O разомкнута и сдвинута половинами вверх-вправо (открытость + пробой уровня) -->
+  <path d="M13.5 10A8.5 8.5 0 0 0 13.5 27"/>
+  <path d="M18.5 5A8.5 8.5 0 0 1 18.5 22"/>
+  </g>
+  <g transform="translate(42 2)" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Надпись «Open Trader»: собственная геометрическая монолиния, контуры SVG, шрифт не нужен -->
+    <circle cx="10.3" cy="15" r="9"/>
+    <path d="M25.1 13V30"/><circle cx="30.6" cy="18.5" r="5.5"/>
+    <path d="M41.9 18.5H52.9A5.5 5.5 0 1 0 51.61 22.04"/>
+    <path d="M58.7 13V24M58.7 18.5A5.5 5.5 0 0 1 69.7 18.5V24"/>
+    <path d="M83.7 6H97.7M90.7 6V24"/>
+    <path d="M102.2 13V24M102.2 18.5A5.5 5.5 0 0 1 107.7 13"/>
+    <circle cx="118.2" cy="18.5" r="5.5"/><path d="M123.7 13V24"/>
+    <circle cx="135" cy="18.5" r="5.5"/><path d="M140.5 6V24"/>
+    <path d="M146.3 18.5H157.3A5.5 5.5 0 1 0 156.01 22.04"/>
+    <path d="M163.1 13V24M163.1 18.5A5.5 5.5 0 0 1 168.6 13"/>
+  </g>
+</svg>
