@@ -15,7 +15,8 @@ export interface Money {
   day_limit: number | null
   pnl_today: number
   trades_today: number
-  open_pnl: number | null
+  pnl_parts?: number | null                   // частичные фиксации открытых позиций сегодня (уже входят в pnl_today)
+  open_pnl: number | null                     // только плавающая прибыль открытых позиций (зафиксированные части в pnl_today)
   equity: number | null
 }
 

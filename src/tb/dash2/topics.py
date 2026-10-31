@@ -187,6 +187,24 @@ def _state(root, mode, now):
     return s
 
 
+def _parts_pnl(open_trades, start):
+    """Частичные закрытия открытых сделок (model: t.parts {ts, pnl, fee}) -> (за сегодня с start, всего, число сегодня), за вычетом комиссий частей.
+    Как на бирже: каждое частичное закрытие уже реализованный результат и отдельная завершённая сделка."""
+    from tb.dash import model
+    today = total = 0.0
+    n = 0
+    for t in open_trades or []:
+        for x in t.get("parts") or []:
+            v = (_num(x.get("pnl")) or 0.0) - (_num(x.get("fee")) or 0.0)
+            total += v
+            ts = x.get("ts")
+            te = ts if isinstance(ts, (int, float)) else model.parse_ts(ts)
+            if te is None or te >= start:
+                today += v
+                n += 1
+    return today, total, n
+
+
 def _txt(x, n):
     return x[:n] if isinstance(x, str) and x else None
 
@@ -600,7 +618,10 @@ def home(root=None, now=None, mode=None):
     daily = rows.get("daily") or {}
     start = ((s.get("summary") or {}).get("today") or {}).get("start") or 0
     today = [t for t in s.get("history") or [] if (t.get("ts_close_epoch") or 0) >= start]
-    pnl_today = round(sum(_num(t.get("pnl_usdt")) or 0.0 for t in today), 4)
+    parts_today, parts_all, parts_n = _parts_pnl(s.get("open_trades"), start)
+    pnl_today = round(sum(_num(t.get("pnl_usdt")) or 0.0 for t in today) + parts_today, 4)      # закрытые сделки + частичные фиксации открытых позиций сегодня
+    open_pnl = _num(s.get("open_pnl"))
+    open_float = round(open_pnl - parts_all, 4) if open_pnl is not None else None             # только плавающая: зафиксированные части уже в «за день»
     trades = {t.get("id"): t for t in s.get("open_trades") or []}
     vps = (s.get("v2") or {}).get("positions") or []
     pos, seen = [], set()
@@ -618,8 +639,8 @@ def home(root=None, now=None, mode=None):
              for i in list(strip) + list(status.get("items") or []) if i.get("id") in ("exec", "net", "scanner", "feed", "context", "session")]
     return {"mode": mode, "modes": list(MODES),
             "platform": {"state": plat.get("state"), "mode": plat.get("mode"), "trading": plat.get("trading"), "level": status.get("level"), "items": items},
-            "money": {"under_risk": _num(daily.get("open_risk")), "day_room": _num(daily.get("room")), "day_limit": _num(daily.get("limit")), "pnl_today": pnl_today, "trades_today": len(today),
-                       "open_pnl": _num(s.get("open_pnl")), "equity": _num((s.get("account") or {}).get("equity"))},
+            "money": {"under_risk": _num(daily.get("open_risk")), "day_room": _num(daily.get("room")), "day_limit": _num(daily.get("limit")), "pnl_today": pnl_today, "trades_today": len(today) + parts_n,      # частичное закрытие = отдельная завершённая сделка (как closed PnL биржи)
+                       "pnl_parts": round(parts_today, 4) if parts_today else None, "open_pnl": open_float, "equity": _num((s.get("account") or {}).get("equity"))},
             "limits": [{"id": r.get("id"), "label": r.get("label"), "limit": _num(r.get("limit")), "used": _num(r.get("used")), "room": _num(r.get("room")), "unit": r.get("unit"), "level": r.get("level")}
                        for r in (rr.get("rows") or []) if isinstance(r, dict)],
             "limits_paper": bool(rr.get("paper")), "allowed": rr.get("allowed"), "positions": pos[:POSITIONS_OUT], "positions_total": len(pos),

@@ -33,6 +33,18 @@ class LastBar(unittest.TestCase):
         self.assertIsNone(model2.last_bar(trig(), old, NOW))                                 # свеча получасовой давности: уже не про текущий момент
 
 
+class PartialFills(unittest.TestCase):
+    def test_parts_count_as_closed_today(self):
+        """Частичное закрытие открытой сделки: результат за вычетом комиссии в «за день» (если сегодня) и отдельная сделка; плавающая без него."""
+        from tb.dash2 import topics
+        start = NOW - NOW % 86400
+        trades = [{"parts": [{"ts": start + 60, "pnl": 1.847, "fee": 0.054}, {"ts": start - 3600, "pnl": 0.5, "fee": 0.0}]}, {"parts": []}, {}]
+        today, total, n = topics._parts_pnl(trades, start)
+        self.assertAlmostEqual(today, 1.793)
+        self.assertAlmostEqual(total, 2.293)
+        self.assertEqual(n, 1)
+
+
 class ExecutorLevels(unittest.TestCase):
     def test_levels_carry_last_closed_5m(self):
         from tb.executor import mdsvc

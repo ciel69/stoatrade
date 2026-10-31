@@ -24,7 +24,7 @@ const pnlTone = computed(() => ((m.value?.pnl_today ?? 0) > 0 ? 'up' : (m.value?
     </div>
     <div class="fig">
       <div class="v" :class="pnlTone">{{ signed(m?.pnl_today) }}<small> USDT</small></div>
-      <div class="c">за день<template v-if="m"> · сделок {{ m.trades_today }}</template><template v-if="m?.open_pnl != null"> · открытые {{ signed(m.open_pnl) }}</template></div>
+      <div class="c">за день<template v-if="m"> · сделок {{ m.trades_today }}</template><template v-if="m?.pnl_parts"> · из них частично {{ signed(m.pnl_parts) }}</template><template v-if="m?.open_pnl != null"> · открытые {{ signed(m.open_pnl) }}</template></div>
     </div>
     <div class="fig eq">
       <div class="v">{{ fixed(m?.equity) }}<small> USDT</small></div>
