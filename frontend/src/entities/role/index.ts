@@ -1,4 +1,8 @@
 export { useRoleStore } from './model/store'
-export type { RoleModel, RoleParams, RoleRow, RolesSnapshot } from './model/types'
+export type { ExchangeRow, ModelPrice, ProviderModel, ProviderRow, RoleModel, RoleParams, RoleRow, RolesSnapshot, SwapRow } from './model/types'
 export { ROLE_INFO, groups, issuesOf, pct, placeOf, roleLabel, summary } from './lib/role'
 export type { RoleIssue } from './lib/role'
+export {
+  connectSummary, credText, credsText, ctxText, exchangeStatus, limitsText, modeText, modelsText, perMillion, permsWarning, plural, priceText, providerIssues, rolesUsing, swapBy, swapText, swapWhen, swapsLine,
+} from './lib/connect'
+export type { ConnectIssue } from './lib/connect'

@@ -55,9 +55,11 @@ describe('LiveSocket', () => {
     ws.push('ideas', { n: 1 })
     ws.push('ideas', { n: 2 }, 2)
     ws.push('plan_detail', { id: 'P' })
+    ws.push('usage_detail', { days: 1 })
     const got: unknown[] = []
     s.subscribe('ideas', (m) => got.push(m.data))
     s.subscribe('plan_detail', (m) => got.push(m.data))
+    s.subscribe('usage_detail', (m) => got.push(m.data))
     expect(got).toEqual([{ n: 2 }])
     ws.push('ideas', { n: 3 }, 3)
     expect(got).toEqual([{ n: 2 }, { n: 3 }])

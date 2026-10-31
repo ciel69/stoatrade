@@ -31,8 +31,74 @@ export interface RoleRow {
   day: { calls: N; err_rate: N; fmt_err_rate: N; fallbacks: N; p50_ms: N; usd: N }
 }
 
+/** Цена модели за миллион токенов: вход мимо кэша, вход из кэша, выход. null: цена не задана (локальная). */
+export interface ModelPrice {
+  in_miss: N
+  in_hit: N
+  out: N
+}
+
+export interface ProviderModel {
+  id: string
+  name: string
+  ctx: N
+  tools: boolean | null
+  tags: string[]
+  price: ModelPrice | null
+}
+
+/** Провайдер LLM. Ключа в данных нет, только факт: нужен ли, есть ли, безопасны ли права файла (true/false/null: неизвестно). */
+export interface ProviderRow {
+  id: string
+  name: string
+  adapter: string | null
+  enabled: boolean
+  local: boolean
+  verified: boolean | string | null
+  note: string | null
+  error: string | null
+  base_host: string | null
+  cred: { needed: boolean; present: boolean; perms_ok: boolean | null; env: string | null }
+  limits: { concurrent: N; rpm: N; day_usd: N; hour_usd: N; day_toks: N }
+  models: ProviderModel[]
+  profiles: string[]
+}
+
+/** Биржа: разрешена владельцем, активна ли, реализован ли адаптер, режим, жив ли исполнитель, какие виды ключей настроены (read, trade, testnet). */
+export interface ExchangeRow {
+  id: string
+  name: string
+  enabled: boolean
+  mode: string | null
+  implemented: boolean
+  active: boolean
+  allowed: boolean
+  note: string | null
+  alive: boolean | null
+  creds: string[]
+  max_open_positions: N
+}
+
+/** Запись журнала смен назначений (новые первыми). ts в секундах. */
+export interface SwapRow {
+  seq: number
+  ts: number
+  rev: N
+  prev_rev: N
+  kind: string
+  tier: string | null
+  by: string | null
+  target: string[]
+  from: string | null
+  to: string | null
+}
+
 /** Тема `settings`: роли мозга и их модели (источник: llm.dashapi, только чтение). */
 export interface RolesSnapshot {
+  provider_list?: ProviderRow[]
+  exchange_list?: ExchangeRow[]
+  swaps?: SwapRow[]
+  revisions?: number | null
   mode: string | null
   rev: number | null
   live_team: string | null
