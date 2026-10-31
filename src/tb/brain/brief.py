@@ -262,7 +262,7 @@ def _b_experiments(c):
     return {"min_n": expstats.MIN_N, "confirmed": conf[:EXPERIMENTS_TOP], "open": opn[:EXPERIMENTS_TOP]}
 
 
-_DAY_SETUPS = ("level_reclaim", "level_reject", "sweep_reject", "breakout_retest", "range_fade", "trend_pullback", "none")   # как validate.SETUPS (проверяет тест)
+_DAY_SETUPS = ("level_reclaim", "level_reject", "sweep_reject", "breakout_retest", "range_fade", "trend_pullback", "momentum_chase", "none")   # как validate.SETUPS (проверяет тест)
 _DAY_REGIMES = ("trend", "range", "volatile", "unclear")
 _DAY_BIASES = ("long", "short", "neutral")
 DAY_LIMITS_MAX_AGE_S = 36 * 3600.0     # план дня старше полутора суток не действует (файл остаётся от прошлого дня)

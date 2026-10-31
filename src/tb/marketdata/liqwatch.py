@@ -166,6 +166,19 @@ def make_event(sym, side, usd, w, px, now, wake, window_s, big=False):
             "note": "информационно: не сигнал входа; каскад часто означает исчерпание движения или его продолжение: решает структура"}
 
 
+HEAT_MOVE_KEYS = ("ret_5m_pct", "range_5m_pct", "turn_surge_5m")
+
+
+def read_heat_moves(root):
+    """runtime/heat.json -> {SYM: {ret_5m_pct, range_5m_pct, turn_surge_5m}}: движение монеты, которым каскад обогащается (мозгу нужен импульс для momentum_chase)."""
+    try:
+        with open(paths.runtime("heat.json", root=root), encoding="utf-8") as f:
+            rows = (json.load(f) or {}).get("rows") or []
+    except (OSError, ValueError, AttributeError):
+        return {}
+    return {r["sym"]: {k: _f(r.get(k)) for k in HEAT_MOVE_KEYS} for r in rows if isinstance(r, dict) and isinstance(r.get("sym"), str)}
+
+
 def read_turnover(root):
     """runtime/heat.json -> {SYM: оборот 24 ч в USD} (поле turn_24h_musd); нет файла -> {}."""
     try:
@@ -208,8 +221,13 @@ class Runner(object):
     def publish(self, now):
         doc = self.book.snapshot(now, self.cfg["env"])
         fsutil_write(paths.runtime("liq.json", root=self.root), doc)
-        for ev in self.book.cascades(now):
+        evs = self.book.cascades(now)
+        moves = read_heat_moves(self.root) if evs else {}
+        for ev in evs:
             ev = dict(ev, ts=iso(now), env=self.cfg["env"])
+            for k, x in (moves.get(ev["sym"]) or {}).items():      # каскад без движения цены не даёт мозгу проверить импульс (ret_5m/range_5m были пустыми)
+                if x is not None:
+                    ev[k] = x
             try:
                 _append_event(paths.runtime("hot_events.jsonl", root=self.root), ev)
             except OSError as e:

@@ -23,7 +23,7 @@ SESSION_TYPES = ("scalp", "intraday", "swing", "position")
 SESSION_RANK = dict((t, i) for i, t in enumerate(SESSION_TYPES))
 DAY = "day"                    # сессия-день: горизонт сделок выбирает агент; dayplan.session.type = максимальный горизонт на сегодня (по умолчанию position)
 DAY_MAX_HORIZON = "position"
-SETUPS = ("level_reclaim", "level_reject", "sweep_reject", "breakout_retest", "range_fade", "trend_pullback", "none")
+SETUPS = ("level_reclaim", "level_reject", "sweep_reject", "breakout_retest", "range_fade", "trend_pullback", "momentum_chase", "none")
 RE_SYM = re.compile(r"^[A-Z0-9]{2,20}$")
 RE_RISK = re.compile(r"^[a-z0-9_]{2,30}$")
 TOP_KEYS = {"schema", "day_id", "regime", "bias", "session", "watch", "allowed_setups", "avoid", "limits", "carry", "carried_review", "risks", "questions", "why"}

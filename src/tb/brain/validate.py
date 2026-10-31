@@ -22,7 +22,7 @@ PM_ARGS = {"hold": (), "close": (), "cancel": (), "hold_plan": (), "release_plan
            "amend": ("patch",), "escalate": ("reason_code",)}
 ESCALATE_CODES = ("SECRET_REQUEST", "NEED_OWNER", "DATA_GAP")
 ERR_TAGS = ("no-confirm", "chase", "tight-stop", "wide-stop", "wrong-direction", "news-miss", "size", "fee-drag", "rule-break", "good-process-bad-luck", "good")
-SETUPS = ("level_reclaim", "level_reject", "sweep_reject", "breakout_retest", "range_fade", "trend_pullback", "none")
+SETUPS = ("level_reclaim", "level_reject", "sweep_reject", "breakout_retest", "range_fade", "trend_pullback", "momentum_chase", "none")      # momentum_chase: вход по рынку по импульсу, только уровни риска 4-5 (risk_levels setup_aggr high)
 RE_CODE = r"^[a-z0-9_]{2,30}$"
 RE_TAG = r"^[a-z0-9._-]{2,40}$"                    # как plan_schema.RE_TAG (теги гипотезы/сетапа плана)
 ENTRY_DECISIONS = ("skip", "propose")
@@ -36,6 +36,10 @@ ENTRY_SIZE_MULT_MAX = 0.5                           # потолок size_mult, 
 ENTRY_MIN_STOP_PCT = 0.1                            # стоп не ближе 0.1% к уровню входа (и не ближе ENTRY_STOP_ATR_MULT*ATR(5м) и трёх спредов)
 ENTRY_STOP_ATR_MULT = 1.5                           # стоп не ближе 1.5 ATR(5м): стоп в одну свечу выбивало шумом за минуты (разбор paper 2026-10-29/30: LIT, USELESS, ERA, XPL)
 FADE_SETUPS = ("range_fade", "level_reject")        # входы против движения события
+CHASE_SETUP = "momentum_chase"                      # вход по рынку ПО импульсу события (указание владельца 2026-10-31: на высоком риске можно «прокатиться»)
+CHASE_MIN_LEVEL = 4                                 # только уровни риска 4-5 (guard проверяет то же через risk_levels setup_aggr)
+CHASE_SURGE_X = 10.0                                # импульс: оборот 5м от 10x нормы И свеча от 4 ATR(5м), движение в сторону входа. Бэктест 60 дн, 49 монет:
+CHASE_RANGE_ATR = 4.0                               # мягкий порог (3x или 2 ATR) 29.7 тыс. сделок, валовый R -0.02; экстрим 2.3 тыс., +0.11 (12 ч), ловит обвал BTC 29.10 (+2.5R)
 FADE_SURGE_X = 3.0                                  # оборот 5м от этого множителя при движении против входа = импульс, фейд без реакции запрещён
 ENTRY_MAX_STOP_PCT = 10.0
 ENTRY_MAX_LEVEL_DIST_PCT = 3.0                      # уровень входа не дальше 3% от цены
@@ -107,7 +111,7 @@ DAYPLAN = {"type": "object", "required": ["schema", "regime", "bias", "session",
     "watch": {"type": "array", "maxItems": 6, "items": {"type": "object", "required": ["sym", "side", "level", "setup", "note"], "properties": {
         "sym": {"type": "string", "pattern": RE_SYM}, "side": {"enum": ["long", "short"]}, "level": {"type": "number", "minimum": 1e-12},
         "setup": {"enum": list(SETUPS)}, "note": _s(120)}}},
-    "allowed_setups": {"type": "array", "maxItems": 7, "items": {"enum": list(SETUPS)}},
+    "allowed_setups": {"type": "array", "maxItems": 8, "items": {"enum": list(SETUPS)}},
     "avoid": {"type": "array", "maxItems": 10, "items": {"type": "string", "pattern": RE_SYM}},
     "limits": {"type": "object", "required": ["max_new_plans", "max_risk_usdt", "symbols", "size_mult"], "properties": {
         "max_new_plans": {"type": "integer", "minimum": 0, "maximum": 6}, "max_risk_usdt": {"type": "number", "minimum": 0},
@@ -490,6 +494,25 @@ def _pm(o, ctx):
     return errs[:8]
 
 
+def chase_impulse(ctx, sign):
+    """Событие экстремально импульсное и идёт в сторону sign: оборот 5м от CHASE_SURGE_X нормы И диапазон свечи от CHASE_RANGE_ATR ATR(5м), ret_5m в ту же сторону."""
+    surge, ret5, r5, a5 = ctx.get("surge_x"), ctx.get("ret_5m"), ctx.get("range_5m_pct"), ctx.get("a5_pct")
+    strong = surge is not None and surge >= CHASE_SURGE_X and r5 is not None and bool(a5) and r5 >= CHASE_RANGE_ATR * a5
+    return bool(strong and ret5 and ret5 * sign > 0)
+
+
+def chase_errors(o, ctx, sign):
+    """momentum_chase: уровень риска 4-5, импульс в сторону входа, вход без подтверждения (confirm none, зона у цены)."""
+    errs = []
+    if (ctx.get("risk_level") or 0) < CHASE_MIN_LEVEL:
+        errs.append("CHASE_LEVEL")                           # на уровнях 1-3 догонять свечу нельзя
+    if not chase_impulse(ctx, sign):
+        errs.append("CHASE_NO_IMPULSE")                      # нет сильного импульса по направлению входа
+    if o.get("confirm") != "none":
+        errs.append("CHASE_CONFIRM")                         # догоняют по рынку сейчас, свечу не ждут
+    return errs
+
+
 def exec_stop_pct(level, px, stop, entry_type=None):
     """Ширина стопа так, как её мерит шлюз исполнителя (plan_schema.entry_ref: ref_price = цена при решении, у limit цена заявки), и не меньше, чем от уровня.
     Цена ещё не дошла до уровня -> стоп от неё шире (PENDLE 2026-10-31: 0.89% от цены при 0.8% scalp, шлюз отклонил E_STOP_PCT)."""
@@ -589,6 +612,8 @@ def _entry(o, ctx):
     if dist < floor:
         errs += ["STOP_TIGHT", "STOP_PCT:%.2f_MIN:%.2f" % (dist, floor)]      # стоп не вплотную: не ближе 1.5 ATR(5м), трёх спредов и 0.1%
     surge, ret5 = ctx.get("surge_x"), ctx.get("ret_5m")
+    if o.get("setup") == CHASE_SETUP:
+        errs += chase_errors(o, ctx, sign)
     if o.get("setup") in FADE_SETUPS and surge is not None and ret5 and surge >= FADE_SURGE_X and ret5 * sign < 0:
         errs += ["FADE_IMPULSE", "SURGE_X:%.1f_MAX:%.1f" % (surge, FADE_SURGE_X)]      # фейд против импульса на всплеске оборота: пропускают или ждут отката/сетапа с реакцией
     stop_max = max_stop if max_stop is not None else ENTRY_MAX_STOP_PCT

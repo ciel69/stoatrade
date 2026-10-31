@@ -10,6 +10,9 @@ from tb.brain import validate as V
 CLUSTER_PCT = 0.15          # уровни ближе этого (% цены) считаются одним
 STOP_BUF_FRAC = 0.1         # стоп за уровнем на 0.1 ATR(5м) (не вплотную к уровню)
 SCALP_MIN_TP_COSTS = 3.0     # scalp только если первая цель дальше трёх издержек круга: иначе комиссии съедают сделку (BTC 2026-10-31: -0.655 USDT, из них ~0.56 комиссии)
+CHASE_ZONE_PCT = 0.3        # momentum_chase: зона входа ±0.3% у текущей цены (вход по рынку сейчас)
+CHASE_STOP_ATR = 0.25       # стоп за началом импульсной свечи: её диапазон плюс четверть ATR(5м)
+CHASE_TP_R = 2.5            # нет уровня по ходу движения не ближе 1R -> цель 2.5R
 MAX_OK = 3
 MAX_FAIL = 2
 
@@ -86,8 +89,9 @@ def candidates(brief, sym, ctx=None):
     ctx = ctx or V.entry_context(brief, {"sym": sym})
     px = ctx.get("px")
     lv = pool(brief, sym)
+    ch = chase(ctx, lv) if px else None
     if not px or len(lv) < 2:
-        return None
+        return [ch] if ch else None
     a5 = ctx.get("a5_pct") or 0.0
     floor = max(V.ENTRY_MIN_STOP_PCT, V.ENTRY_STOP_ATR_MULT * a5, 3.0 * (ctx.get("spread_bps") or 0.0) / 100.0)
     max_dist = V.ENTRY_MAX_LEVEL_DIST_LOOSE_PCT if V._loose(ctx) else V.ENTRY_MAX_LEVEL_DIST_PCT
@@ -132,5 +136,41 @@ def candidates(brief, sym, ctx=None):
                 ok.append(row)
     ok.sort(key=lambda r: -r["rr_net"])
     bad.sort(key=lambda r: -r["rr_net"])
-    out = ok[:MAX_OK] + bad[:MAX_FAIL]
+    out = ([ch] if ch else []) + ok[:MAX_OK] + bad[:MAX_FAIL]      # импульс первым: он живёт минуты
     return out or None
+
+
+def chase(ctx, lv):
+    """momentum_chase (уровни риска 4-5): вход по рынку ПО импульсу события, без подтверждения свечой. -> кандидат или None.
+    Стоп за началом импульсной свечи (диапазон 5м + CHASE_STOP_ATR ATR), цель: ближайший уровень по ходу не ближе 1R, иначе CHASE_TP_R R;
+    размер не выше min(0.5, no_confirm.size_mult_max, размер дня); горизонт по ширине стопа."""
+    if (ctx.get("risk_level") or 0) < V.CHASE_MIN_LEVEL or ctx.get("no_confirm_allowed") is False or (ctx.get("stop_streak") or 0) >= 2:
+        return None
+    px, ret5 = ctx.get("px"), ctx.get("ret_5m")
+    if not px or not ret5:
+        return None
+    sign = 1 if ret5 > 0 else -1
+    if not V.chase_impulse(ctx, sign):
+        return None
+    side = "long" if sign > 0 else "short"
+    a5 = ctx.get("a5_pct") or 0.0
+    r5 = ctx.get("range_5m_pct") or V.CHASE_RANGE_ATR * a5
+    floor = max(V.ENTRY_MIN_STOP_PCT, V.ENTRY_STOP_ATR_MULT * a5, 3.0 * (ctx.get("spread_bps") or 0.0) / 100.0)
+    stop_pct = max(r5 + CHASE_STOP_ATR * a5, floor)
+    stop = _px(px * (1 - sign * stop_pct / 100.0))
+    risk = abs(px - stop)
+    tps = [t for t in sorted((t for t in lv if (t - px) * sign >= risk), key=lambda t: abs(t - px))][:2] or [_px(px + sign * CHASE_TP_R * risk)]
+    rr = V._entry_rr(side, px, px, stop, tps)
+    if not rr or rr <= 0:
+        return None
+    h, net, why = _horizon(ctx, stop_pct, rr, stop_pct, abs(tps[0] - px) / px * 100.0)
+    caps = [V.ENTRY_SIZE_MULT_MAX] + [x for x in (ctx.get("no_confirm_max"), ctx.get("day_size_mult")) if x]
+    z = CHASE_ZONE_PCT / 100.0
+    row = {"setup": V.CHASE_SETUP, "side": side, "level": _px(px), "stop": stop, "tp": [_px(t) for t in tps], "dist_pct": 0.0, "stop_pct": round(stop_pct, 2),
+           "rr_net": net, "horizon": h, "confirm": "none", "zone": {"low": _px(px * (1 - z)), "high": _px(px * (1 + z))}, "size_mult": round(min(caps), 2),
+           "tags": ["no-confirm"], "entry_type": "market"}
+    if why:
+        row["fail"] = why
+    else:
+        row["ok"] = True
+    return row

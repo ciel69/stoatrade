@@ -623,6 +623,47 @@ class Candidates(unittest.TestCase):
         self.assertIsNone(cands.candidates(self.brief(), "ETH"))
 
 
+class MomentumChase(unittest.TestCase):
+    """momentum_chase: на уровнях 4-5 вход по рынку ПО сильному импульсу (указание владельца 2026-10-31); на 1-3 запрещён кодом."""
+
+    def brief(self, level=5, surge=12.0, ret=-1.2, r5=1.4):
+        b = copy.deepcopy(SCAN_BRIEF)
+        b["risk_level"] = {"level": level, "no_confirm": {"allowed": True, "size_mult_max": 0.75}}
+        b["session"] = {"id": "S-1", "type": "day", "cost_rt_pct": 0.28, "horizons": {"scalp": {"max_stop_pct": 1.2, "min_rr": 1.0}, "intraday": {"max_stop_pct": 4.5, "min_rr": 1.5}}}
+        b["recent"][0]["d"].update({"turn_surge_5m": surge, "ret_5m_pct": ret, "range_5m_pct": r5})
+        b["struct"]["s"]["SOL"].update(sup=[[141.0, -2.9, 1.5, "pdl"], [138.0, -5.0, 2.5, "wl"]], res=[[147.0, 1.2, 0.6, "dh"]])
+        return b
+
+    def chase_row(self, b):
+        out = cands.candidates(b, "SOL") or []
+        return next((r for r in out if r.get("setup") == "momentum_chase"), None)
+
+    def propose_from(self, r):
+        return propose(setup=r["setup"], side=r["side"], horizon=r["horizon"], level=r["level"], stop=r["stop"], tp=r["tp"], confirm=r["confirm"],
+                       zone=r["zone"], size_mult=r["size_mult"], tags=r["tags"])
+
+    def test_candidate_short_with_the_dump_passes_validator(self):
+        b = self.brief()
+        r = self.chase_row(b)
+        self.assertIsNotNone(r)
+        self.assertEqual((r["side"], r["confirm"], r["size_mult"], r.get("ok")), ("short", "none", 0.5, True), r)
+        self.assertGreater(r["stop"], r["level"])
+        self.assertEqual(check(self.propose_from(r), brief=b)[1], [])
+
+    def test_forbidden_below_level_4_and_without_impulse(self):
+        r = self.chase_row(self.brief())
+        self.assertIn("CHASE_LEVEL", check(self.propose_from(r), brief=self.brief(level=3))[1])
+        self.assertIsNone(self.chase_row(self.brief(level=3)))
+        weak = self.brief(surge=4.0, r5=1.4)                                       # 4x оборота: мягкий импульс, на истории убыточен
+        self.assertIsNone(self.chase_row(weak))
+        self.assertIn("CHASE_NO_IMPULSE", check(self.propose_from(r), brief=weak)[1])
+        against = self.brief(ret=1.2)                                                 # импульс вверх, а вход в шорт
+        self.assertIn("CHASE_NO_IMPULSE", check(self.propose_from(r), brief=against)[1])
+        candle = {k: v for k, v in self.propose_from(r).items() if k not in ("zone", "tags")}
+        candle["confirm"] = "candle"
+        self.assertIn("CHASE_CONFIRM", check(candle, brief=self.brief())[1])
+
+
 class BriefPause(unittest.TestCase):
     def test_pause_block_from_closed_stops(self):
         class C(object):
