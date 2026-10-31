@@ -43,11 +43,12 @@ const takePct = computed(() => pct(farTake.value))
     <svg v-if="r" class="route" viewBox="0 0 100 14" preserveAspectRatio="none" role="img"
          :aria-label="`${position.sym}: от стопа ${price(position.stop)} через вход ${price(position.avg)} к тейку ${price(farTake)}, цена ${price(position.price)}`">
       <rect class="track" x="0" y="6" width="100" height="2" />
-      <rect class="risk" :x="0" y="4.5" :width="units(r.entry)" height="5" />
+      <rect v-if="r.stop <= r.entry" class="risk" :x="0" y="4.5" :width="units(r.entry)" height="5" />
+      <rect v-else class="locked" :x="units(r.entry)" y="4.5" :width="units(r.stop - r.entry)" height="5" />
       <rect v-if="r.price != null" class="gain" :class="{ loss: !r.inProfit }" :x="units(Math.min(r.entry, r.price))" y="4.5" :width="units(Math.abs(r.price - r.entry))" height="5" />
       <line v-for="(t, i) in r.targets" :key="i" class="take" :x1="units(t)" :x2="units(t)" y1="2" y2="12" />
       <line class="entry" :x1="units(r.entry)" :x2="units(r.entry)" y1="1" y2="13" />
-      <line class="stop" x1="0" x2="0" y1="0" y2="14" />
+      <line class="stop" :class="{ safe: r.stop > r.entry }" :x1="units(r.stop)" :x2="units(r.stop)" y1="0" y2="14" />
       <line v-if="r.price != null" class="now" x1="0" x2="0" y1="0" y2="14" :style="{ transform: `translateX(${units(r.price)}px)` }" />
     </svg>
     <p v-else class="muted">маршрут не построен: нет стопа или входа</p>
@@ -74,6 +75,8 @@ const takePct = computed(() => pct(farTake.value))
 .route { display: block; width: 100%; height: 18px; margin: var(--space-2) 0 var(--space-1); overflow: visible; }
 .track { fill: var(--line2); }
 .risk { fill: var(--neg); opacity: 0.22; }
+.locked { fill: var(--pos); opacity: 0.28; }
+.stop.safe { stroke: var(--pos); }
 .gain { fill: var(--pos); opacity: 0.55; }
 .gain.loss { fill: var(--neg); opacity: 0.55; }
 .take { stroke: var(--pos); stroke-width: 1.4; vector-effect: non-scaling-stroke; opacity: 0.8; }

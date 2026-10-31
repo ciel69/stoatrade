@@ -31,10 +31,26 @@ describe('route', () => {
     expect(r.entry).toBeCloseTo(0.5)
   })
 
-  it('нет стопа, входа или стоп на стороне прибыли: маршрута нет', () => {
+  it('нет стопа или входа: маршрута нет', () => {
     expect(route({ ...base, stop: null })).toBeNull()
     expect(route({ ...base, avg: null })).toBeNull()
-    expect(route({ ...base, stop: 90 })).toBeNull()
+  })
+
+  it('стоп подтянут за вход (прибыль зафиксирована): ось от входа, стоп правее входа', () => {
+    const r = route({ ...base, avg: 100, stop: 98, price: 97, targets: [{ price: 94, state: null }] })!      // шорт: стоп 98 ниже входа 100
+    expect(r.entry).toBe(0)
+    expect(r.stop).toBeCloseTo(2 / 6)
+    expect(r.price).toBeCloseTo(3 / 6)
+    expect(r.targets[0]).toBeCloseTo(1)
+    expect(r.inProfit).toBe(true)
+  })
+  it('стоп ровно на входе и цель не задана: ось строится от входа на 1 % цены', () => {
+    const r = route({ ...base, avg: 100, stop: 100, price: 99, targets: [] })!
+    expect(r.stop).toBe(0)
+    expect(r.price).toBeCloseTo(1)
+  })
+  it('для плана до входа стоп на стороне прибыли остаётся ошибкой: полосы нет', () => {
+    expect(planRoute({ side: 'short', level: 100, price: 102, stop: 98, targets: [96], target: 96 } as unknown as NearPlan)).toBeNull()
   })
 
   it('цена за пределами полосы прижимается к краям с запасом', () => {
