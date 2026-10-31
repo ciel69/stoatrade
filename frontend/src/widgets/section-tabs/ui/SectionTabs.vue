@@ -12,7 +12,7 @@ const section = computed(() => sectionOf(route.path))
 </script>
 
 <template>
-  <nav v-if="section?.tabs" class="tabs" :aria-label="section.label" :style="{ '--zc': `var(--zone-${section.zone})` }">
+  <nav v-if="section?.tabs && section.tabs.length > 1" class="tabs" :aria-label="section.label" :style="{ '--zc': `var(--zone-${section.zone})` }">
     <RouterLink v-for="t in section.tabs" :key="t.to" :to="t.to" class="tab" :class="{ on: route.path === t.to }" :aria-current="route.path === t.to ? 'page' : undefined">{{ t.label }}</RouterLink>
   </nav>
 </template>

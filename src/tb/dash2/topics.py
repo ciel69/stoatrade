@@ -356,6 +356,71 @@ def _round(x, n):
     return round(x, n) if isinstance(x, (int, float)) and not isinstance(x, bool) else x
 
 
+def _moment(now, age, step=15):
+    """Момент события по возрасту, округлённый до step секунд: возраст менялся бы каждую секунду, момент нет."""
+    a = _num(age)
+    return int(round((now - a) / step) * step) if a is not None else None
+
+
+_LEVEL_RANK = {"ok": 0, "off": 0, "info": 0, "warn": 1, "bad": 2}
+
+
+def system(root=None, now=None):
+    """Страница «Система · Управление»: общий вывод, узлы платформы, сессия, запас риска, капитал, источники данных, исполнитель и очередь, отказы дня, история сессий.
+    Источник тот же, что у старой вкладки «Система» (model.build_state). Тексты узлов с «N с назад» не отдаём: только уровень, статический текст и момент (`at`), подпись строит клиент."""
+    now = time.time() if now is None else now
+    mode = default_mode(root)
+    s = _state(root, mode, now)
+    v2 = s.get("v2") or {}
+    strip = v2.get("strip") or {}
+    ex = strip.get("exec") or {}
+    bl = strip.get("backlog") or {}
+    health = s.get("health") or {}
+    feed, ctx, hot = health.get("feed") or {}, health.get("context") or {}, health.get("hot") or {}
+    items = {i.get("id"): i for i in (strip.get("items") or []) + ((s.get("status") or {}).get("items") or []) if isinstance(i, dict)}
+
+    def lv(*ids):
+        return max((items[i].get("level") for i in ids if i in items and items[i].get("level") in _LEVEL_RANK), key=lambda x: _LEVEL_RANK[x], default="off")
+    sess = s.get("session")
+    kill = strip.get("kill")
+    nodes = [
+        {"id": "exec", "label": "Исполнитель", "level": lv("exec"), "text": " · ".join(str(x) for x in (ex.get("env"), "pid %s" % ex["pid"] if ex.get("pid") else None, ex.get("version")) if x) if ex.get("present") else "не запущен",
+         "since": _moment(now, ex.get("uptime_s"), 30) if ex.get("present") else None},
+        {"id": "net", "label": "Связь с биржей", "level": "ok" if lv("net") == "warn" and ex.get("env") == "paper" and "private нет" in str((items.get("net") or {}).get("text")) else lv("net"),       # paper: приватного канала нет по построению, это не предупреждение
+         "text": (items.get("net") or {}).get("text")},
+        {"id": "recon", "label": "Сверка с биржей", "level": lv("recon"), "at": _moment(now, ex.get("reconcile_age_s"))},
+        {"id": "events", "label": "Шина событий", "level": lv("events"), "at": _moment(now, bl.get("last_age_s"), 30), "text": "не подтверждено wake: %s" % sum(int((c or {}).get("unacked") or 0) for c in (bl.get("consumers") or {}).values())},
+        {"id": "scan", "label": "Сканер монет", "level": lv("scan", "scanner"), "at": _moment(now, hot.get("age_s"))},
+        {"id": "feed", "label": "Фид цен", "level": lv("feed"), "at": _moment(now, feed.get("age_s")), "text": None if feed.get("running", True) else "остановлен"},
+        {"id": "context", "label": "Контекст рынка", "level": lv("context"), "at": _moment(now, ctx.get("age_s"), 60),
+         "text": ("risk_off: " + ", ".join(str(x) for x in (ctx.get("risk_off_reasons") or [])[:3])) if ctx.get("risk_off") else "risk_off нет"},
+        {"id": "session", "label": "Сессия", "level": lv("session"), "text": (items.get("session") or {}).get("text")},
+    ]
+    levels = [n["level"] for n in nodes] + [w.get("level") for w in (s.get("warnings") or []) if isinstance(w, dict)] + (["bad"] if isinstance(kill, dict) and kill.get("active", True) else [])
+    overall = max((l for l in levels if l in _LEVEL_RANK), key=lambda x: _LEVEL_RANK[x], default="ok")
+    sessions = [{k: r.get(k) for k in ("id", "type", "ts", "stopped", "stop_note")} | {"thesis": _txt(r.get("thesis"), 160)} for r in (s.get("sessions") or [])[:8] if isinstance(r, dict)]
+    rr = s.get("risk_room") or {}
+    acc = s.get("account") or {}
+    return {
+        "mode": mode, "level": overall, "kill": {"flatten": bool(kill.get("flatten")), "reason": _txt(kill.get("reason"), 80)} if isinstance(kill, dict) and kill.get("active", True) else None,
+        "nodes": nodes, "warnings": [{"level": w.get("level"), "text": _txt(w.get("text"), 200)} for w in (s.get("warnings") or [])[:6] if isinstance(w, dict)],
+        "session": ({k: sess.get(k) for k in ("id", "type", "budget_usdt", "budget_used", "trades", "max_trades", "entries_allowed", "block_reasons", "realized", "open_risk", "perf_mult", "perf_n", "start")}
+                    | {"thesis": _txt(sess.get("thesis"), 200), "expires_at": int(round((now + sess["left_s"]) / 30.0) * 30) if _num(sess.get("left_s")) is not None else None}) if isinstance(sess, dict) else None,
+        "room": {"allowed": rr.get("allowed"), "reasons": [str(x)[:80] for x in (rr.get("reasons") or [])[:4]],
+                 "rows": [{k: r.get(k) for k in ("id", "label", "limit", "used", "room", "frac", "level", "unit", "help")} for r in (rr.get("rows") or []) if isinstance(r, dict)][:8]},
+        "account": {"equity": _num(acc.get("equity")), "hwm": _num(acc.get("hwm")), "drawdown": _num(acc.get("drawdown")), "ladder_mult": _num(acc.get("ladder_mult")),
+                    "venues": {k: {"equity": _num(v.get("equity")), "free": _num(v.get("free"))} for k, v in (acc.get("venues") or {}).items() if isinstance(v, dict)}},
+        "sources": {"feed": [{"id": k, "state": v.get("state"), "connected": v.get("connected"), "reconnects": _num(v.get("reconnects")), "errors": _num(v.get("errors")), "error": _txt(v.get("last_error"), 120)}
+                             for k, v in (feed.get("sources") or {}).items() if isinstance(v, dict)],
+                    "context": {k: bool(v) for k, v in (ctx.get("sources_ok") or {}).items()}, "degraded": [str(x)[:40] for x in (ctx.get("degraded_sources") or [])[:8]]},
+        "exec": {"present": bool(ex.get("present")), "plans": ex.get("plans") or {}, "positions": _num(ex.get("positions")), "lag_ms": round((_num(ex.get("loop_lag_ms")) or 0) / 5.0) * 5, "hold": ex.get("hold"),
+                 "consumers": {k: {"acked": _num(c.get("acked")), "unacked": _num(c.get("unacked"))} for k, c in (bl.get("consumers") or {}).items() if isinstance(c, dict)}},
+        "rejects": {"n": _num((v2.get("decisions_day") or {}).get("n")), "rejects": _num((v2.get("decisions_day") or {}).get("rejects")),
+                    "codes": [{"code": str(c.get("code"))[:32], "n": _num(c.get("n"))} for c in ((v2.get("decisions_day") or {}).get("reject_codes") or [])[:8] if isinstance(c, dict)]},
+        "sessions": sessions,
+    }
+
+
 BRIEFS_OUT = 60
 _BRIEF_META = {}            # (корень, id) -> краткая сводка досье: файл досье после записи не меняется, поэтому читаем один раз
 
@@ -496,13 +561,15 @@ def ctl(root=None, now=None):
             "platform": {k: plat.get(k) for k in ("state", "mode", "session", "health", "day_id", "trading", "observe")}, "step": ({k: step.get(k) for k in ("name", "i", "n")} if step else None),
             "kill": ({"flatten": bool(kill.get("flatten")), "reason": str(kill.get("reason") or "")[:80]} if kill and kill.get("active") else None),
             "risk": {"level": risk.get("level"), "name": risk.get("name")}, "busy": bool(st.get("pending")),
-            "checks": [{"id": c.get("id"), "name": str(c.get("name") or "")[:40], "sev": c.get("sev"), "ok": bool(c.get("ok")), "msg": str(c.get("msg") or "")[:160]}
+            "checks": [{"id": c.get("id"), "name": str(c.get("name") or "")[:90], "sev": c.get("sev"), "ok": bool(c.get("ok")), "msg": str(c.get("msg") or "")[:160]}
                        for c in (st.get("checks") or []) if isinstance(c, dict)][:16],
-            "banner": ({"level": banner.get("level"), "text": str(banner.get("text") or "")[:160]} if banner else None), "day": day}
+            "banner": ({"level": banner.get("level"), "text": str(banner.get("text") or "")[:160]} if banner else None), "day": day,
+            "last": [{"action": str(r.get("action") or "")[:32], "code": str(r.get("code") or "")[:32], "status": str(r.get("status") or "")[:16], "msg": str(r.get("msg") or "")[:120]}
+                     for r in (st.get("last") or [])[:8] if isinstance(r, dict)]}
 
 
-TOPICS = {"brain": brain, "ctl": ctl, "events": events, "market": market, "news": news, "briefs": briefs}
-INTERVAL = {"decisions": 3.0, "models": 30.0, "ideas": 10.0, "market": 5.0, "news": 15.0, "briefs": 10.0}        # тема -> не чаще раза в N секунд (по умолчанию HEAVY_S сервера)
+TOPICS = {"brain": brain, "ctl": ctl, "events": events, "market": market, "news": news, "briefs": briefs, "system": system}
+INTERVAL = {"decisions": 3.0, "models": 30.0, "ideas": 10.0, "market": 5.0, "news": 15.0, "briefs": 10.0, "system": 5.0}        # тема -> не чаще раза в N секунд (по умолчанию HEAVY_S сервера)
 MODE_TOPICS = {"home": home, "trades": trades, "decisions": decisions, "models": models, "plans": plans, "ideas": ideas}        # зависят от режима клиента: строятся для каждого режима, который сейчас смотрит хотя бы один клиент
 
 

@@ -208,10 +208,10 @@ class ServerTest(Fx, unittest.IsolatedAsyncioTestCase):
     async def test_snapshot_then_only_changes(self):
         self.hb()
         async with connect("ws://127.0.0.1:%d/ws" % self.port) as ws:
-            first = [await self.recv(ws) for _ in range(13)]
-            self.assertEqual([m["topic"] for m in first], ["hello", "brain", "briefs", "ctl", "events", "market", "news", "decisions", "home", "ideas", "models", "plans", "trades"])
+            first = [await self.recv(ws) for _ in range(14)]
+            self.assertEqual([m["topic"] for m in first], ["hello", "brain", "briefs", "ctl", "events", "market", "news", "system", "decisions", "home", "ideas", "models", "plans", "trades"])
             self.assertEqual(first[1]["data"]["status"], "idle")
-            self.assertEqual((first[0]["data"]["mode"], first[8]["data"]["mode"]), ("paper", "paper"))
+            self.assertEqual((first[0]["data"]["mode"], first[9]["data"]["mode"]), ("paper", "paper"))
             self.assertIn("enabled", first[0]["data"]["ctl"])
             with self.assertRaises(asyncio.TimeoutError):                         # без изменений сервер молчит (опроса нет)
                 await self.recv(ws, 0.8)
@@ -224,7 +224,7 @@ class ServerTest(Fx, unittest.IsolatedAsyncioTestCase):
     async def test_mode_switch_sends_home_for_that_mode_only(self):
         self.hb()
         async with connect("ws://127.0.0.1:%d/ws" % self.port) as a, connect("ws://127.0.0.1:%d/ws" % self.port) as b:
-            for _ in range(13):
+            for _ in range(14):
                 await self.recv(a)
                 await self.recv(b)
             await a.send(json.dumps({"op": "mode", "mode": "live"}))
@@ -239,7 +239,7 @@ class ServerTest(Fx, unittest.IsolatedAsyncioTestCase):
     async def test_plan_detail_op_answers_only_asker_and_rejects_bad_id(self):
         self.hb()
         async with connect("ws://127.0.0.1:%d/ws" % self.port) as a, connect("ws://127.0.0.1:%d/ws" % self.port) as b:
-            for _ in range(13):
+            for _ in range(14):
                 await self.recv(a)
                 await self.recv(b)
             await a.send(json.dumps({"op": "plan", "id": "../../etc/passwd"}))
@@ -250,6 +250,28 @@ class ServerTest(Fx, unittest.IsolatedAsyncioTestCase):
             self.assertEqual((m["topic"], m["data"]["ok"], m["data"]["id"]), ("plan_detail", False, "PL-NOPE"))
             with self.assertRaises(asyncio.TimeoutError):
                 await self.recv(b, 0.5)
+
+    def test_system_topic_has_moments_not_ages_and_paper_private_is_not_a_warning(self):
+        def state(root, mode, now):
+            return {"status": {"level": "ok", "items": [{"id": "feed", "level": "ok", "text": "работает, запись 1 с назад"}]},
+                    "v2": {"strip": {"level": "warn", "items": [{"id": "net", "level": "warn", "text": "public up · private нет (paper) · REST ok"}, {"id": "exec", "level": "ok", "text": "x"}],
+                                     "exec": {"present": True, "env": "paper", "pid": 7, "uptime_s": 100.0 + (now - 1000.0), "reconcile_age_s": 20.0 + (now - 1000.0), "loop_lag_ms": 1.0, "plans": {}, "positions": 1},
+                                     "backlog": {"consumers": {"api": {"acked": 5, "unacked": 2}}, "last_age_s": 10.0 + (now - 1000.0)}}, "decisions_day": {"n": 3, "rejects": 1, "reject_codes": [{"code": "X", "n": 1}]}},
+                    "health": {"feed": {"age_s": 1.0 + (now - 1000.0), "running": True, "sources": {"okx": {"state": "ok", "connected": True, "reconnects": 0, "errors": 0}}}, "context": {"age_s": 5.0 + (now - 1000.0), "risk_off": False}, "hot": {"age_s": 3.0 + (now - 1000.0)}},
+                    "session": {"id": "day-1", "type": "day", "left_s": None, "budget_usdt": 1.5, "budget_used": 0.0, "trades": 0, "max_trades": 6, "entries_allowed": True, "block_reasons": []},
+                    "risk_room": {"allowed": True, "reasons": [], "rows": [{"id": "daily", "label": "Дневной лимит", "limit": 5.0, "used": 1.0, "room": 4.0, "frac": 0.8, "level": "ok", "unit": "USDT", "help": "h"}]},
+                    "account": {"equity": 39.5, "hwm": 41.0, "drawdown": 0.04, "venues": {"bybit": {"equity": 39.5, "free": 39.0, "ts": "2026-01-01T00:00:00Z"}}}, "sessions": [], "warnings": []}
+        orig = topics._state
+        topics._state = state
+        try:
+            a, b = topics.system(None, 1000.0), topics.system(None, 1002.0)
+        finally:
+            topics._state = orig
+        self.assertEqual(a, b)                                               # через 2 с тема та же: возрастов нет, только моменты (окно округления)
+        net = next(n for n in a["nodes"] if n["id"] == "net")
+        self.assertEqual(net["level"], "ok")                                 # paper: «private нет» не предупреждение
+        self.assertEqual(a["level"], "ok")                                   # общий уровень считается по узлам с поправкой, а не по исходному strip.level
+        self.assertEqual((a["exec"]["consumers"]["api"]["unacked"], a["room"]["rows"][0]["room"], a["account"]["venues"]["bybit"]), (2, 4.0, {"equity": 39.5, "free": 39.0}))
 
     def test_briefs_list_and_detail(self):
         w(self.root, "state/briefs/B-20261031-1000-01.json", json.dumps({"brief_id": "B-20261031-1000-01", "ts": "2026-10-31T10:00:00Z", "scope": "start", "room": {"allowed": True}, "positions": [{"sym": "SOL"}], "plans": [], "secret_key": "x"}))

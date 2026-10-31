@@ -6,6 +6,7 @@ import { IdeasPage } from '@/pages/ideas'
 import { MarketPage } from '@/pages/market'
 import { NewsPage } from '@/pages/news'
 import { PlansPage } from '@/pages/plans'
+import { SystemPage } from '@/pages/system'
 import { TradesPage } from '@/pages/trades'
 
 /** Старый адрес ведёт на новый с теми же параметрами (?plan=, ?coin= и т.д.): ссылки из заметок, истории браузера и чужих сообщений продолжают работать. */
@@ -22,6 +23,9 @@ export const router = createRouter({
     { path: '/trading/trades', name: 'trades', component: TradesPage, meta: { title: 'Торговля: сделки' } },
     { path: '/brain/decisions', name: 'decisions', component: DecisionsPage, meta: { title: 'Мозг: решения' } },
     { path: '/brain/brief', name: 'brief', component: BriefPage, meta: { title: 'Мозг: досье' } },
+    { path: '/system/control', name: 'control', component: SystemPage, meta: { title: 'Система: управление' } },
+    moved('/system', '/system/control'),
+    moved('/control', '/system/control'),
     moved('/trading', '/trading/ideas'),
     moved('/brain', '/brain/decisions'),
     moved('/ideas', '/trading/ideas'),

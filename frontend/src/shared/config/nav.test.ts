@@ -29,6 +29,7 @@ describe('nav', () => {
   it('полоса вкладок: для пункта с вкладками найдена, для обзора нет', () => {
     expect(sectionOf('/trading/plans')?.label).toBe('Торговля')
     expect(sectionOf('/brain/brief')?.tabs?.length).toBe(2)
+    expect(sectionOf('/system/control')?.label).toBe('Система')
     expect(sectionOf('/')).toBeNull()
     expect(sectionOf('/unknown')).toBeNull()
   })

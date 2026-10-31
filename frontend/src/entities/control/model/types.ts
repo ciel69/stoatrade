@@ -30,6 +30,8 @@ export interface CtlSnapshot {
   checks: CtlCheck[]
   banner: { level: string | null; text: string } | null
   day: { day_id: string | null; state: string | null; mode: string | null; steps: DayStepRow[] } | null
+  /** последние команды управления (без времён): что было отдано ctl и чем кончилось */
+  last?: Array<{ action: string; code: string; status: string; msg: string }>
 }
 
 /** hello.ctl: управление включено только при open_local и ключе подписи; csrf привязан к соединению. */

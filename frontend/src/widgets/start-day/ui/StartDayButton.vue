@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'   // ref: поле сети нейронов
 import { useControlStore } from '@/entities/control'
 import { UiNeuralField, type NeuralPoint } from '@/shared/ui'
 import StartDayModal from './StartDayModal.vue'
@@ -11,7 +11,7 @@ import StartDayModal from './StartDayModal.vue'
 /** compact: колонка свёрнута, остаётся значок состояния; название и причина в подсказке и для скринридера. */
 defineProps<{ compact?: boolean }>()
 const control = useControlStore()
-const open = ref(false)
+const open = computed({ get: () => control.dialogOpen, set: (v: boolean) => { control.dialogOpen = v } })        // окно общее: его открывает и страница «Управление»
 const ICON = {
   start: 'M8 5.5v13l10.5-6.5z',
   starting: 'M8 5.5v13l10.5-6.5z',

@@ -11,6 +11,8 @@ import type { ChallengeData, CtlFinal, CtlHello, CtlResult, CtlSnapshot, DayMode
 export const useControlStore = defineStore('control', () => {
   const ctl = ref<CtlSnapshot | null>(null)
   const hello = ref<CtlHello>({ enabled: false })
+  /** Окно запуска и остановки дня открыто: одно на приложение, открыть его можно и с кнопки в колонке, и со страницы «Управление». */
+  const dialogOpen = ref(false)
 
   const phase = ref<FlowPhase>('idle')
   const mode = ref<DayMode>('paper')
@@ -170,5 +172,11 @@ export const useControlStore = defineStore('control', () => {
     }
   }
 
-  return { ctl, hello, phase, mode, challenge, accepted, error, final, pending, lastAction, button, start, check, toggleAccept, begin, stopDay, reset, mock, applyCtl, applyHello, applyResult, applyFinal }
+  /** Открыть окно: показывает текущее состояние, а не прошлый итог. */
+  function openDialog(): void {
+    if (phase.value === 'done' || phase.value === 'failed') reset()
+    dialogOpen.value = true
+  }
+
+  return { ctl, hello, dialogOpen, openDialog, phase, mode, challenge, accepted, error, final, pending, lastAction, button, start, check, toggleAccept, begin, stopDay, reset, mock, applyCtl, applyHello, applyResult, applyFinal }
 })
