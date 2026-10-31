@@ -17,8 +17,15 @@ const trading = useTradingStore()
 const ideas = useIdeaStore()
 const now = useNow()
 
-const metricId = ref<MetricId>('ret_15m_pct')
+/** Метрика цвета: выбор владельца; пока он не выбирал, берётся «15 мин», а если по ней у монет нет данных (сканер не отдаёт 15-минутные метрики), первая метрика с данными. */
+const picked = ref<MetricId | null>(null)
+const hasData = (id: MetricId): boolean => coins.value.some((c) => metricById(id).get(c) != null)
+const metricId = computed<MetricId>({
+  get: () => picked.value ?? (['ret_15m_pct', ...METRICS.map((m) => m.id)] as MetricId[]).find((id) => hasData(id)) ?? 'ret_15m_pct',
+  set: (v) => { picked.value = v },
+})
 const metric = computed(() => metricById(metricId.value))
+const noData = computed(() => !!market.snapshot && coins.value.length > 0 && !hasData(metricId.value))
 const options = METRICS.map((m) => ({ value: m.id, label: m.label }))
 
 const wrap = ref<HTMLElement | null>(null)
@@ -104,7 +111,8 @@ const empty = computed(() => market.snapshot && !coins.value.length)
       <UiSegment v-model="scope" :options="scopes" label="Какие монеты показывать" />
       <UiSegment v-model="metricId" :options="options" label="Что показывает цвет" />
     </header>
-    <p class="hint">{{ metric.hint }}. Размер плитки: оборот за сутки.</p>
+    <p v-if="noData" class="hint warn">По метрике «{{ metric.label }}» данных пока нет: сканер её не отдаёт (после запуска ей нужна история). Выберите другую метрику.</p>
+    <p v-else class="hint">{{ metric.hint }}. Размер плитки: оборот за сутки.</p>
 
     <p v-if="totals?.available && metricId === 'liq'" class="liq">Ликвидации за час по топу монет: лонги <b class="down">{{ kfmt(totals.totals.long) }}</b>, шорты <b class="up">{{ kfmt(totals.totals.short) }}</b> USD</p>
 
@@ -138,6 +146,7 @@ const empty = computed(() => market.snapshot && !coins.value.length)
 .age { margin-right: auto; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .age.stale { color: var(--warn); }
 .hint, .liq { margin: 0; font-size: 12px; color: var(--muted); }
+.hint.warn { color: var(--warn); }
 .up { color: var(--pos); }
 .down { color: var(--neg); }
 .field { position: relative; width: 100%; overflow: hidden; border-radius: var(--radius-sm); background: var(--bg); }
