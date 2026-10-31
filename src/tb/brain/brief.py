@@ -481,6 +481,8 @@ def _plan_position(c, it, snap):
     px = c.price(sym)["price"]
     r_now = _r_of(sign, px, avg, unit)
     ent = common.parse_ts((rt.get("ts") or {}).get("entered"))
+    mh = common.num((spec.get("lifecycle") or {}).get("max_hold_min")) if isinstance(spec.get("lifecycle"), dict) else None      # срок удержания: позицию закроет MAX_HOLD, если мозг не продлит
+    mh = int(mh) if mh is not None else None
     targets = []
     for tid, t in sorted((rt.get("targets") or {}).items()) if isinstance(rt.get("targets"), dict) else []:
         if isinstance(t, dict) and common.ident(tid):
@@ -494,6 +496,7 @@ def _plan_position(c, it, snap):
         "avg": _p(avg), "px": _p(px), "sl": _p(pos.get("cur_stop")), "liq": _p((snap.get(sym) or {}).get("liq")),
         "r": _r(r_now), "mae_r": _r(_r_of(sign, common.num(pos.get("worst_px")), avg, unit)),
         "mfe_r": _r(_r_of(sign, common.num(pos.get("best_px")), avg, unit)), "age_min": None if ent is None else int((c.now - ent) // 60),
+        "horizon": common.ident(spec.get("session_type")), "hold_min": mh, "hold_left_min": None if (mh is None or ent is None) else max(0, int(mh - (c.now - ent) / 60.0)),
         "targets": targets, "rules": rules})
 
 

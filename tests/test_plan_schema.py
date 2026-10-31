@@ -982,6 +982,16 @@ class TestAmend(unittest.TestCase):
         self.assertEqual(self.am(longer, "armed"), [])
         self.assertEqual(codes(self.am(lambda n: n["lifecycle"].update(flatten_at_session_end=False), "managing")), ["E_HOLD_EXTEND"])
 
+    def test_hold_extend_bounded_without_be(self):
+        """Мозг продлевает срок без безубытка: не больше чем вдвое за правку и не дольше потолка горизонта (scalp 240); стоп на месте, риск не растёт."""
+        self.assertEqual(self.am(lambda n: n["lifecycle"].update(max_hold_min=30), "managing"), [])               # scalp 15 -> 30
+        self.assertEqual(codes(self.am(lambda n: n["lifecycle"].update(max_hold_min=31), "managing")), ["E_HOLD_EXTEND"])
+        old = copy.deepcopy(self.old)
+        old["lifecycle"]["max_hold_min"] = 200
+        new = copy.deepcopy(old)
+        new["lifecycle"]["max_hold_min"] = 300
+        self.assertEqual(codes(P.validate_amend(old, new, "managing", self.live)), ["E_HOLD_EXTEND"])                 # 200 -> 300: больше потолка scalp 240
+
     def test_lifecycle_ttl(self):
         f = lambda n: n["lifecycle"].update(ttl_min=20)
         self.assertEqual(self.am(f, "draft"), [])

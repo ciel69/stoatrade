@@ -1063,6 +1063,8 @@ class Executor(object):
         d = {"name": name, "r": ev.get("r"), "px": ev.get("px")}
         if ev.get("target"):
             d["target"] = ev["target"]
+        if ev.get("hold") is not None:
+            d["hold"] = ev["hold"]
         self.emit("milestone", {k: v for k, v in d.items() if v is not None}, plan=p["spec"]["id"], sym=p["spec"]["symbol"])
 
     def _eval_touch(self, p, view):

@@ -222,6 +222,21 @@ class LifecycleTest(unittest.TestCase):
         self.assertEqual((a[0]["type"], a[0]["reason"], a[0]["why"]), ("close", "timeout", "LIFECYCLE:MAX_HOLD"))
         self.assertEqual(R.evaluate_lifecycle(p, managing_rt(entered=T0 - 599), view(100.0), T0, LIM), [])
 
+    def test_hold_expiring_wake(self):
+        """Веха hold_expiring за 20% срока (не раньше 30 и не позже 5 мин до MAX_HOLD) один раз на срок; после продления срока будит снова."""
+        p = long_plan(lifecycle={"max_hold_min": 60})
+        names = lambda rt, now: [e for e in R.evaluate_manage(p, rt, view(100.2, now=now), now, LIM)["events"] if e["name"] == "hold_expiring"]
+        self.assertEqual(names(managing_rt(entered=T0 - 47 * 60), T0), [])                 # за 13 мин до срока: рано (порог 12 мин)
+        rt = managing_rt(entered=T0 - 49 * 60)
+        res = R.evaluate_manage(p, rt, view(100.2), T0, LIM)
+        ev = [e for e in res["events"] if e["name"] == "hold_expiring"]
+        self.assertEqual((len(ev), ev[0]["hold"]), (1, 60))
+        rt2 = merge(rt, res["rt_patch"])
+        self.assertEqual(names(rt2, T0 + 1), [])                                           # один раз
+        p["lifecycle"]["max_hold_min"] = 120
+        self.assertEqual(names(rt2, T0 + 1), [])                                           # после продления до 120 рано
+        self.assertEqual(len(names(rt2, T0 + 60 * 60)), 1)                                 # и снова будит перед новым сроком
+
     def test_session_end_flatten(self):
         lim = dict(LIM, session_end_ts=T0 + 20)
         p = long_plan(lifecycle={"flatten_at_session_end": True})

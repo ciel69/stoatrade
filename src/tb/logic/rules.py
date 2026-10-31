@@ -592,6 +592,11 @@ def _fmt_r(x):
     return ("%g" % abs(x)).replace(".", "_")
 
 
+HOLD_WAKE_FRAC = 0.2          # будить мозг за 20% срока удержания до MAX_HOLD (scalp 60 мин: за 12 мин), не раньше 30 и не позже 5 мин до срока
+HOLD_WAKE_MIN_S = 300.0
+HOLD_WAKE_MAX_S = 1800.0
+
+
 def _events(plan, rt, view, now, limits, pos):
     """-> (events, milestones_patch). Вехи один раз: r_plus_N / r_minus_N (events.wake_r), near_target:<id> (events.near_target_frac)."""
     done = (((rt or {}).get("counters") or {}).get("milestones")) or {}
@@ -607,6 +612,17 @@ def _events(plan, rt, view, now, limits, pos):
             if name not in done and ((thr > 0 and r >= thr - _EPS) or (thr < 0 and r <= thr + _EPS)):
                 ms[name] = now
                 events.append({"name": name, "r": round(r, 4), "px": last, "ts": now})
+    lc = (plan or {}).get("lifecycle") if isinstance((plan or {}).get("lifecycle"), dict) else {}
+    mh, ent = _f(lc.get("max_hold_min")), _f(((rt or {}).get("ts") or {}).get("entered"))
+    key = "hold_expiring:%d" % int(mh) if mh else None          # ключ со сроком: после продления будильник сработает снова перед новым сроком
+    if mh and ent is not None and key not in done:
+        lead = min(HOLD_WAKE_MAX_S, max(HOLD_WAKE_MIN_S, HOLD_WAKE_FRAC * mh * 60.0))
+        if now >= ent + mh * 60.0 - lead - _EPS:
+            ms[key] = now
+            ev = {"name": "hold_expiring", "hold": int(mh), "px": last, "ts": now}
+            if r is not None:
+                ev["r"] = round(r, 4)
+            events.append(ev)
     frac = _f(_lim(limits, "events", "near_target_frac", 0.8))
     avg = _f(pos.get("avg"))
     if last and avg and frac:

@@ -60,7 +60,7 @@ EVENT_TYPES = {
     "day_state": PRI_INFO,             # WP14: переход состояния дня (stopped/starting/running/closing/halted)
     "news_flash": PRI_WAKE,            # быстрые новости (intel/flash.py): класс, подсказка направления, важность, источник; БЕЗ текста заголовка
 }
-WAKE_MILESTONES = ("r_plus_1", "r_minus_05", "near_target", "target_filled")
+WAKE_MILESTONES = ("r_plus_1", "r_minus_05", "near_target", "target_filled", "hold_expiring")      # hold_expiring: скоро MAX_HOLD, мозг решает, продлить ли срок
 SCANNER_KINDS = ("range_5m", "turnover_surge", "hot_enter", "patrol", "idea_near", "idea_level", "idea_invalidated", "idea_tp", "idea_expired",
                  "oi_spike", "oi_flush", "funding_extreme", "liq_cascade",           # деривативы (hotscan.DerivGate, marketdata/liqwatch.py)
                  "cvd_divergence", "book_wall", "xex_gap")                           # ордерфлоу (marketdata/flowwatch.py)
@@ -113,7 +113,7 @@ D_FIELDS = {
     "trigger_fired": {"cond": "id", "level": "num", "px": "num"},
     "entry_blocked": {"why": ("enum", ENTRY_BLOCKED_WHY), "attempt": "num"},
     "entry_filled": {"avg": "num", "qty": "num", "partial": "bool", "sl": "num", "risk_usdt": "num", "journal_id": "id"},
-    "milestone": {"name": "id", "r": "num", "px": "num", "target": "id"},
+    "milestone": {"name": "id", "r": "num", "px": "num", "target": "id", "hold": "num"},      # hold: срок удержания (мин) у hold_expiring
     "rule_fired": {"rule": "id", "action": "id", "ok": "bool", "code": "id"},
     "stop_moved": {"from": "num", "to": "num", "by": ("enum", ("rule", "cmd", "protect", "owner"))},
     "position_closed": {"reason": "id", "pnl_usdt": "num", "r": "num", "fees": "num", "journal_id": "id", "mae_r": "num", "mfe_r": "num"},
@@ -478,7 +478,7 @@ def _dedup_hit(clean, now, root):
         if e.get("type") != t or e.get("plan") != clean.get("plan") or e.get("sym") != clean.get("sym"):
             continue
         d, c = e.get("d") or {}, clean["d"]
-        if t == "milestone" and d.get("name") == c.get("name") and c.get("name") is not None:
+        if t == "milestone" and d.get("name") == c.get("name") and c.get("name") is not None and d.get("hold") == c.get("hold"):      # hold_expiring после продления срока не дубль
             return e["seq"]
         if t == "connectivity" and d.get("channel") == c.get("channel") and d.get("state") == c.get("state"):
             ts = parse_iso(e.get("ts"))
