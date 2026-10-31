@@ -440,6 +440,7 @@ def settings(root=None, now=None):
         r = dashapi.api("/api/settings/" + path, query or {}, root, now)
         return r[1] if r and r[0] == 200 and isinstance(r[1], dict) else {}
     ov, rl = get("overview"), get("roles")
+    pv, ex, rv = get("providers"), get("exchanges"), get("revisions")
     day = {g.get("id"): g for g in (get("usage", {"days": ["1"], "by": ["role"]}).get("groups") or []) if isinstance(g, dict)}
     roles = []
     for r in rl.get("roles") or []:
@@ -452,8 +453,67 @@ def settings(root=None, now=None):
                       "today": {"usd": _num(t.get("usd")), "calls": _num(t.get("calls")), "errors": _num(t.get("errors")), "budget_left_usd": _num(t.get("budget_left_usd"))},
                       "day": {"calls": _num(d.get("calls")), "err_rate": _num(d.get("err_rate")), "fmt_err_rate": _num(d.get("fmt_err_rate")), "fallbacks": _num(d.get("fallbacks")),
                               "p50_ms": round((_num(d.get("lat_p50_ms")) or 0) / 100.0) * 100 if _num(d.get("lat_p50_ms")) is not None else None, "usd": _num(d.get("usd"))}})
+    providers = []
+    for p in pv.get("providers") or []:
+        if not isinstance(p, dict):
+            continue
+        cred, lim = p.get("cred") if isinstance(p.get("cred"), dict) else {}, p.get("limits") if isinstance(p.get("limits"), dict) else {}
+        providers.append({"id": str(p.get("id"))[:40], "name": str(p.get("name") or p.get("id"))[:60], "adapter": str(p.get("adapter") or "")[:40], "enabled": bool(p.get("enabled")), "local": bool(p.get("local")),
+                          "verified": bool(p.get("verified")), "note": _txt(p.get("note"), 200), "error": _txt(p.get("error"), 160), "base_host": _host(p.get("base_url")),
+                          "cred": {"needed": bool(cred.get("needed")), "present": bool(cred.get("present")), "perms_ok": cred.get("perms_ok") if isinstance(cred.get("perms_ok"), bool) else None, "env": _txt(cred.get("env"), 40)},       # ни ключа, ни маски: только «есть или нет»
+                          "limits": {k: _num(lim.get(k)) for k in ("concurrent", "rpm", "day_usd", "hour_usd", "day_toks")},
+                          "models": [{"id": str(m.get("id"))[:30], "name": str(m.get("name"))[:60], "ctx": _num(m.get("ctx")), "tools": bool(m.get("tools")), "tags": [str(t)[:20] for t in (m.get("tags") or [])[:4]],
+                                      "price": {k: _num((m.get("price") or {}).get(k)) for k in ("in_miss", "in_hit", "out")} if isinstance(m.get("price"), dict) else None}
+                                     for m in (p.get("models") or []) if isinstance(m, dict)][:12],
+                          "profiles": [str(x)[:30] for x in (p.get("profiles") or [])[:12]]})
+    exchanges = [{"id": str(e.get("id"))[:30], "name": str(e.get("name") or e.get("id"))[:60], "enabled": bool(e.get("enabled")), "mode": e.get("mode"), "implemented": bool(e.get("implemented")), "active": bool(e.get("active")),
+                  "allowed": bool(e.get("allowed")), "note": _txt(e.get("note"), 160), "alive": bool((e.get("exec") or {}).get("alive")), "creds": sorted(str(k)[:20] for k in (e.get("cred_files") or {}))[:4],
+                  "max_open_positions": _num((e.get("limits") or {}).get("max_open_positions"))} for e in (ex.get("exchanges") or []) if isinstance(e, dict)]
+    swaps = [{k: s.get(k) for k in ("seq", "ts", "rev", "prev_rev", "kind", "tier", "by")} | {"target": [str(x)[:40] for x in (s.get("target") or [])[:6]], "from": str(s.get("from"))[:80], "to": str(s.get("to"))[:80]}
+             for s in reversed((rv.get("swaps") or [])[-30:]) if isinstance(s, dict)]
     return {"mode": ov.get("mode"), "rev": ov.get("rev"), "live_team": ov.get("live_team"), "exchange": ov.get("exchange"), "providers": ov.get("providers"),
-            "usage_today": ov.get("usage_today"), "errors": [str(e)[:120] for e in ((ov.get("errors") or []) + (rl.get("errors") or []))[:6]], "roles": roles}
+            "usage_today": ov.get("usage_today"), "errors": [str(e)[:120] for e in ((ov.get("errors") or []) + (rl.get("errors") or []))[:6]], "roles": roles,
+            "provider_list": providers, "exchange_list": exchanges, "swaps": swaps, "revisions": len(rv.get("revisions") or [])}
+
+
+def _host(url):
+    """Только хост из адреса провайдера (без пути и параметров)."""
+    from urllib.parse import urlparse
+    try:
+        h = urlparse(str(url or "")).hostname
+    except ValueError:
+        h = None
+    return h[:80] if h else None
+
+
+USAGE_DAYS = (1, 7, 30)
+USAGE_BY = ("model", "provider", "role")
+_USAGE_CACHE = {}           # (корень, дни, разрез) -> (когда, ответ): расход читает журнал вызовов, держим результат несколько секунд
+
+
+def usage_detail(root, days, by, now=None):
+    """Расход LLM по запросу клиента за days суток в разрезе by (model|provider|role): итог, строки групп, лимиты бюджета. -> {"days","by","ok","data"|"error"}."""
+    from tb.llm import dashapi
+    now = time.time() if now is None else now
+    if days not in USAGE_DAYS or by not in USAGE_BY:
+        return {"days": days if isinstance(days, int) else None, "by": by if isinstance(by, str) else None, "ok": False, "error": "bad query"}
+    key = (root, days, by)
+    hit = _USAGE_CACHE.get(key)
+    if hit and now - hit[0] < 10.0:
+        return hit[1]
+    r = dashapi.api("/api/settings/usage", {"days": [str(days)], "by": [by]}, root, now)
+    if not r or r[0] != 200 or not isinstance(r[1], dict):
+        return {"days": days, "by": by, "ok": False, "error": "no data"}
+    d = r[1]
+    keep = ("calls", "in", "in_hit", "out", "reasoning", "usd", "errors", "fmt_errors", "fallbacks", "lat_p50_ms", "lat_p95_ms", "err_rate", "fmt_err_rate", "cache_hit_rate")
+    out = {"days": days, "by": by, "ok": True, "data": {
+        "total": d.get("total"), "today": d.get("today"),
+        "groups": [{"id": str(g.get("id"))[:40]} | {k: _num(g.get(k)) for k in keep} for g in (d.get("groups") or []) if isinstance(g, dict)][:20],
+        "budget": [{k: b.get(k) for k in ("state", "scope", "cred", "used", "cap", "until_ts")} for b in ((d.get("budget") or {}).get("items") or []) if isinstance(b, dict)][:8]}}
+    if len(_USAGE_CACHE) > 20:
+        _USAGE_CACHE.clear()
+    _USAGE_CACHE[key] = (now, out)
+    return out
 
 
 BRIEFS_OUT = 60

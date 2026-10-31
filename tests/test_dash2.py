@@ -213,8 +213,11 @@ class ServerTest(Fx, unittest.IsolatedAsyncioTestCase):
             self.assertEqual(first[1]["data"]["status"], "idle")
             self.assertEqual((first[0]["data"]["mode"], first[10]["data"]["mode"]), ("paper", "paper"))
             self.assertIn("enabled", first[0]["data"]["ctl"])
-            with self.assertRaises(asyncio.TimeoutError):                         # без изменений сервер молчит (опроса нет)
-                await self.recv(ws, 0.8)
+            try:                                                                  # без изменений сервер молчит (опроса нет)
+                extra = await self.recv(ws, 0.8)
+            except asyncio.TimeoutError:
+                extra = None
+            self.assertIsNone(extra and (extra["topic"], str(extra["data"])[:300]))
             self.hb(inflight=2)
             m = await self.recv(ws)
             self.assertEqual((m["topic"], m["data"]["status"], m["seq"]), ("brain", "thinking", 2))
@@ -228,7 +231,14 @@ class ServerTest(Fx, unittest.IsolatedAsyncioTestCase):
                 await self.recv(a)
                 await self.recv(b)
             await a.send(json.dumps({"op": "mode", "mode": "live"}))
-            got = [await self.recv(a) for _ in range(6)]
+            wanted = {"decisions", "home", "ideas", "models", "plans", "trades"}
+            got = []
+            for _ in range(40):                                  # обновление постороннего общего топика (brain и др.) среди ответов допустимо: берём только темы режима
+                m = await self.recv(a)
+                if m["topic"] in wanted:
+                    got.append(m)
+                if len(got) == len(wanted):
+                    break
             self.assertEqual(sorted((m["topic"], m["data"]["mode"]) for m in got), [("decisions", "live"), ("home", "live"), ("ideas", "live"), ("models", "live"), ("plans", "live"), ("trades", "live")])
             await a.send(json.dumps({"op": "mode", "mode": "bogus"}))      # неизвестный режим игнорируется
             with self.assertRaises(asyncio.TimeoutError):
@@ -290,7 +300,11 @@ class ServerTest(Fx, unittest.IsolatedAsyncioTestCase):
         data = {"overview": {"mode": "paper", "rev": 3, "live_team": "A", "providers": {"total": 2, "enabled": 1}, "usage_today": {"usd": 0.0, "calls": 5}, "errors": []},
                 "roles": {"roles": [{"role": "entry_scout", "scope": "team", "team": "A", "live_risk": False, "io": "decision_json", "primary": model, "fallback": [dict(model, id="fb", provider_enabled=False)],
                                      "budget": {"day_usd": None}, "today": {"usd": 0.0, "calls": 5, "errors": 1, "budget_left_usd": None}}], "errors": []},
-                "usage": {"groups": [{"id": "entry_scout", "calls": 9, "err_rate": 0.1, "fmt_err_rate": 0.3, "fallbacks": 2, "lat_p50_ms": 8149, "usd": 0.0}]}}
+                "usage": {"groups": [{"id": "entry_scout", "calls": 9, "err_rate": 0.1, "fmt_err_rate": 0.3, "fallbacks": 2, "lat_p50_ms": 8149, "usd": 0.0}]},
+                "providers": {"providers": [{"id": "deepseek", "name": "DeepSeek", "adapter": "deepseek", "enabled": True, "base_url": "https://api.deepseek.com/v1?k=1", "cred": {"needed": True, "present": True, "mask": "…1d1c", "env": "DEEPSEEK_API_KEY"},
+                                             "limits": {"rpm": 60, "day_usd": 3.0}, "models": [{"id": "flash", "name": "deepseek-flash", "price": {"in_miss": 0.3, "out": 1.2}}], "profiles": ["ds-flash"]}]},
+                "exchanges": {"exchanges": [{"id": "bybit", "name": "Bybit", "enabled": True, "mode": "paper", "implemented": True, "active": True, "allowed": True, "exec": {"alive": True}, "cred_files": {"read": "x.env"}}]},
+                "revisions": {"revisions": [3, 2, 1], "swaps": [{"seq": 1, "ts": 5, "rev": 2, "prev_rev": 1, "kind": "use", "tier": 0, "by": "owner-cli", "target": ["reviewer"], "from": "a", "to": "b"}]}}
         orig = dashapi.api
         dashapi.api = lambda path, query, root, now: (200, data[path.rsplit("/", 1)[1]])
         try:
@@ -301,6 +315,30 @@ class ServerTest(Fx, unittest.IsolatedAsyncioTestCase):
         self.assertEqual((t["mode"], t["rev"], r["role"], r["primary"]["model_name"], r["fallback"][0]["provider_enabled"]), ("paper", 3, "entry_scout", "gpt", False))
         self.assertEqual((r["day"]["fmt_err_rate"], r["day"]["p50_ms"], r["day"]["fallbacks"], r["today"]["calls"]), (0.3, 8100, 2, 5))       # задержка округлена до 100 мс: тема не дребезжит
         self.assertNotIn("SECRET", repr(t))                                                                                                     # поля вне белого списка не уходят
+        p = t["provider_list"][0]
+        self.assertEqual((p["base_host"], p["cred"]["present"], t["exchange_list"][0]["creds"], t["swaps"][0]["target"], t["revisions"]), ("api.deepseek.com", True, ["read"], ["reviewer"], 3))
+        self.assertNotIn("1d1c", repr(t))                                                                                                       # маски ключа в данных нет, только «есть или нет»
+
+    def test_usage_detail_validates_query_and_returns_groups(self):
+        from tb.llm import dashapi
+        calls = []
+
+        def api(path, query, root, now):
+            calls.append(query)
+            return 200, {"total": {"usd": 1.0}, "today": {"usd": 0.1}, "groups": [{"id": "flash", "calls": 3, "usd": 1.0, "err_rate": 0.1, "secret": "x"}], "budget": {"items": [{"state": "ok", "cred": "day_usd", "used": 0.0, "cap": 2.0, "until_ts": 5}]}}
+        orig = dashapi.api
+        dashapi.api = api
+        topics._USAGE_CACHE.clear()
+        try:
+            r = topics.usage_detail(None, 7, "model", 100.0)
+            again = topics.usage_detail(None, 7, "model", 105.0)                            # в пределах 10 с берётся из памяти
+            bad = [topics.usage_detail(None, 99, "model", 1.0), topics.usage_detail(None, 7, "x; drop", 1.0)]
+        finally:
+            dashapi.api = orig
+        self.assertEqual((r["ok"], r["data"]["groups"][0]["id"], r["data"]["groups"][0]["calls"], r["data"]["budget"][0]["cap"]), (True, "flash", 3, 2.0))
+        self.assertNotIn("secret", r["data"]["groups"][0])
+        self.assertEqual((again, len(calls)), (r, 1))
+        self.assertEqual([b["ok"] for b in bad], [False, False])
 
     def test_briefs_list_and_detail(self):
         w(self.root, "state/briefs/B-20261031-1000-01.json", json.dumps({"brief_id": "B-20261031-1000-01", "ts": "2026-10-31T10:00:00Z", "scope": "start", "room": {"allowed": True}, "positions": [{"sym": "SOL"}], "plans": [], "secret_key": "x"}))

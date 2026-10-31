@@ -176,6 +176,8 @@ class Hub(object):
                     await self.plan_op(ws, m)
                 elif m.get("op") == "brief":
                     await self.brief_op(ws, m)
+                elif m.get("op") == "usage":
+                    await self.usage_op(ws, m)
         except ConnectionClosed:                 # клиент закрыл вкладку или оборвал связь: не ошибка сервера
             pass
         finally:
@@ -195,6 +197,15 @@ class Hub(object):
         res = await asyncio.to_thread(topics.brief_detail, self.root, m.get("id"), None)
         try:
             await ws.send(self._msg("brief_detail", 0, res))
+        except Exception:
+            pass
+
+    async def usage_op(self, ws, m):
+        """Расход LLM по запросу (чтение): ответ `usage_detail` только этому соединению; период и разрез проверяются в topics.usage_detail."""
+        days = m.get("days") if isinstance(m.get("days"), int) and not isinstance(m.get("days"), bool) else None
+        res = await asyncio.to_thread(topics.usage_detail, self.root, days, m.get("by"), None)
+        try:
+            await ws.send(self._msg("usage_detail", 0, res))
         except Exception:
             pass
 
