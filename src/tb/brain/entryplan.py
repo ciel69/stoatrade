@@ -31,7 +31,8 @@ def build(obj, ctx):
     else:
         z = obj["zone"]
         when = {"kind": "price_in_zone", "low": float(z["low"]), "high": float(z["high"])}
-    how = {"type": "limit", "price": lvl, "post_only": True} if obj.get("entry_type") == "limit" else {"type": "market"}      # limit: maker у уровня после подтверждения (0.072% круга вместо 0.24%)
+    et = obj.get("entry_type") or ("limit" if stype == "scalp" and obj["confirm"] == "candle" else "market")      # scalp по умолчанию лимитом: комиссия рынка съедает короткую цель
+    how = {"type": "limit", "price": lvl, "post_only": True} if et == "limit" else {"type": "market"}      # limit: maker у уровня после подтверждения (0.072% круга вместо 0.24%)
     valid = {"ttl_min": ttl}
     if side == "long":
         valid.update(cancel_below=stop, cancel_above=tps[0])

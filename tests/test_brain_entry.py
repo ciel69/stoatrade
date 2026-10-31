@@ -599,6 +599,23 @@ class Candidates(unittest.TestCase):
             sign = 1 if r["side"] == "long" else -1
             self.assertTrue((r["level"] - r["stop"]) * sign > 0 and all((t - r["level"]) * sign > 0 for t in r["tp"]), r)
 
+    def test_scalp_needs_target_beyond_costs_and_limit_entry(self):
+        """scalp только при первой цели дальше 3 издержек круга (0.28% -> 0.84%), и тогда лимитом; ближе цель -> горизонт длиннее."""
+        for r in cands.candidates(self.brief(), "SOL") or []:
+            ref = max(r["level"], 145.2) if r["side"] == "long" else min(r["level"], 145.2)
+            if r["horizon"] == "scalp":
+                self.assertGreaterEqual(abs(r["tp"][0] - ref) / ref * 100.0, 3 * 0.28 - 1e-6, r)
+                self.assertEqual(r.get("entry_type"), "limit")
+        h, net, why = cands._horizon({"horizons": self.B["session"]["horizons"], "cost_rt_pct": 0.28}, 0.4, 3.0, 0.4, 0.5)
+        self.assertNotEqual(h, "scalp")                                                 # цель 0.5% < 0.84%
+        h, net, why = cands._horizon({"horizons": self.B["session"]["horizons"], "cost_rt_pct": 0.28}, 0.4, 3.0, 0.4, 1.0)
+        self.assertEqual((h, why), ("scalp", None))
+        ctx = validate.entry_context(self.brief(), EV)
+        ctx["event_seq"] = 1
+        p = entryplan.build(propose(horizon="scalp", stop=144.4, tp=[146.5]), ctx)
+        self.assertEqual(p["entry"]["how"]["type"], "limit")                            # scalp без entry_type -> лимит
+        self.assertEqual(entryplan.build(propose(), ctx)["entry"]["how"], {"type": "market"})
+
     def test_day_size_and_no_levels(self):
         out = cands.candidates(self.brief(size_mult=0.5), "SOL")
         self.assertTrue(all(r["size_mult"] == 0.5 for r in out))                       # размер дня копируется в кандидата

@@ -9,6 +9,7 @@ from tb.brain import validate as V
 
 CLUSTER_PCT = 0.15          # уровни ближе этого (% цены) считаются одним
 STOP_BUF_FRAC = 0.1         # стоп за уровнем на 0.1 ATR(5м) (не вплотную к уровню)
+SCALP_MIN_TP_COSTS = 3.0     # scalp только если первая цель дальше трёх издержек круга: иначе комиссии съедают сделку (BTC 2026-10-31: -0.655 USDT, из них ~0.56 комиссии)
 MAX_OK = 3
 MAX_FAIL = 2
 
@@ -45,7 +46,7 @@ def pool(brief, sym):
     return out
 
 
-def _horizon(ctx, stop_pct, rr, wide_pct=None):
+def _horizon(ctx, stop_pct, rr, wide_pct=None, tp1_pct=None):
     """-> (горизонт, rr_net, причина отказа или None): самый короткий горизонт, где стоп не шире max_stop_pct и RR после издержек не ниже min_rr.
     stop_pct: от уровня (для RR, как validate); wide_pct: как мерит шлюз исполнителя (validate.exec_stop_pct), для max_stop_pct."""
     wide_pct = stop_pct if wide_pct is None else wide_pct
@@ -62,6 +63,8 @@ def _horizon(ctx, stop_pct, rr, wide_pct=None):
     net = rr if cost is None else (rr * stop_pct - cost) / (stop_pct + cost)
     near = None                                        # горизонт, где стоп помещается и RR ближе всего к порогу (для отказа с числом)
     for h, ms, mr in geos:
+        if h == "scalp" and cost is not None and tp1_pct is not None and tp1_pct < SCALP_MIN_TP_COSTS * cost:
+            continue                                   # цель ближе трёх издержек: не scalp (переходит в intraday со сроком 4 ч)
         ms = V.ENTRY_MAX_STOP_PCT if ms is None else ms
         need = mr if (mr is not None and cost is not None) else V.ENTRY_MIN_RR
         val = net if (mr is not None and cost is not None) else rr
@@ -112,11 +115,13 @@ def candidates(brief, sym, ctx=None):
                 continue
             stop_pct = abs(L - stop) / L * 100.0
             wide = V.exec_stop_pct(L, px, stop)
-            h, net, why = _horizon(ctx, stop_pct, rr, wide)
+            h, net, why = _horizon(ctx, stop_pct, rr, wide, abs(tps[0] - ref) / ref * 100.0)
             row = {"side": side, "level": _px(L), "stop": stop, "tp": [_px(t) for t in tps], "dist_pct": round(dist, 2), "stop_pct": round(wide, 2),
                    "rr_net": net, "horizon": h}
             if size_mult is not None:
                 row["size_mult"] = size_mult
+            if h == "scalp":
+                row["entry_type"] = "limit"                # maker у уровня после свечи: круг ~0.07% вместо 0.24%
             if ctx.get("range_5m_pct") is not None and ctx["range_5m_pct"] > stop_pct and not V._loose(ctx):
                 why = why or "range_gt_stop"
             if why:
