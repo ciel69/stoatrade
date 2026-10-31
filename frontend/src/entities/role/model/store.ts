@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { useLive, type LiveMessage } from '@/shared/api'
-import { mockChain, mockSnapshot, type RoleMock } from '../lib/mock'
+import { mockChain, mockProvider, mockSnapshot, type RoleMock } from '../lib/mock'
 import type { RolesSnapshot } from './types'
 
 export const useRoleStore = defineStore('role', () => {
@@ -10,9 +10,15 @@ export const useRoleStore = defineStore('role', () => {
   let started = false
   let mockTimer: ReturnType<typeof setTimeout> | undefined
 
+  /** Отладка: принятые «сервером» изменения провайдеров переживают обновление темы от настоящего сервера. */
+  const provPatches = new Map<string, Parameters<typeof mockProvider>[2]>()
+
   function apply(m: LiveMessage): void {
     const s = m.data as RolesSnapshot
-    snapshot.value = mocked.value ? mockSnapshot(s, mocked.value) : s
+    if (!mocked.value) { snapshot.value = s; return }
+    let out = mockSnapshot(s, mocked.value)
+    for (const [id, to] of provPatches) out = mockProvider(out, id, to)
+    snapshot.value = out
   }
 
   function start(): void {
@@ -33,5 +39,13 @@ export const useRoleStore = defineStore('role', () => {
     mockTimer = setTimeout(() => { if (snapshot.value) snapshot.value = mockChain(snapshot.value, target, to) }, delayMs)
   }
 
-  return { snapshot, mocked, apply, start, mock, mockApply }
+  /** Отладка: «сервер» применяет изменение провайдера через несколько секунд, как обновляется тема settings. */
+  function mockProviderApply(id: string, to: Parameters<typeof mockProvider>[2], delayMs = 2500): void {
+    setTimeout(() => {
+      provPatches.set(id, { ...provPatches.get(id), ...to })
+      if (snapshot.value) snapshot.value = mockProvider(snapshot.value, id, to)
+    }, delayMs)
+  }
+
+  return { snapshot, mocked, apply, start, mock, mockApply, mockProviderApply }
 })

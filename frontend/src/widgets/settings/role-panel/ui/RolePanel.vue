@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useActionStore } from '@/entities/action'
 import { MAX_FALLBACK, ROLE_INFO, fallbackCandidates, issuesOf, pct, placeOf, roleLabel, useRoleStore, type RoleModel } from '@/entities/role'
 import { UiChip, UiDetail } from '@/shared/ui'
-import { fixed } from '@/shared/lib'
+import { fixed, useRefocus } from '@/shared/lib'
 import { useRoleEdit, type AppliedEntry } from '../model/useRoleEdit'
 import ProfileList from './ProfileList.vue'
 
@@ -87,19 +87,31 @@ function addFb(id: string): void {
 function apply(): void {
   closeP()
   closeAdd()
+  refocus.mark()
   edit.submit()
 }
+// Панель изменений исчезает вместе с нажатой кнопкой: фокус возвращается на «Сменить» (или на рамку панели). Окно подтверждения рисков вернёт его само, поэтому ждём, пока оно закроется.
+const detail = ref<{ $el: HTMLElement } | null>(null)
+const bar = ref<HTMLElement | null>(null)
+const refocus = useRefocus({
+  blocked: () => action.riskyRun === true && action.phase !== 'idle',
+  target: () => pBtn.value,
+  fallback: () => detail.value?.$el,
+  lostIn: () => bar.value,
+})
+watch(() => edit.entries.value[0]?.id, (id) => { if (id) refocus.arm() })
 function resetAll(): void {
   closeP()
   closeAdd()
   edit.reset()
+  refocus.arm()
 }
 const stateText = (e: AppliedEntry): string =>
   e.state === 'seen' ? 'данные обновились' : e.state === 'late' ? 'данные обновятся скоро' : 'ожидаем обновления данных'
 </script>
 
 <template>
-  <UiDetail :label="`Роль ${roleLabel(role)}`" @close="$emit('close')">
+  <UiDetail ref="detail" :label="`Роль ${roleLabel(role)}`" @close="$emit('close')">
     <template #title>
       <b class="h">{{ roleLabel(role) }}</b>
       <UiChip v-if="r?.live_risk">влияет на live</UiChip>
@@ -203,7 +215,7 @@ const stateText = (e: AppliedEntry): string =>
 
       <!-- сразу под редактируемыми блоками; при длинном содержимом липнет к низу панели -->
       <Transition name="bar">
-        <div v-if="edit.changes.value.any" class="chbar" role="group" aria-label="Изменения моделей роли">
+        <div v-if="edit.changes.value.any" ref="bar" class="chbar" role="group" aria-label="Изменения моделей роли">
           <dl class="chg">
             <div v-for="l in edit.lines.value" :key="l.label"><dt>{{ l.label }}</dt><dd>{{ l.from }} <span class="ar">→</span> <b>{{ l.to }}</b></dd></div>
           </dl>

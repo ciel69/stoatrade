@@ -2,6 +2,8 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { useLive, type LiveMessage } from '@/shared/api'
 import { FINAL_TIMEOUT_MS, TIMEOUT_TEXT, buildCommand, isExpired, isRisky, risksOf, secondsLeft, unavailableReason } from '../lib/flow'
+import { createKeySender } from './key'
+import type { KeyOutcome } from '../lib/key'
 import type { ActionFinal, ActionHello, ActionPhase, ActionResult, ActionSpec, ActionToast, Challenge } from './types'
 
 type Transport = (payload: Record<string, unknown>) => boolean
@@ -38,6 +40,9 @@ export const useActionStore = defineStore('action', () => {
 
   const active = computed(() => ACTIVE.has(phase.value))
   const risks = computed(() => risksOf(challenge.value))
+  /** Запись ключа провайдера: напрямую, без challenge. Отправитель не хранит значение, в состоянии стора его нет. */
+  const keys = createKeySender({ csrf: () => hello.value.csrf, send: (p) => transport(p) })
+  const sendKey = (provider: string, value: string): Promise<KeyOutcome> => keys.send(provider, value)
 
   function start(): void {
     if (started) return
@@ -157,6 +162,7 @@ export const useActionStore = defineStore('action', () => {
 
   function applyResult(m: LiveMessage): void {
     const r = m.data as ActionResult
+    if (keys.accept(r)) return
     if (r.id !== pendingId) return
     pendingId = null
     if (r.kind === 'challenge') return onChallenge(r)
@@ -220,6 +226,17 @@ export const useActionStore = defineStore('action', () => {
       return { blocked: true, gates: [{ id: 'G1', name: 'Исполнитель жив', ok: true }, { id: 'G2', name: 'Сверка свежая', ok: false, msg: 'последняя сверка 3 минуты назад' }, { id: 'G3', name: 'Нет открытых позиций', ok: false, msg: 'открыта позиция BTCUSDT, сначала закройте её' }], warnings: [], pre_amber: [], danger: false }
     }
     if (kind === 'full' && args.flatten !== true) return { gates, warnings: [], pre_amber: [], danger: false, phrases: [], blocked: false, nonce: 'mock', min_delay: 0, expires_in: 60 }
+    if (action === 'llm.provider') {
+      // пример: включение без рисков, остальное с предупреждением, чтобы видеть оба потока
+      const warn: Record<string, string> = {
+        disable: 'Роли, которые используют провайдера, перейдут на запасные модели; если запасных нет, их вызовы будут отклонены.',
+        update: 'Потолки расхода начнут действовать сразу: при исчерпании вызовы к провайдеру остановятся до конца окна (час или сутки).',
+        key_clear: 'Без ключа провайдер перестанет отвечать, пока вы не добавите новый.',
+      }
+      const w = warn[String(args.op)]
+      if (!w) return { gates, warnings: [], pre_amber: [], danger: false, phrases: [], blocked: false, nonce: 'mock', min_delay: 0, expires_in: 60 }
+      return { danger: false, blocked: false, gates, phrases: ['mock'], nonce: 'mock', min_delay: 2, expires_in: 90, pre_amber: [], warnings: [{ id: 'W_PROVIDER', code: 'W_PROVIDER', msg: w }] }
+    }
     if (action === 'brain.role' || action === 'brain.use') {
       return {
         danger: false, blocked: false, gates, phrases: ['mock'], nonce: 'mock', min_delay: 2, expires_in: 90, pre_amber: [],
@@ -238,9 +255,15 @@ export const useActionStore = defineStore('action', () => {
 
   function mockTransport(kind: ActionMock): Transport {
     return (p) => {
+      const live = (data: unknown) => ({ topic: 'x', seq: 0, ts: 0, data })
+      if (p.op === 'llmkey') {
+        // запись ключа: значение не читаем и не сохраняем; пример отказа: ключ, начинающийся с «reject»
+        const bad = typeof p.value === 'string' && p.value.startsWith('reject')
+        setTimeout(() => applyResult(live({ id: p.id, kind: 'llmkey', action: 'llm.key.set', ok: !bad, code: bad ? 'E_KEY' : 'OK', msg: '', provider: p.provider })), 400)
+        return true
+      }
       const base = { id: p.id as string, action: p.action as string }
       setTimeout(() => {
-        const live = (data: unknown) => ({ topic: 'x', seq: 0, ts: 0, data })
         if (p.kind === 'challenge') {
           applyResult(live({ ...base, kind: 'challenge', ok: true, code: kind === 'blocked' ? 'E_GATE' : 'OK', msg: kind === 'blocked' ? 'условия не выполнены' : '', data: mockChallenge(kind, p.args as Record<string, unknown>, p.action as string) }))
         } else {
@@ -276,12 +299,12 @@ export const useActionStore = defineStore('action', () => {
     }
   }
 
-  /** Отладка смены моделей (?edit=mock): расширенное управление включено только для brain.role и brain.use, ответы изображает mockTransport. calm: без рисков (безрисковый поток), иначе рискованный. */
+  /** Отладка правки моделей и провайдеров (?edit=mock): расширенное управление включено для brain.role, brain.use, llm.provider и записи ключа, ответы изображает mockTransport. calm: без рисков (безрисковый поток), иначе рискованный. */
   function mockEdit(calm = false): void {
     mocked = true
-    hello.value = { enabled: true, csrf: 'mock', full: true, modes: ['brain.role', 'brain.use'] }
+    hello.value = { enabled: true, csrf: 'mock', full: true, modes: ['brain.role', 'brain.use', 'llm.provider', 'llmkey'] }
     transport = mockTransport(calm ? 'full' : 'confirm')
   }
 
-  return { hello, phase, spec, challenge, receivedAt, error, resultText, riskyRun, toasts, active, risks, start, can, run, accept, recheck, cancel, reset, dismissToast, mock, mockEdit, applyHello, applyResult, applyFinal }
+  return { hello, phase, spec, challenge, receivedAt, error, resultText, riskyRun, toasts, active, risks, start, can, run, sendKey, accept, recheck, cancel, reset, dismissToast, mock, mockEdit, applyHello, applyResult, applyFinal }
 })

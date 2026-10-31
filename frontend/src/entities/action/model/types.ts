@@ -55,7 +55,7 @@ export interface Challenge {
 
 export interface ActionResult {
   id: string
-  kind: 'challenge' | 'command'
+  kind: 'challenge' | 'command' | 'llmkey'
   action: string
   ok: boolean
   code: string

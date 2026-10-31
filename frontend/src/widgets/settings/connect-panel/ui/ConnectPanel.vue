@@ -1,15 +1,31 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { credText, credsText, ctxText, exchangeStatus, limitsText, modeText, permsWarning, priceText, providerIssues, roleLabel, rolesUsing, useRoleStore } from '@/entities/role'
+import { useActionStore } from '@/entities/action'
 import { UiChip, UiDetail } from '@/shared/ui'
+import { useProviderEdit } from '../model/useProviderEdit'
+import ProviderKey from './ProviderKey.vue'
+import ProviderLimits from './ProviderLimits.vue'
+import ProviderSwitch from './ProviderSwitch.vue'
+import './provider-edit.css'
 
 /**
  * Боковая панель провайдера или биржи. Провайдер: где работает, ключ словами, лимиты, модели с ценой за миллион токенов, контекстом и тегами, какие роли им пользуются;
  * техническое (имя переменной окружения ключа, хост, профили) внизу. Биржа: статус, режим, исполнитель, виды ключей, лимит позиций. Значений ключей нет ни здесь, ни в данных.
+ * Провайдер редактируется, когда доступно действие llm.provider (расширенное управление): включение, потолки расхода, ключ (только запись). Иначе честная заметка и чтение.
+ * Биржа остаётся только для чтения. Отладка без сервера: ?edit=mock | mock-calm.
  */
 const props = defineProps<{ kind: 'provider' | 'exchange'; id: string }>()
 defineEmits<{ close: [] }>()
 const store = useRoleStore()
+const action = useActionStore()
+// отладка без сервера: ?edit=mock | mock-calm; тот же поток, что в панели роли, но для провайдеров
+const dbg = new URLSearchParams(location.search).get('edit')
+if (dbg && dbg.startsWith('mock') && !store.mocked) {
+  store.mock(dbg === 'mock-live' ? 'live' : 'edit')
+  action.mockEdit(dbg === 'mock-calm')
+}
+const edit = useProviderEdit(() => props.id)
 const roles = computed(() => store.snapshot?.roles ?? [])
 const p = computed(() => (props.kind === 'provider' ? (store.snapshot?.provider_list ?? []).find((x) => x.id === props.id) ?? null : null))
 const e = computed(() => (props.kind === 'exchange' ? (store.snapshot?.exchange_list ?? []).find((x) => x.id === props.id) ?? null : null))
@@ -30,14 +46,22 @@ const verified = (v: boolean | string | null | undefined) => (v === true ? 'пр
       <p class="what">{{ p.local ? 'Работает локально, на этом компьютере: данные никуда не уходят и плата не берётся.' : 'Работает в облаке: запросы уходят на сервер провайдера и оплачиваются по токенам.' }}</p>
       <ul v-if="issues.length" class="issues"><li v-for="(i, k) in issues" :key="k" :class="i.tone">{{ i.text }}</li></ul>
 
-      <section class="sec">
-        <h4>Ключ и лимиты</h4>
-        <dl class="kv">
-          <div><dt>Ключ</dt><dd>{{ credText({ cred: p.cred, local: p.local }) }}</dd></div>
-          <div v-if="permsWarning(p)"><dt>Права файла ключа</dt><dd class="warn">{{ permsWarning(p) }}</dd></div>
-          <div><dt>Лимиты расхода</dt><dd>{{ limitsText(p.limits) }}</dd></div>
-        </dl>
-      </section>
+      <template v-if="edit.canEdit.value">
+        <ProviderSwitch :edit="edit" />
+        <ProviderKey :edit="edit" />
+        <ProviderLimits :edit="edit" />
+      </template>
+      <template v-else>
+        <p class="locked">Изменение провайдеров выключено: включите расширенное управление (auth.dash2_full в config/control.json).</p>
+        <section class="sec">
+          <h4>Ключ и лимиты</h4>
+          <dl class="kv">
+            <div><dt>Ключ</dt><dd>{{ credText({ cred: p.cred, local: p.local }) }}</dd></div>
+            <div v-if="permsWarning(p)"><dt>Права файла ключа</dt><dd class="warn">{{ permsWarning(p) }}</dd></div>
+            <div><dt>Лимиты расхода</dt><dd>{{ limitsText(p.limits) }}</dd></div>
+          </dl>
+        </section>
+      </template>
 
       <section class="sec">
         <h4>Модели ({{ p.models.length }}), цены за 1 млн токенов</h4>
@@ -52,7 +76,7 @@ const verified = (v: boolean | string | null | undefined) => (v === true ? 'пр
         <p v-else class="meta">Моделей нет.</p>
       </section>
 
-      <section class="sec">
+      <section v-if="!edit.canEdit.value" class="sec">
         <h4>Кто пользуется</h4>
         <p class="meta">{{ users.length ? users.map(roleLabel).join(', ') : 'Ни одна роль не ссылается на этого провайдера.' }}</p>
       </section>
@@ -100,7 +124,7 @@ const verified = (v: boolean | string | null | undefined) => (v === true ? 'пр
 .models { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-3); }
 .models b { font-size: 14px; overflow-wrap: anywhere; }
 .meta { margin: 2px 0 0; font-size: 12px; color: var(--muted); line-height: 1.5; }
-.tab { font-variant-numeric: tabular-nums; }
+.locked { margin: 0; padding: var(--space-3); border-radius: var(--radius-sm); background: var(--panel2); font-size: 12px; color: var(--muted); line-height: 1.5; }
 .tags { margin: 4px 0 0; display: flex; flex-wrap: wrap; gap: 4px; }
 .kv { margin: 0; display: grid; gap: 6px; font-size: 12px; }
 .kv > div { display: flex; justify-content: space-between; gap: var(--space-4); }
