@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { coinKey, intensity, kfmt, METRICS, metricById, squarify, tone, useMarketStore, type CoinData, type MetricId } from '@/entities/market'
+import { coinKey, intensity, kfmt, METRICS, metricById, squarify, tone, useMarketStore, type CoinData, type HeatRow, type MetricId } from '@/entities/market'
 import { useIdeaStore } from '@/entities/idea'
 import { useTradingStore } from '@/entities/trading'
 import { UiSegment } from '@/shared/ui'
@@ -33,23 +33,45 @@ onMounted(() => {
 onUnmounted(() => ro?.disconnect())
 const height = computed(() => Math.round(Math.min(600, Math.max(340, width.value * 0.5))))
 
+type Scope = 'all' | 'hot' | 'feed'
+const q = new URLSearchParams(location.search).get('scope')        // ?scope=hot|feed открывает карту сразу с фильтром (для проверки глазами)
+const scope = ref<Scope>(q === 'hot' || q === 'feed' ? q : 'all')
+const NO_TURN = 50        // оборот неизвестен (монета только в фиде): условный вес, чтобы плитка не пропала
+
 const MAX = 60
-const coins = computed(() => {
+/** Монеты карты: топ по обороту; горячие и отслеживаемые, которых нет в топе, достраиваются из своих данных (цена, ход, оборот сканера). */
+const hotKeys = computed(() => new Set((market.snapshot?.hot.top ?? []).map((h) => coinKey(h.sym))))
+const feedKeys = computed(() => new Set((market.snapshot?.coins.rows ?? []).map((c) => coinKey(c.sym))))
+const pool = computed<HeatRow[]>(() => {
   const s = market.snapshot
   if (!s) return []
-  return s.heat.rows
-    .filter((r) => (r.turn_24h_musd ?? 0) > 0)
-    .sort((a, b) => (b.turn_24h_musd ?? 0) - (a.turn_24h_musd ?? 0))
+  const rows = new Map(s.heat.rows.map((r) => [coinKey(r.sym), r]))
+  const add = (key: string, r: HeatRow) => { if (!rows.has(key)) rows.set(key, r) }
+  const blank = { oi_chg_15m_pct: null, oi_chg_1h_pct: null, oi_musd: null, funding_pct: null, score: null, turn_surge_5m: null, range_5m_pct: null, ret_15m_pct: null, ret_5m_pct: null, chg_24h_pct: null, turn_24h_musd: null }
+  for (const h of s.hot.top) add(coinKey(h.sym), { ...blank, sym: h.sym, tradable: h.tradable, price: h.price, chg_24h_pct: h.chg_24h_pct, ret_5m_pct: h.ret_5m_pct, range_5m_pct: h.range_5m_pct, turn_surge_5m: h.turn_surge_5m, turn_24h_musd: h.turn_24h_musd, score: h.score })
+  for (const c of s.coins.rows) add(coinKey(c.sym), { ...blank, sym: c.sym, tradable: true, price: c.price, ret_5m_pct: c.ret_5m != null ? c.ret_5m * 100 : null, ret_15m_pct: c.ret_15m != null ? c.ret_15m * 100 : null })
+  return [...rows.values()]
+})
+const coins = computed(() => {
+  const keep = (key: string) => scope.value === 'all' || (scope.value === 'hot' ? hotKeys.value.has(key) : feedKeys.value.has(key))
+  return pool.value
+    .filter((r) => keep(coinKey(r.sym)) && (scope.value !== 'all' || (r.turn_24h_musd ?? 0) > 0))
+    .sort((a, b) => (b.turn_24h_musd ?? NO_TURN) - (a.turn_24h_musd ?? NO_TURN))
     .slice(0, MAX)
     .map((heat): CoinData & { key: string } => ({ key: coinKey(heat.sym), heat, liq: market.liqBy.get(coinKey(heat.sym)), flow: market.flowBy.get(coinKey(heat.sym)) }))
 })
-const layout = computed(() => squarify(coins.value.map((c) => ({ key: c.key, weight: Math.sqrt(c.heat.turn_24h_musd ?? 0) })), { x: 0, y: 0, w: width.value, h: height.value }))
+const layout = computed(() => squarify(coins.value.map((c) => ({ key: c.key, weight: Math.sqrt(c.heat.turn_24h_musd ?? NO_TURN) })), { x: 0, y: 0, w: width.value, h: height.value }))
+const scopes = computed(() => [
+  { value: 'all' as Scope, label: 'Все' },
+  { value: 'hot' as Scope, label: `Горячие${market.snapshot?.hot.available ? ' ' + hotKeys.value.size : ''}` },
+  { value: 'feed' as Scope, label: `Отслеживаемые${market.snapshot?.coins.ok ? ' ' + feedKeys.value.size : ''}` },
+])
 
 /** Монеты, на которые есть живой план или идея мозга. */
 const planned = computed(() => new Set((trading.plans?.items ?? []).filter((p) => p.col === 'waiting' || p.col === 'watching' || p.col === 'in_trade').map((p) => coinKey(p.sym))))
 const ideated = computed(() => new Set((ideas.snapshot?.items ?? []).filter((i) => i.status === 'watching' || i.status === 'idea').map((i) => coinKey(i.sym))))
 
-interface Tile { key: string; sym: string; x: number; y: number; w: number; h: number; value: number | null; text: string; tone: string; style: Record<string, string>; size: 'xl' | 'lg' | 'md' | 'sm' | 'xs'; price: string; plan: boolean; idea: boolean; dim: boolean; label: string; i: number }
+interface Tile { key: string; sym: string; x: number; y: number; w: number; h: number; value: number | null; text: string; tone: string; style: Record<string, string>; size: 'xl' | 'lg' | 'md' | 'sm' | 'xs'; price: string; plan: boolean; idea: boolean; hot: boolean; dim: boolean; label: string; i: number }
 const tiles = computed<Tile[]>(() => coins.value.flatMap((c, i) => {
   const r = layout.value.get(c.key)
   if (!r) return []
@@ -64,14 +86,14 @@ const tiles = computed<Tile[]>(() => coins.value.flatMap((c, i) => {
   return [{
     key: c.key, sym: c.key, ...r, value: v, text, tone: t, i,
     style: { background: v == null ? 'var(--panel2)' : `color-mix(in srgb, ${base} ${Math.round(8 + 52 * k)}%, var(--panel2))` },
-    size, price: price(c.heat.price), plan: planned.value.has(c.key), idea: ideated.value.has(c.key), dim: !c.heat.tradable,
-    label: `${c.key}: ${m.label} ${text}, цена ${price(c.heat.price)}, оборот ${fixed(c.heat.turn_24h_musd, 0)} млн USD${c.heat.tradable ? '' : ', сканер не допускает к торговле'}${planned.value.has(c.key) ? ', есть план' : ''}${ideated.value.has(c.key) ? ', есть идея' : ''}`,
+    size, price: price(c.heat.price), plan: planned.value.has(c.key), idea: ideated.value.has(c.key), hot: hotKeys.value.has(c.key), dim: !c.heat.tradable,
+    label: `${c.key}: ${m.label} ${text}, цена ${price(c.heat.price)}, оборот ${fixed(c.heat.turn_24h_musd, 0)} млн USD${c.heat.tradable ? '' : ', сканер не допускает к торговле'}${planned.value.has(c.key) ? ', есть план' : ''}${ideated.value.has(c.key) ? ', есть идея' : ''}${hotKeys.value.has(c.key) ? ', в горячих сканера' : ''}`,
   }]
 }))
 
 const stale = computed(() => (market.snapshot?.heat.at != null ? now.value - market.snapshot.heat.at > 120 : false))
 const totals = computed(() => market.snapshot?.liq)
-const empty = computed(() => market.snapshot && (!market.snapshot.heat.available || !coins.value.length))
+const empty = computed(() => market.snapshot && !coins.value.length)
 </script>
 
 <template>
@@ -79,6 +101,7 @@ const empty = computed(() => market.snapshot && (!market.snapshot.heat.available
     <header class="top">
       <h2 class="title">Рынок</h2>
       <span v-if="market.snapshot?.heat.at" class="age" :class="{ stale }">{{ stale ? 'сканер не обновляет карту ' : 'обновлено ' }}{{ ageText(market.snapshot.heat.at, now) }}</span>
+      <UiSegment v-model="scope" :options="scopes" label="Какие монеты показывать" />
       <UiSegment v-model="metricId" :options="options" label="Что показывает цвет" />
     </header>
     <p class="hint">{{ metric.hint }}. Размер плитки: оборот за сутки.</p>
@@ -87,20 +110,21 @@ const empty = computed(() => market.snapshot && (!market.snapshot.heat.available
 
     <div ref="wrap" class="field" :style="{ height: height + 'px' }">
       <div v-if="market.snapshot && !empty" class="tiles">
-        <button v-for="t in tiles" :key="t.key" type="button" class="tile" :class="[`s-${t.size}`, `t-${t.tone}`, { sel: selected === t.key, dim: t.dim, plan: t.plan, idea: t.idea && !t.plan, nil: t.value == null }]"
+        <button v-for="t in tiles" :key="t.key" type="button" class="tile" :class="[`s-${t.size}`, `t-${t.tone}`, { sel: selected === t.key, dim: t.dim, hot: t.hot, plan: t.plan, idea: t.idea && !t.plan, nil: t.value == null }]"
                 :style="{ ...t.style, width: t.w + 'px', height: t.h + 'px', transform: `translate(${t.x}px, ${t.y}px)` }" :aria-label="t.label" :aria-pressed="selected === t.key" :title="t.label" @click="emit('select', t.key)">
           <span class="sym">{{ t.sym }}</span>
           <span v-if="t.size !== 'xs'" class="val">{{ t.text }}</span>
           <span v-if="t.size === 'xl' || t.size === 'lg'" class="px">{{ t.price }}</span>
         </button>
       </div>
-      <p v-else-if="empty" class="empty">Тепловой карты пока нет: её пишет сканер горячих монет, после запуска платформы она появляется через минуту.</p>
+      <p v-else-if="empty" class="empty">{{ scope === 'hot' ? 'Сканер пока не нашёл монет со всплеском активности.' : scope === 'feed' ? 'Фид цен не отдаёт отслеживаемых монет: нужен запущенный фид (runtime/market.json).' : 'Тепловой карты пока нет: её пишет сканер горячих монет, после запуска платформы она появляется через минуту.' }}</p>
       <div v-else class="skel" aria-busy="true" />
     </div>
 
     <footer class="legend">
       <span class="lg"><i class="sw plan" />есть план</span>
       <span class="lg"><i class="sw idea" />есть идея мозга</span>
+      <span class="lg"><i class="sw hot" />в горячих сканера</span>
       <span class="lg"><i class="sw dim" />сканер не допускает</span>
       <span v-if="metric.kind === 'signed'" class="scale" aria-hidden="true"><span class="neg">−{{ metric.id === 'liq' ? kfmt(metric.scale) : metric.scale }}</span><i class="bar" /><span class="pos">+{{ metric.id === 'liq' ? kfmt(metric.scale) : metric.scale }}</span></span>
     </footer>
@@ -134,6 +158,8 @@ const empty = computed(() => market.snapshot && (!market.snapshot.heat.available
 .tile.dim .sym { opacity: 0.6; }
 .tile.plan { box-shadow: inset 0 0 0 2px var(--accent); }
 .tile.idea { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 70%, transparent); border-style: dashed; }
+.tile.hot::after { content: ''; position: absolute; top: 6px; right: 6px; width: 6px; height: 6px; border-radius: 50%; background: var(--warn); }
+.s-xs.hot::after { top: 3px; right: 3px; width: 4px; height: 4px; }
 .tile.sel { outline: 2px solid var(--text); outline-offset: -2px; z-index: 1; }
 .tile:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; z-index: 1; }
 @media (hover: hover) and (pointer: fine) {
@@ -148,6 +174,7 @@ const empty = computed(() => market.snapshot && (!market.snapshot.heat.available
 .sw { width: 12px; height: 12px; border-radius: 3px; background: var(--panel2); box-sizing: border-box; }
 .sw.plan { box-shadow: inset 0 0 0 2px var(--accent); }
 .sw.idea { border: 1.5px dashed color-mix(in srgb, var(--accent) 70%, transparent); }
+.sw.hot { border-radius: 50%; width: 8px; height: 8px; background: var(--warn); }
 .sw.dim { opacity: 0.45; background: var(--muted); }
 .scale { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
 .bar { width: 120px; height: 8px; border-radius: 4px; background: linear-gradient(90deg, color-mix(in srgb, var(--neg) 60%, var(--panel2)), var(--panel2), color-mix(in srgb, var(--pos) 60%, var(--panel2))); }
