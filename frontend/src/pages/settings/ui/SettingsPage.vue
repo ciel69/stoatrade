@@ -2,18 +2,20 @@
 import { computed, onMounted } from 'vue'
 import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router'
 import { useRoleStore } from '@/entities/role'
+import { parseUsagePanel, usagePanelQuery, type UsageBy, type UsagePeriod } from '@/entities/usage'
 import { ConnectBoard } from '@/widgets/settings/connect-board'
 import { ConnectPanel } from '@/widgets/settings/connect-panel'
 import { RolePanel } from '@/widgets/settings/role-panel'
 import { RolesBoard } from '@/widgets/settings/roles-board'
 import { SwapsPanel } from '@/widgets/settings/swaps-panel'
 import { UsageBoard } from '@/widgets/settings/usage-board'
+import { UsagePanel } from '@/widgets/settings/usage-panel'
 import { UiSidePanel } from '@/shared/ui'
 
 /**
  * Страница «Система · Настройки»: организована по задачам, а не по терминам конфигурации. Блоки по порядку: «Кто думает» (роли мозга и их модели), «Что подключено» (провайдеры LLM, биржи),
  * «Сколько стоит» (расход LLM, история назначений). Только чтение; изменения появятся после входа по токену.
- * Одна боковая панель поверх страницы; что в ней, задаёт адрес и ровно один параметр: ?role=, ?provider=, ?exchange= или ?panel=swaps. Повторный клик закрывает.
+ * Одна боковая панель поверх страницы; что в ней, задаёт адрес и ровно один вид параметров: ?role=, ?provider=, ?exchange=, ?panel=swaps или ?usage=ID&days=&by= (строка расхода с периодом и разрезом). Повторный клик закрывает.
  */
 const route = useRoute()
 const router = useRouter()
@@ -23,8 +25,9 @@ const role = computed(() => q('role'))
 const provider = computed(() => q('provider'))
 const exchange = computed(() => q('exchange'))
 const swaps = computed(() => q('panel') === 'swaps')
-const open = computed(() => !!(role.value || provider.value || exchange.value || swaps.value))
-const label = computed(() => (role.value ? 'Роль мозга' : provider.value ? 'Провайдер LLM' : exchange.value ? 'Биржа' : 'История назначений'))
+const usage = computed(() => parseUsagePanel(route.query))
+const open = computed(() => !!(role.value || provider.value || exchange.value || swaps.value || usage.value))
+const label = computed(() => (role.value ? 'Роль мозга' : provider.value ? 'Провайдер LLM' : exchange.value ? 'Биржа' : usage.value ? 'Расход группы' : 'История назначений'))
 /** Переключает параметр: то же значение закрывает панель, иначе все параметры заменяются одним. */
 function toggle(query: LocationQueryRaw, same: boolean): void {
   void router.replace({ query: same ? {} : query })
@@ -32,6 +35,10 @@ function toggle(query: LocationQueryRaw, same: boolean): void {
 const pickRole = (r: string): void => toggle({ role: r }, role.value === r)
 const pickProvider = (id: string): void => toggle({ provider: id }, provider.value === id)
 const pickExchange = (id: string): void => toggle({ exchange: id }, exchange.value === id)
+const pickUsage = (id: string, days: UsagePeriod, by: UsageBy): void => {
+  const u = usage.value
+  toggle(usagePanelQuery(id, days, by), !!u && u.id === id && u.days === days && u.by === by)
+}
 const pickSwaps = (): void => toggle({ panel: 'swaps' }, swaps.value)
 function close(): void {
   void router.replace({ query: {} })
@@ -42,11 +49,12 @@ function close(): void {
   <main class="page">
     <RolesBoard :selected="role" @select="pickRole" />
     <ConnectBoard :provider="provider" :exchange="exchange" @provider="pickProvider" @exchange="pickExchange" />
-    <UsageBoard :swaps-open="swaps" @swaps="pickSwaps" />
+    <UsageBoard :swaps-open="swaps" :selected="usage" @swaps="pickSwaps" @select="pickUsage" @close="close" />
     <UiSidePanel :open="open" :label="label" @close="close">
       <RolePanel v-if="role" :key="'r' + role" :role="role" @close="close" />
       <ConnectPanel v-else-if="provider" :key="'p' + provider" kind="provider" :id="provider" @close="close" />
       <ConnectPanel v-else-if="exchange" :key="'e' + exchange" kind="exchange" :id="exchange" @close="close" />
+      <UsagePanel v-else-if="usage" :key="`u${usage.id}|${usage.days}|${usage.by}`" :id="usage.id" :days="usage.days" :by="usage.by" @close="close" />
       <SwapsPanel v-else-if="swaps" @close="close" />
     </UiSidePanel>
   </main>

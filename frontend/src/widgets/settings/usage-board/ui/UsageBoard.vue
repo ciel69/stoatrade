@@ -2,8 +2,8 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { pct, roleLabel, swapsLine, useRoleStore } from '@/entities/role'
 import {
-  CUTS, PERIODS, budgetCaption, budgetLevel, budgetTitle, costLine, intText, isFreeLocal, isHigh, leftFrac, msText, sortBudget, toksText, usageKey, useUsageStore, withShares,
-  type UsageBy, type UsagePeriod,
+  CUTS, PERIODS, budgetCaption, budgetLevel, budgetTitle, costLine, groupToks, intText, isFreeLocal, isHigh, leftFrac, msText, sortBudget, toksShare, toksText, usageKey, useUsageStore, withShares,
+  type UsageBy, type UsagePanelRef, type UsagePeriod,
 } from '@/entities/usage'
 import { useLive } from '@/shared/api'
 import { UiMeter, UiSegment } from '@/shared/ui'
@@ -12,17 +12,19 @@ import { duration, fixed, useNow } from '@/shared/lib'
 /**
  * Блок «Сколько стоит»: расход LLM за выбранный период в выбранном разрезе (по моделям, провайдерам, ролям). Данные по параметрам, поэтому запрашиваются по сокету
  * при заходе, при смене переключателя и раз в 30 секунд, пока блок на экране и вкладка видна; ответы хранятся по ключу «период:разрез», прежний остаётся на экране, пока идёт новый.
- * Сверху плитки итогов, шкалы дневного и часового потолка (сколько осталось, когда сбросится), ниже строки групп с долей стоимости и качеством.
+ * Сверху плитки итогов, шкалы дневного и часового потолка (сколько осталось, когда сбросится), ниже строки групп: название, токены и стоимость с долями ведут, вызовы и качество компактной строкой. Строка это кнопка: клик открывает боковую панель расхода группы (разбивка токенов, скорость, цена).
  * Внизу ссылка на историю назначений (боковая панель). Только чтение.
  */
-defineProps<{ swapsOpen: boolean }>()
-const emit = defineEmits<{ swaps: [] }>()
+const props = defineProps<{ swapsOpen: boolean; selected: UsagePanelRef | null }>()
+const emit = defineEmits<{ swaps: []; select: [id: string, days: UsagePeriod, by: UsageBy]; close: [] }>()
 const store = useUsageStore()
 const roles = useRoleStore()
 const now = useNow()
 
-const days = ref<UsagePeriod>(1)
-const by = ref<UsageBy>('model')
+// при открытии страницы по ссылке с панелью берём период и разрез из адреса, чтобы строка нашлась и подсветилась
+const days = ref<UsagePeriod>(props.selected?.days ?? 1)
+const by = ref<UsageBy>(props.selected?.by ?? 'model')
+const isSel = (id: string): boolean => !!props.selected && props.selected.id === id && props.selected.days === days.value && props.selected.by === by.value
 const key = computed(() => usageKey(days.value, by.value))
 const reply = computed(() => store.replies[key.value] ?? null)
 const loading = computed(() => !!store.pending[key.value] && !reply.value)
@@ -66,7 +68,7 @@ onUnmounted(() => {
   unState?.()
   document.removeEventListener('visibilitychange', onVisible)
 })
-watch(key, load)
+watch(key, () => { if (props.selected) emit('close'); load() })
 </script>
 
 <template>
@@ -105,18 +107,31 @@ watch(key, load)
       <section class="group">
         <h3 class="cap">{{ by === 'model' ? 'По моделям' : by === 'provider' ? 'По провайдерам' : 'По ролям' }}</h3>
         <ul v-if="groups.length" class="rows">
-          <li v-for="g in groups" :key="g.id" class="row">
-            <div class="name">
-              <b>{{ label(g.id) }}</b>
-              <span v-if="isFreeLocal(g, by)" class="free">бесплатно, локально</span>
-              <i class="share" :title="`Доля стоимости: ${Math.round(g.share * 100)}%`"><i class="sf" :style="{ transform: `scaleX(${g.share})` }" /></i>
-            </div>
-            <span class="cell cost"><b>${{ (g.usd ?? 0) < 1 ? fixed(g.usd ?? 0, 4) : fixed(g.usd ?? 0, 2) }}</b><small>{{ Math.round(g.share * 100) }}% стоимости</small></span>
-            <span class="cell"><b>{{ intText(g.calls) }}</b><small>вызовов</small></span>
-            <span class="cell" :class="{ hot: isHigh(g.err_rate, g.calls) }"><b>{{ pct(g.err_rate) }}</b><small>ошибки</small></span>
-            <span class="cell" :class="{ hot: isHigh(g.fmt_err_rate, g.calls) }"><b>{{ pct(g.fmt_err_rate) }}</b><small>неверный формат</small></span>
-            <span class="cell"><b>{{ pct(g.cache_hit_rate) }}</b><small>из кэша</small></span>
-            <span class="cell"><b>{{ msText(g.lat_p50_ms) }}</b><small>типичный ответ</small></span>
+          <li v-for="g in groups" :key="g.id">
+            <button type="button" class="row" :class="{ sel: isSel(g.id) }" :aria-pressed="isSel(g.id)" @click="emit('select', g.id, days, by)">
+              <span class="name">
+                <b>{{ label(g.id) }}</b>
+                <span v-if="isFreeLocal(g, by)" class="free">бесплатно, локально</span>
+              </span>
+              <span class="fig tk">
+                <b>{{ toksText(groupToks(g)) }}</b>
+                <span>токенов, {{ Math.round(toksShare(g, groups) * 100) }}%</span>
+                <i class="share" aria-hidden="true"><i class="sf" :style="{ transform: `scaleX(${toksShare(g, groups)})` }" /></i>
+              </span>
+              <span class="fig cs" :class="{ nil: !(g.usd ?? 0) }">
+                <b>{{ (g.usd ?? 0) > 0 ? `$${(g.usd ?? 0) < 1 ? fixed(g.usd ?? 0, 4) : fixed(g.usd ?? 0, 2)}` : '$0' }}</b>
+                <span>{{ (g.usd ?? 0) > 0 ? `${Math.round(g.share * 100)}% стоимости` : 'без затрат' }}</span>
+                <i class="share" aria-hidden="true"><i class="sf" :style="{ transform: `scaleX(${g.share})` }" /></i>
+              </span>
+              <svg class="chev" viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 3L7.5 6L4.5 9" /></svg>
+              <span class="meta">
+                <span><b>{{ intText(g.calls) }}</b> вызовов</span>
+                <span :class="{ hot: isHigh(g.err_rate, g.calls) }">ошибки <b>{{ pct(g.err_rate) }}</b></span>
+                <span :class="{ hot: isHigh(g.fmt_err_rate, g.calls) }">формат <b>{{ pct(g.fmt_err_rate) }}</b></span>
+                <span>кэш <b>{{ pct(g.cache_hit_rate) }}</b></span>
+                <span>ответ <b>{{ msText(g.lat_p50_ms) }}</b></span>
+              </span>
+            </button>
           </li>
         </ul>
         <p v-else class="empty">За этот период вызовов не было.</p>
@@ -154,15 +169,25 @@ watch(key, load)
 .left { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .cp { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
 .rows { list-style: none; margin: 0; padding: 0; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
-.row { display: grid; grid-template-columns: minmax(0, 1.6fr) repeat(5, minmax(0, 0.7fr)) minmax(0, 0.8fr); gap: var(--space-3); align-items: start; padding: var(--space-3) var(--space-4); }
-.row + .row { border-top: 1px solid var(--line); }
-.name { display: grid; gap: 4px; font-size: 14px; min-width: 0; overflow-wrap: anywhere; }
+.rows li + li { border-top: 1px solid var(--line); }
+.row { display: grid; grid-template-columns: minmax(0, 1fr) 140px 140px 12px; grid-template-rows: auto 1fr; grid-template-areas: 'name tk cs chev' 'meta tk cs chev'; gap: var(--space-2) var(--space-5); align-items: start; width: 100%; padding: var(--space-3) var(--space-4); background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; transition: background-color var(--dur-fast) ease; }
+.row.sel { background: var(--panel2); box-shadow: inset 3px 0 0 var(--accent); }
+.row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.chev { grid-area: chev; margin-top: 6px; color: var(--muted); }
+.name { grid-area: name; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px var(--space-3); font-size: 15px; min-width: 0; overflow-wrap: anywhere; }
 .free { font-size: 12px; color: var(--muted); }
-.share { display: block; height: 4px; border-radius: 99px; background: var(--panel2); overflow: hidden; }
+.fig { display: grid; gap: 1px; font-variant-numeric: tabular-nums; min-width: 0; }
+.fig.tk { grid-area: tk; }
+.fig.cs { grid-area: cs; }
+.fig b { font-size: 18px; line-height: 1.2; font-weight: 700; letter-spacing: -0.01em; }
+.fig span { font-size: 11px; color: var(--muted); }
+.fig.nil b { color: var(--muted); }
+.share { display: block; height: 4px; margin-top: 4px; border-radius: 99px; background: var(--panel2); overflow: hidden; }
 .sf { display: block; height: 100%; width: 100%; transform-origin: left; background: var(--accent); border-radius: 99px; transition: transform 300ms var(--ease-out); }
-.cell { display: grid; gap: 1px; font-size: 13px; font-variant-numeric: tabular-nums; }
-.cell small { font-size: 11px; color: var(--muted); }
-.cell.hot b { color: var(--warn); }
+.cs .sf { background: var(--muted); }
+.meta { grid-area: meta; margin: 0; display: flex; flex-wrap: wrap; gap: 2px var(--space-4); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.meta b { font-weight: 600; color: var(--text); }
+.meta .hot, .meta .hot b { color: var(--warn); }
 .empty { margin: 0; font-size: 13px; color: var(--muted); }
 .err { margin: 0; font-size: 13px; color: var(--neg); }
 .swaps { display: flex; align-items: center; gap: var(--space-4); width: 100%; padding: var(--space-3) var(--space-4); background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); color: inherit; font: inherit; font-size: 13px; text-align: left; cursor: pointer; transition: background-color var(--dur-fast) ease; }
@@ -175,13 +200,13 @@ watch(key, load)
 @media (max-width: 900px) {
   .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .budget { grid-template-columns: minmax(0, 1fr); }
-  .row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .row .name { grid-column: 1 / -1; }
+  .row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 12px; grid-template-areas: 'name name chev' 'tk cs cs' 'meta meta meta'; grid-template-rows: none; gap: var(--space-2) var(--space-4); }
 }
 @media (prefers-reduced-motion: reduce) {
   .sf { transition: none; }
 }
 @media (hover: hover) and (pointer: fine) {
+  .row:not(.sel):hover { background: var(--panel2); }
   .swaps:not(.sel):hover { background: var(--panel2); }
 }
 </style>
