@@ -316,6 +316,7 @@ class ServerTest(Fx, unittest.IsolatedAsyncioTestCase):
                 "providers": {"providers": [{"id": "deepseek", "name": "DeepSeek", "adapter": "deepseek", "enabled": True, "base_url": "https://api.deepseek.com/v1?k=1", "cred": {"needed": True, "present": True, "mask": "…1d1c", "env": "DEEPSEEK_API_KEY"},
                                              "limits": {"rpm": 60, "day_usd": 3.0}, "models": [{"id": "flash", "name": "deepseek-flash", "price": {"in_miss": 0.3, "out": 1.2}}], "profiles": ["ds-flash"]}]},
                 "exchanges": {"exchanges": [{"id": "bybit", "name": "Bybit", "enabled": True, "mode": "paper", "implemented": True, "active": True, "allowed": True, "exec": {"alive": True}, "cred_files": {"read": "x.env"}}]},
+                "profiles": {"profiles": [{"id": "lm", "provider": "local", "model_name": "gpt", "provider_enabled": True, "live_ok": False, "used_by": ["A.entry_scout"], "api_key": "SECRET2"}]},
                 "revisions": {"revisions": [3, 2, 1], "swaps": [{"seq": 1, "ts": 5, "rev": 2, "prev_rev": 1, "kind": "use", "tier": 0, "by": "owner-cli", "target": ["reviewer"], "from": "a", "to": "b"}]}}
         orig = dashapi.api
         dashapi.api = lambda path, query, root, now: (200, data[path.rsplit("/", 1)[1]])
@@ -329,7 +330,9 @@ class ServerTest(Fx, unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("SECRET", repr(t))                                                                                                     # поля вне белого списка не уходят
         p = t["provider_list"][0]
         self.assertEqual((p["base_host"], p["cred"]["present"], t["exchange_list"][0]["creds"], t["swaps"][0]["target"], t["revisions"]), ("api.deepseek.com", True, ["read"], ["reviewer"], 3))
-        self.assertNotIn("1d1c", repr(t))                                                                                                       # маски ключа в данных нет, только «есть или нет»
+        self.assertEqual((r["target"], t["profile_list"][0]["id"], t["profile_list"][0]["used_by"]), ("A.entry_scout", "lm", ["A.entry_scout"]))     # имя роли для действий ctl и список профилей для выбора
+        self.assertNotIn("SECRET2", repr(t))
+        self.assertNotIn("1d1c", repr(t))                                                                                                      # маски ключа в данных нет, только «есть или нет»
 
     def test_usage_detail_validates_query_and_returns_groups(self):
         from tb.llm import dashapi

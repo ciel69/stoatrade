@@ -441,13 +441,18 @@ def settings(root=None, now=None):
         return r[1] if r and r[0] == 200 and isinstance(r[1], dict) else {}
     ov, rl = get("overview"), get("roles")
     pv, ex, rv = get("providers"), get("exchanges"), get("revisions")
+    profiles = [{"id": str(p.get("id"))[:40], "provider": str(p.get("provider") or "")[:40], "model_name": str(p.get("model_name") or "")[:80], "provider_enabled": bool(p.get("provider_enabled")),
+                 "live_ok": bool(p.get("live_ok")), "used_by": [str(x)[:60] for x in (p.get("used_by") or [])[:12]]}
+                for p in (get("profiles").get("profiles") or []) if isinstance(p, dict)]
     day = {g.get("id"): g for g in (get("usage", {"days": ["1"], "by": ["role"]}).get("groups") or []) if isinstance(g, dict)}
     roles = []
     for r in rl.get("roles") or []:
         if not isinstance(r, dict):
             continue
         t, d = r.get("today") or {}, day.get(r.get("role")) or {}
-        roles.append({"role": str(r.get("role"))[:40], "scope": r.get("scope"), "team": r.get("team"), "live_risk": bool(r.get("live_risk")), "io": r.get("io"),
+        name = str(r.get("role"))[:40]
+        target = ("%s.%s" % (r.get("team"), name)) if r.get("scope") == "team" and r.get("team") else ("shared.%s" % name)       # так роль называется в действиях ctl (brain.role, brain.use); поле не «key»: model.scrub вырезает такие имена
+        roles.append({"role": name, "target": target, "scope": r.get("scope"), "team": r.get("team"), "live_risk": bool(r.get("live_risk")), "io": r.get("io"),
                       "primary": _model(r.get("primary")), "fallback": [m for m in (_model(x) for x in (r.get("fallback") or [])) if m],
                       "budget_day_usd": _num((r.get("budget") or {}).get("day_usd")),
                       "today": {"usd": _num(t.get("usd")), "calls": _num(t.get("calls")), "errors": _num(t.get("errors")), "budget_left_usd": _num(t.get("budget_left_usd"))},
@@ -473,7 +478,7 @@ def settings(root=None, now=None):
              for s in reversed((rv.get("swaps") or [])[-30:]) if isinstance(s, dict)]
     return {"mode": ov.get("mode"), "rev": ov.get("rev"), "live_team": ov.get("live_team"), "exchange": ov.get("exchange"), "providers": ov.get("providers"),
             "usage_today": ov.get("usage_today"), "errors": [str(e)[:120] for e in ((ov.get("errors") or []) + (rl.get("errors") or []))[:6]], "roles": roles,
-            "provider_list": providers, "exchange_list": exchanges, "swaps": swaps, "revisions": len(rv.get("revisions") or [])}
+            "provider_list": providers, "exchange_list": exchanges, "swaps": swaps, "revisions": len(rv.get("revisions") or []), "profile_list": profiles}
 
 
 def _host(url):
