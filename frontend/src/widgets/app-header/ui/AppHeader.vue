@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { onMounted } from 'vue'
 import { useTradingStore, type TradingMode } from '@/entities/trading'
-import { useLive } from '@/shared/api'
-import { UiSegment, UiStatusDot, type DotState } from '@/shared/ui'
+import { UiSegment } from '@/shared/ui'
+
+/** Шапка: переключатель режима слева, справа слот `status` (индикатор состояния платформы подставляет app-слой: виджеты друг друга не импортируют). */
 const MODE_OPTIONS: ReadonlyArray<{ value: TradingMode; label: string }> = [
   { value: 'paper', label: 'бумага' },
   { value: 'live', label: 'live' },
@@ -11,23 +12,14 @@ const MODE_OPTIONS: ReadonlyArray<{ value: TradingMode; label: string }> = [
 ]
 
 const trading = useTradingStore()
-const { link } = useLive()
 onMounted(() => trading.start())
-
-const dot = computed<DotState>(() => ({ open: 'ok', connecting: 'warn', closed: 'bad' } as const)[link.value])
-const linkText = computed(() => ({ open: 'связь есть', connecting: 'подключение…', closed: 'нет связи' } as const)[link.value])
-const items = computed(() => (trading.snapshot?.platform.items ?? []).filter((i) => i.id === 'exec' || i.id === 'net'))
-const dotOf = (level: string | null): DotState => (level === 'ok' ? 'ok' : level === 'warn' ? 'warn' : level === 'bad' ? 'bad' : 'idle')
-const platform = computed(() => trading.snapshot?.platform ?? null)
 </script>
 
 <template>
   <header class="bar">
     <UiSegment :model-value="trading.mode" :options="MODE_OPTIONS" label="Режим" @update:model-value="trading.setMode" />
-    <span v-if="platform" class="plat" :class="{ off: platform.state !== 'running' }">{{ platform.state === 'running' ? `платформа: ${platform.mode}` : 'платформа остановлена' }}</span>
     <span class="grow" />
-    <span v-for="i in items" :key="i.id" class="chipline"><UiStatusDot :state="dotOf(i.level)" :label="i.label" /> {{ i.label.toLowerCase() }} {{ i.value }}</span>
-    <span class="chipline" role="status"><UiStatusDot :state="dot" :label="linkText" /> {{ linkText }}</span>
+    <slot name="status" />
   </header>
 </template>
 
@@ -36,8 +28,5 @@ const platform = computed(() => trading.snapshot?.platform ?? null)
 @media (max-width: 720px) {
   .bar { padding-left: 58px; }        /* место под кнопку боковой колонки */
 }
-.plat { font-size: 12px; color: var(--muted); }
-.plat.off { color: var(--warn); }
 .grow { flex: 1 1 0; }
-.chipline { display: inline-flex; align-items: center; gap: var(--space-2); font-size: 12px; color: var(--muted); }
 </style>

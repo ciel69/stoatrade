@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { coinKey, intensity, kfmt, METRICS, metricById, squarify, tone, useMarketStore, type CoinData, type HeatRow, type MetricId } from '@/entities/market'
+import { coinKey, HEAT_STALE_S, intensity, kfmt, METRICS, metricById, squarify, tone, useMarketStore, type CoinData, type HeatRow, type MetricId } from '@/entities/market'
 import { useIdeaStore } from '@/entities/idea'
 import { useTradingStore } from '@/entities/trading'
 import { UiSegment } from '@/shared/ui'
@@ -98,7 +98,7 @@ const tiles = computed<Tile[]>(() => coins.value.flatMap((c, i) => {
   }]
 }))
 
-const stale = computed(() => (market.snapshot?.heat.at != null ? now.value - market.snapshot.heat.at > 120 : false))
+const stale = computed(() => (market.snapshot?.heat.at != null ? now.value - market.snapshot.heat.at > HEAT_STALE_S : false))
 const totals = computed(() => market.snapshot?.liq)
 const empty = computed(() => market.snapshot && !coins.value.length)
 </script>
