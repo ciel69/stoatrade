@@ -416,13 +416,30 @@ class LiqTail:
 
 
 HEAT_COLS = ("price", "chg_24h_pct", "ret_5m_pct", "ret_15m_pct", "range_5m_pct", "turn_surge_5m", "oi_chg_15m_pct", "oi_chg_1h_pct", "oi_musd", "funding_pct", "turn_24h_musd", "score")
+HEAT_XCOLS = ("xturn_24h_musd", "bybit_share_pct", "xlead", "xn")     # другие биржи (runtime/xvol.json от intel через ccxt): суммарный оборот, доля Bybit, лидер
 
 
-def build_heat(rows, env, now, n=80):
-    """Широкая таблица для тепловой карты дашборда: топ-n монет по обороту, колонки HEAT_COLS (None = нет данных). Без запросов: те же строки скана."""
+def build_heat(rows, env, now, n=80, xvol=None):
+    """Широкая таблица для тепловой карты дашборда: топ-n монет по обороту, колонки HEAT_COLS (None = нет данных). Без запросов: те же строки скана.
+    xvol (runtime/xvol.json): обороты тех же монет на Binance, OKX, Bitget -> колонки HEAT_XCOLS (None, если монеты на других биржах нет или данные старые)."""
+    from tb.marketdata import xvol as xv
     rows = sorted(rows, key=lambda r: -(r.get("turn_24h_musd") or 0.0))[:n]
-    return {"ts": iso(now), "ts_epoch": now, "env": env, "cols": list(HEAT_COLS),
-            "rows": [dict({"sym": r["sym"], "tradable": bool(r.get("tradable"))}, **{c: r.get(c) for c in HEAT_COLS}) for r in rows]}
+    out = []
+    for r in rows:
+        row = dict({"sym": r["sym"], "tradable": bool(r.get("tradable"))}, **{c: r.get(c) for c in HEAT_COLS})
+        x = xv.heat_fields(xvol, r["sym"], r.get("turn_24h_musd"), now, r.get("price"))
+        row.update({c: x.get(c) for c in HEAT_XCOLS})
+        out.append(row)
+    return {"ts": iso(now), "ts_epoch": now, "env": env, "cols": list(HEAT_COLS + HEAT_XCOLS), "rows": out}
+
+
+def read_xvol(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else None
+    except (OSError, ValueError):
+        return None
 
 
 # ---------- ввод-вывод ----------
@@ -549,7 +566,7 @@ def run(c, p, watch, out=sys.stdout, hot_path=None, log_path=None, clock=time.ti
             warm = bool(top) and all(r["range_15m_pct"] is not None for r in top[:3])
             write_hot(hot_path, build_payload(p, c.env, now, top, blocked, stats, warm))
             try:                                  # тепловая карта: широкая таблица метрик; сбой записи не роняет сканер
-                write_hot(heat_path, build_heat(trad + blocked, c.env, now, p["heat_n"]))
+                write_hot(heat_path, build_heat(trad + blocked, c.env, now, p["heat_n"], read_xvol(os.path.join(os.path.dirname(heat_path), "xvol.json"))))
             except OSError:
                 pass
             try:                                  # цены всех монет для дашборда; сбой записи не должен ронять сканер

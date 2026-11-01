@@ -6,6 +6,7 @@ from _intel_helpers import IntelCase, NOW
 from tb.intel import fetch as F
 from tb.intel import store
 from tb.intel import xex as X
+from tb.marketdata import xvol as XV
 
 
 class FakeEx(object):
@@ -20,8 +21,8 @@ class FakeEx(object):
         if self.boom:
             raise RuntimeError("down")
 
-    def fetch_tickers(self, syms):
-        return {m: self.rows[m.split("/")[0]] for m in syms}
+    def fetch_tickers(self, syms=None):
+        return {"%s/USDT:USDT" % s: r for s, r in self.rows.items() if syms is None or "%s/USDT:USDT" % s in syms}
 
     def fetch_funding_rates(self, syms):
         return {m: {"fundingRate": self.fund[m.split("/")[0]]} for m in syms if m.split("/")[0] in self.fund}
@@ -72,6 +73,27 @@ class TestCollector(IntelCase):
         from tb.brain import brief
         row = brief.intel_block(self.root, NOW + 5, ["BTC"])["deriv"]["BTC"]
         self.assertEqual((row["xfund_pct"], row["basis_bps"], row["bybit_vol_pct"], row["lead"]), (0.01, 50.0, 20, "binanceusdm"))
+
+    def test_xvol_feeds_heat_map(self):
+        exs = exchanges()
+        exs["binanceusdm"].rows["DOGE"] = {"last": 0.2, "quoteVolume": 3e6}
+        c = self.mk(exs)
+        c.step(["BTC"], NOW)
+        import json
+        import os
+        from tb.marketdata import hotscan
+        xv = json.load(open(os.path.join(self.root, "runtime", "xvol.json"), encoding="utf-8"))
+        self.assertEqual(set(xv["ex"]), {"binanceusdm", "okx"})                       # Bybit берёт сам сканер, упавшая биржа не попадает
+        h = hotscan.build_heat([{"sym": "DOGE", "turn_24h_musd": 1.0, "tradable": True, "price": 0.201}, {"sym": "PEPE", "turn_24h_musd": 2.0, "price": 1.0}], "mainnet", NOW + 5, xvol=xv)
+        rows = {r["sym"]: r for r in h["rows"]}
+        self.assertEqual((rows["DOGE"]["xturn_24h_musd"], rows["DOGE"]["bybit_share_pct"], rows["DOGE"]["xlead"], rows["DOGE"]["xn"]), (4.0, 25.0, "binanceusdm", 2))
+        self.assertIsNone(rows["PEPE"]["bybit_share_pct"])                             # монеты нет на других биржах
+        self.assertIsNone(hotscan.build_heat([{"sym": "DOGE", "turn_24h_musd": 1.0, "price": 0.2}], "mainnet", NOW + 2000, xvol=xv)["rows"][0]["xturn_24h_musd"])   # старые данные
+
+    def test_match_multiplier_and_ticker_collision(self):
+        vols = {"PEPE": [5e6, 0.00001], "XOM": [1e6, 2.5]}
+        self.assertEqual(XV._match(vols, "1000PEPE", 0.0100), 5e6)          # Bybit 1000PEPE = OKX PEPE x 1000
+        self.assertIsNone(XV._match(vols, "XOM", 110.0))                      # тот же тикер, другой токен (цена не сходится)
 
     def test_disabled_and_service_with_fake_transport_has_no_ccxt(self):
         self.assertEqual(X.source_defs({"xex": {"enabled": False}}), [])

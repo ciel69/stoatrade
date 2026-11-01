@@ -4,11 +4,15 @@
 ccxt необязателен: без библиотеки источник молчит (кэша нет -> в facts и статусе его нет), остальной intel работает как раньше.
 Исполнитель и торговый ключ ccxt не используют: модуль импортируется только сервисом intel.
 Кэш: runtime/intel/cache/xex_<биржа>.json того же вида, что у fetch.Fetcher ({"ok","fetched","fails","next_try","last_error","data"}),
-data = {"symbols": {SYM: {"px", "fund_pct", "vol_usd", "oi_usd"}}}. Сравнение с Bybit считает store.build_facts (cross_rows).
+data = {"symbols": {SYM: {"px", "fund_pct", "vol_usd", "oi_usd"}}, "vols": {SYM: оборот 24 ч USD по ВСЕМ USDT-контрактам биржи}}.
+Сравнение с Bybit считает store.build_facts (cross_rows). Обороты всех монет других бирж -> runtime/xvol.json для тепловой карты сканера (hotscan.build_heat).
 """
 import time
 
+from tb import paths
+from tb.core import filelock
 from tb.intel import fetch as ifetch
+from tb.marketdata.xvol import XVOL_STALE_S
 
 DEFAULT_EXCHANGES = ("bybit", "binanceusdm", "okx", "bitget")
 INTERVAL_S = 300
@@ -78,12 +82,19 @@ class Collector(object):
         return now - float(c.get("tried") or c.get("fetched") or 0) >= float(src["interval_s"])
 
     def collect(self, eid, symbols, now):
-        """-> {SYM: {...}} по одной бирже. Исключения ccxt наружу (их ловит step)."""
+        """-> {"symbols": {SYM: {...}}, "vols": {SYM: оборот USD}} по одной бирже: один запрос всех тикеров. Исключения ccxt наружу (их ловит step)."""
         ex = self._exchange(eid, now)
+        tick = ex.fetch_tickers() or {}
+        vols = {}
+        for m, t in tick.items():
+            if not isinstance(m, str) or not m.endswith("/USDT:USDT") or not isinstance(t, dict):
+                continue
+            v, px = _vol(ex, m, t), _f(t.get("last"))
+            if v and px:
+                vols[m.split("/")[0]] = [round(v, 0), px]              # цена нужна, чтобы не склеить разные токены с одним тикером
         mk = {s: "%s/USDT:USDT" % s for s in symbols if "%s/USDT:USDT" % s in (ex.markets or {})}
         if not mk:
-            return {}
-        tick = ex.fetch_tickers(list(mk.values()))
+            return {"symbols": {}, "vols": vols}
         try:
             fr = ex.fetch_funding_rates(list(mk.values()))
         except Exception:  # noqa: BLE001 - фандинг не у всех бирж пачкой: без него строка остаётся с ценой и оборотом
@@ -94,9 +105,7 @@ class Collector(object):
             px = _f(t.get("last"))
             if px is None:
                 continue
-            vol = _f(t.get("quoteVolume"))
-            if vol is None and _f(t.get("baseVolume")) is not None:          # OKX: baseVolume в контрактах (BTC: контракт 0.01 BTC)
-                vol = _f(t.get("baseVolume")) * (_f((ex.markets.get(m) or {}).get("contractSize")) or 1.0) * px
+            vol = _vol(ex, m, t)
             row = {"px": px, "vol_usd": None if vol is None else round(vol, 0)}
             f = _f((fr.get(m) or {}).get("fundingRate"))
             if f is not None:
@@ -112,7 +121,7 @@ class Collector(object):
                 except Exception:  # noqa: BLE001
                     pass
             out[sym] = row
-        return out
+        return {"symbols": out, "vols": vols}
 
     def step(self, symbols, now, force=False):
         """Опрос бирж, у которых подошёл срок. -> список обновлённых id. Не бросает."""
@@ -124,8 +133,8 @@ class Collector(object):
                 continue
             cache = ifetch.read_cache(src["id"], self.root)
             try:
-                data = {"symbols": self.collect(src["exchange"], symbols, now)}
-                if not data["symbols"]:
+                data = self.collect(src["exchange"], symbols, now)
+                if not data["symbols"] and not data["vols"]:
                     raise ValueError("no_symbols")
                 doc = {"id": src["id"], "ok": True, "fetched": now, "tried": now, "fails": 0, "next_try": 0, "last_error": None, "data": data}
                 upd.append(src["id"])
@@ -139,7 +148,39 @@ class Collector(object):
                 ifetch.write_cache(src["id"], doc, self.root)
             except OSError:
                 pass
+        if any(u != "xex_bybit" for u in upd):
+            try:
+                write_xvol(self.root, now, self.cfg)
+            except (OSError, ValueError):
+                pass
         return upd
+
+
+def _vol(ex, m, t):
+    """Оборот 24 ч в USD: quoteVolume, иначе baseVolume x размер контракта x цена (OKX: baseVolume в контрактах, у BTC контракт 0.01 BTC)."""
+    v = _f(t.get("quoteVolume"))
+    px = _f(t.get("last"))
+    if v is None and _f(t.get("baseVolume")) is not None and px:
+        v = _f(t.get("baseVolume")) * (_f(((ex.markets or {}).get(m) or {}).get("contractSize")) or 1.0) * px
+    return v
+
+
+def xvol_path(root=None):
+    return paths.runtime("xvol.json", root=root)
+
+
+def write_xvol(root, now, cfg=None):
+    """runtime/xvol.json = {"ts_epoch", "ex": {биржа: {"at", "vols": {SYM: USD}}}} из свежих кэшей других бирж (Bybit берёт сам сканер)."""
+    ex = {}
+    for s in source_defs(cfg or {}):
+        if s["exchange"] == "bybit":
+            continue
+        c = ifetch.read_cache(s["id"], root)
+        f = c.get("fetched")
+        vols = (c.get("data") or {}).get("vols")
+        if isinstance(f, (int, float)) and now - f <= XVOL_STALE_S and isinstance(vols, dict) and vols:
+            ex[s["exchange"]] = {"at": f, "vols": vols}
+    filelock.atomic_write_json(xvol_path(root), {"ts_epoch": now, "ex": ex}, indent=None)
 
 
 def cross_rows(by_ex, symbols):

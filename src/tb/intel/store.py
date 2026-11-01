@@ -197,7 +197,7 @@ def build_facts(root, cfg, now, srcs=None, symbols=None):
         if row:
             der[sym] = row
     from tb.intel import xex as ixex
-    by_ex = {s["exchange"]: data(s["id"]).get("symbols") or {} for s in srcs if s.get("kind") == "ccxt"}
+    by_ex = {s["exchange"]: data(s["id"]).get("symbols") or {} for s in srcs if s.get("kind") == "ccxt"}       # без "vols": обороты всех монет только для карты
     for sym, x in ixex.cross_rows(by_ex, symbols).items():          # Bybit против других бирж в один момент (ccxt)
         der.setdefault(sym, {})["x"] = x
     f["deriv"] = der
