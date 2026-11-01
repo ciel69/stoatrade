@@ -661,6 +661,21 @@ class Candidates(unittest.TestCase):
         self.assertEqual(p["entry"]["how"]["type"], "limit")                            # scalp без entry_type -> лимит
         self.assertEqual(entryplan.build(propose(), ctx)["entry"]["how"], {"type": "market"})
 
+    def test_first_target_capped_at_1_5r_when_rr_allows(self):
+        """Ближайший уровень дальше 1.5R: первая цель на 1.5R от худшей цены входа, уровень становится второй целью (если RR горизонта проходит)."""
+        b = copy.deepcopy(SCAN_BRIEF)
+        b.update(copy.deepcopy(self.B))
+        b["struct"]["s"]["SOL"].update(res=[[150.0, 3.3, 1.8, "wh"]], sup=[[144.4, -0.6, 0.3, "s1h"]])
+        b["levels"]["SOL"]["swing_5m"] = [145.0]
+        b["recent"][0]["d"]["range_5m_pct"] = 0.3
+        out = cands.candidates(b, "SOL") or []
+        row = next(r for r in out if r["side"] == "long" and r["level"] == 145.0 and r.get("ok"))
+        ref = max(row["level"], 145.2)
+        self.assertAlmostEqual(row["tp"][0], ref + 1.5 * (ref - row["stop"]), places=2)
+        self.assertEqual(row["tp"][1], 150.0)
+        o = propose(side=row["side"], horizon=row["horizon"], level=row["level"], stop=row["stop"], tp=row["tp"])
+        self.assertEqual(check(o, brief=b)[1], [])
+
     def test_day_size_and_no_levels(self):
         out = cands.candidates(self.brief(size_mult=0.5), "SOL")
         self.assertTrue(all(r["size_mult"] == 0.5 for r in out))                       # размер дня копируется в кандидата

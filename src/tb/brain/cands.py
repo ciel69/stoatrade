@@ -9,6 +9,7 @@ from tb.brain import validate as V
 
 CLUSTER_PCT = 0.15          # уровни ближе этого (% цены) считаются одним
 STOP_BUF_FRAC = 0.1         # стоп за уровнем на 0.1 ATR(5м) (не вплотную к уровню)
+TP1_MAX_R = 1.5             # первая цель не дальше 1.5R: ближайший уровень часто дальше хода цены (разбор 2026-11-01: ходы 1.4-2.1R возвращались в безубыток)
 SCALP_MIN_TP_COSTS = 3.0     # scalp только если первая цель дальше трёх издержек круга: иначе комиссии съедают сделку (BTC 2026-10-31: -0.655 USDT, из них ~0.56 комиссии)
 CHASE_ZONE_PCT = 0.3        # momentum_chase: зона входа ±0.3% у текущей цены (вход по рынку сейчас)
 CHASE_STOP_ATR = 0.25       # стоп за началом импульсной свечи: её диапазон плюс четверть ATR(5м)
@@ -116,12 +117,23 @@ def candidates(brief, sym, ctx=None):
             tps = sorted((t for t in lv if (t - ref) * sign > 0), key=lambda t: abs(t - ref))[:2]      # цели за худшей ценой входа: validate не даст TP_REACHED
             if not tps:
                 continue
-            rr = V._entry_rr(side, L, px, stop, tps)
-            if rr is None or rr <= 0:
-                continue
             stop_pct = abs(L - stop) / L * 100.0
             wide = V.exec_stop_pct(L, px, stop)
-            h, net, why = _horizon(ctx, stop_pct, rr, wide, abs(tps[0] - ref) / ref * 100.0)
+            cap = ref + sign * TP1_MAX_R * abs(ref - stop)
+            variants = ([[_px(cap), tps[0]]] if (tps[0] - cap) * sign > 0 else []) + [tps]      # сначала первая цель на 1.5R (вторая: уровень), если она проходит порог RR горизонта
+            pick = None
+            for v in variants:
+                rr = V._entry_rr(side, L, px, stop, v)
+                if rr is None or rr <= 0:
+                    continue
+                res = _horizon(ctx, stop_pct, rr, wide, abs(v[0] - ref) / ref * 100.0)
+                if pick is None or not res[2]:
+                    pick = (v,) + res
+                if not res[2]:
+                    break
+            if pick is None:
+                continue
+            tps, h, net, why = pick
             row = {"side": side, "level": _px(L), "stop": stop, "tp": [_px(t) for t in tps], "dist_pct": round(dist, 2), "stop_pct": round(wide, 2),
                    "rr_net": net, "horizon": h}
             if size_mult is not None:
