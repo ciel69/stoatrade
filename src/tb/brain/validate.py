@@ -754,6 +754,36 @@ def _audit(o, ctx):
     return sorted(set(errs))[:8]
 
 
+def _codes(v, allowed, limit):
+    out = []
+    for x in v if isinstance(v, list) else []:
+        if x in allowed and x not in out:
+            out.append(x)
+    return out[:limit]
+
+
+def repair_casereview(o, ctx):
+    """Вывод ревьюера до проверки схемы: из списков кодов убираются значения вне перечня и признаки, которых по ситуации не было
+    (known_at_decision знает код, не модель: 2026-10-31/11-01 BAD_ENUM right[0] и KNOWN_FALSE:no_confirm съедали повторы), «none» в improve
+    вместе с другими кодами убирается, пустой improve = ["none"], неизвестное действие альтернативы = "none". -> новый объект."""
+    o = dict(o)
+    o["right"] = _codes(o.get("right"), CR_RIGHT, 5)
+    imp = _codes(o.get("improve"), CR_IMPROVE, 5)
+    if len(imp) > 1 and "none" in imp:
+        imp.remove("none")
+    o["improve"] = imp or ["none"]
+    known = (ctx or {}).get("known")
+    kn = _codes(o.get("known_at_decision"), CR_KNOWN, 8)
+    o["known_at_decision"] = [k for k in kn if known.get(k) is True] if isinstance(known, dict) else kn
+    alt = o.get("alternative")
+    if isinstance(alt, dict) and alt.get("action") not in CR_ALT:
+        o["alternative"] = dict(alt, action="none")
+    return o
+
+
+REPAIRS = {"casereview/1": repair_casereview}
+
+
 def _casereview(o, ctx):
     errs = []
     known = ctx.get("known")                                     # {признак: True|False|None} из situation (memory.review.known_features)

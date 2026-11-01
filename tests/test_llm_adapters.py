@@ -202,6 +202,22 @@ class TestOpenAICompat(Contract, _llm.LLMBase):
         self.assertNotIn("thinking", b)
         self.assertEqual(b["temperature"], 0.3)
 
+    def test_broken_tool_args_in_history_sent_as_valid_json(self):
+        """Битый JSON аргументов в истории LM Studio отклоняет (500): уходит {} или разобранные args."""
+        self.srv.push(self.path, R(200, ds_ok("x")))
+        bad = {"id": "c1", "name": "pm_hold", "args": {}, "raw_args": '{"reason": "PROF'}
+        self.client("loc", "q")(Req(messages=[user("q"), assistant("", [bad]), tool_result("c1", "pm_hold", "{}")], tools=[types.tool("pm_hold", "d", {"type": "object"})]))
+        sent = self.srv.requests[-1]["json"]["messages"][1]["tool_calls"][0]["function"]["arguments"]
+        self.assertEqual(json.loads(sent), {})
+
+    def test_error_message_recorded_in_usage(self):
+        self.srv.push(self.path, R(400, {"error": {"message": "output does not match the expected format"}}))
+        with self.assertRaises(LLMError):
+            self.client("loc", "q")(Req(messages=[user("q")]))
+        row = usage.read_rows(root=self.root)[-1]
+        self.assertEqual(row["err"], "bad_request")
+        self.assertIn("does not match", row["err_msg"])
+
 
 class TestAnthropic(Contract, _llm.LLMBase):
     pid, mkey, path = "an", "son", "/v1/messages"

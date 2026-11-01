@@ -75,10 +75,16 @@ class Flow(BrainBase):
         self.closed()
         bad = dict(RV, known_at_decision=["no_confirm"], lesson_hint=None)         # у DOOD отсутствие подтверждения известно только из разбора ПОСЛЕ сделки (retro)
         r = self.runner({"ds-flash": [bad, bad, bad]}, gw=self.real)
-        r.step()
-        self.assertEqual(self.get_job("J-9")["result"]["roles"][0]["code"], "BAD_FORMAT")
-        self.assertIn("KNOWN_FALSE:no_confirm", " ".join(self.factory.clients["ds-flash"].format_errors[0]))
-        self.assertIsNone(self.case_of()["review"])
+        r.step()                                                                   # ложный признак убирает код (validate.repair_casereview), повтор модели не нужен
+        self.assertEqual(self.factory.clients["ds-flash"].format_errors, [])
+        self.assertIsNotNone(self.case_of()["review"])
+        self.assertNotIn("no_confirm", self.case_of()["review"].get("known_at_decision") or [])
+
+    def test_repair_drops_codes_outside_enum(self):
+        from tb.brain import validate
+        o = validate.repair_casereview(dict(RV, right=["good_entry", "size_ok"], improve=["none", "chase", "bogus"], known_at_decision=["no_confirm", "x"],
+                                            alternative={"action": "go", "detail": ""}), {"known": {"no_confirm": False}})
+        self.assertEqual((o["right"], o["improve"], o["known_at_decision"], o["alternative"]["action"]), (["size_ok"], ["chase"], [], "none"))
 
     def test_unlucky_only_when_code_suggests(self):
         self.closed()

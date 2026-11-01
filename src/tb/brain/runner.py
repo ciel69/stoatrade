@@ -42,7 +42,8 @@ DECISION_TOOLS = {"move_stop": "stop_plan", "close": "close_plan", "partial_clos
 
 # Режим «действие вызовом инструмента, объяснение постфактум» для position_manager (не live): модель вызывает pm_*, платформа исполняет сразу, JSON с why приходит после.
 PM_REASONS = ("INVALIDATION", "REVERSAL", "PROFIT_LOCK", "STALLED", "RISK", "SESSION_END", "DATA_GAP", "NO_ACTION", "OTHER")
-_R = {"reason": {"type": "string", "enum": list(PM_REASONS), "description": "primary reason code"}}
+_R = {"reason": {"type": "string", "enum": list(PM_REASONS), "description": "primary reason code"},
+      "why": {"type": "string", "maxLength": 200, "description": "short reason in Russian: reason | fact with a number | risk"}}
 
 
 def _spec(name, desc, props=None, req=()):
@@ -95,9 +96,8 @@ ES_TOOL_NOTE = ("\n\nTOOL MODE (this run). Act by calling exactly ONE tool: es_t
                 "No ok candidate fits: es_skip or es_watch. If a call is rejected with codes, fix it with another call; after one action succeeded stop.")
 
 PM_TOOL_NOTE = ("\n\nTOOL MODE (this run). Act by calling exactly ONE tool: pm_hold, pm_move_stop, pm_partial_close, pm_close, pm_cancel, pm_amend, pm_extend_hold, pm_hold_plan, pm_release_plan or pm_escalate "
-                "(reason is a code from the enum; plan and rev are filled in by the platform). The tool is executed immediately. AFTER the tool result write one short JSON object "
-                "{\"why\": \"reason | fact | risk\"} with numbers from the brief: it is only the record of what you did. Do not output the pm/1 JSON. If a call is rejected with codes, "
-                "fix it with another call. After one action succeeded do not call another action tool.")
+                "(reason is a code from the enum, why is a short note with numbers from the brief; plan and rev are filled in by the platform). The tool is executed immediately and "
+                "the run ends. Do not output JSON. If a call is rejected with codes, fix it with another call.")
 
 
 class Deferred(Exception):
@@ -756,7 +756,7 @@ class Runner(object):
         """entry_scout: действие одним вызовом es_take / es_skip / es_watch, числа из кандидата; исполняется сразу (те же проверки validate и шлюз).
         Без вызова инструмента ответ в старом формате entry/1 принимается как раньше. -> тот же словарь, что _call_profile, плюс executed/result."""
         run = ctx["_run"]
-        state = {"done": None}
+        state = {"done": None, "rej": []}
         llm_info = {"profile": meta.get("profile"), "fallback_from": meta.get("fallback_from")}
 
         def run_tool(name, a):
@@ -768,14 +768,15 @@ class Runner(object):
             if not errs:
                 errs = schema_mod.validate(role.schema, obj) or sem(obj)
             if errs:
+                state["rej"].append("%s:%s" % (name, errs[0]))
                 return {"ok": False, "errors": list(errs)[:6]}
             res = self._execute(role, obj, run["job"], run["agent"], dict(meta), ctx, llm_info, run["meter"])
             state["done"] = {"obj": obj, "result": res, "tool": name}
             return {"ok": res["outcome"] in ("decision", "hold"), "outcome": res["outcome"], "code": res["code"]}
         base = req
         req = req.copy(system=(req.system or "") + ES_TOOL_NOTE, tools=[dict(t) for t in ES_TOOL_SPECS], tool_choice="auto")
-        lr = toolloop.run(client, req, run_tool, max_rounds=max(3, role.max_rounds),
-                          should_stop=lambda: state["done"] is not None or self.clock() > deadline or self.stop_event.is_set())
+        lr = self._run_tools_once(client, req, run_tool, state, max_rounds=max(3, role.max_rounds),
+                                  should_stop=lambda: state["done"] is not None or self.clock() > deadline or self.stop_event.is_set())
         if state["done"] is not None:
             d = state["done"]
             return {"obj": d["obj"], "code": "OK", "errors": [], "executed": True, "result": d["result"], "tool": d["tool"], "reason": None, "why_text": "", "rounds": lr.rounds}
@@ -786,7 +787,7 @@ class Runner(object):
             return self._json_loop(role, client, base.copy(max_tokens=min(int(base.max_tokens) * 2, TRUNC_MAX_TOKENS)), sem, deadline, first_attempt=1)
         if lr.status not in ("ok",):
             code = {"loop": "LOOP", "max_rounds": "MAX_ROUNDS", "empty": "EMPTY", "truncated": "TRUNCATED", "cancelled": "TIMEOUT"}.get(lr.status, "BAD_FORMAT")
-            return {"obj": None, "code": code, "errors": lr.errors}
+            return {"obj": None, "code": code, "errors": lr.errors or state["rej"][-4:]}
         obj, errs = schema_mod.check_text(lr.text, role.schema)          # модель ответила старым JSON без вызова инструмента
         if lr.resp is not None and lr.resp.finish == "length" and errs and errs[0] != "TRUNCATED":
             errs = ["TRUNCATED"] + errs
@@ -803,12 +804,25 @@ class Runner(object):
         msgs = list(base.messages) + [assistant((lr.text or "(пусто)")[:400]), user(schema_mod.hint(errs))]
         return self._json_loop(role, client, base, sem, deadline, msgs=msgs, first_attempt=1)
 
+    def _run_tools_once(self, client, req, run_tool, state, **kw):
+        """toolloop.run, после которого действие не повторяется: если инструмент уже исполнил действие, а следующий раунд модели упал (LM Studio 400
+        «output does not match the expected format», сеть), результат действия принимается, а не идёт повтором задания или запасным профилем
+        (иначе тот же partial_close или вход исполнился бы второй раз). -> LoopResult."""
+        try:
+            return toolloop.run(client, req, run_tool, **kw)
+        except LLMError:
+            if state.get("done") is None:
+                raise
+            lr = toolloop.LoopResult()
+            lr.status = "ok"
+            return lr
+
     def _pm_tool_mode(self, role, client, req, meta, deadline, sem, ctx):
         """position_manager: действие вызовом pm_* (исполняется сразу через те же проверки и шлюз), затем модель пишет короткий JSON с why: он только запись.
         Без вызова инструмента ответ в старом формате pm/1 принимается как раньше. -> тот же словарь, что _call_profile, плюс executed/result/why_text."""
         run = ctx["_run"]
         plan = ctx.get("plan") or run["job"].get("plan")
-        state = {"done": None, "tool": None}
+        state = {"done": None, "tool": None, "rej": []}
         llm_info = {"profile": meta.get("profile"), "fallback_from": meta.get("fallback_from")}
         protect = self.health.protect_on or bool(ctx.get("protect"))
 
@@ -824,6 +838,7 @@ class Runner(object):
                 try:
                     args["to"] = "be" if to.lower() == "be" else float(to)
                 except ValueError:
+                    state["rej"].append("%s:RANGE:args.to" % name)
                     return {"ok": False, "errors": ["RANGE:args.to"]}
             elif d == "partial_close":
                 args["frac"] = a.get("frac")
@@ -831,6 +846,7 @@ class Runner(object):
                 try:
                     args["patch"] = {"lifecycle": {"max_hold_min": int(a.get("minutes"))}}      # продление срока удержания: правка плана, границы проверяет шлюз (E_HOLD_EXTEND)
                 except (TypeError, ValueError):
+                    state["rej"].append("%s:RANGE:args.minutes" % name)
                     return {"ok": False, "errors": ["RANGE:args.minutes"]}
             elif d == "amend":
                 args["patch"] = a.get("patch")
@@ -839,23 +855,26 @@ class Runner(object):
             obj = {"schema": "tb.pm/1", "event_seq": ctx["event_seq"], "plan": plan, "rev": ctx.get("brief_rev") if ctx.get("brief_rev") is not None else 1, "decision": d,
                    "args": args, "why": "%s: %s" % (name, a.get("reason") or "OTHER"), "conf": 0.7, "next": "event"}
             errs = schema_mod.validate(role.schema, obj) or sem(obj)
+            if not errs and protect and DECISION_TOOLS.get(d) in PROTECT_BLOCKED:
+                errs = ["PROTECT_ONLY"]
             if errs:
+                state["rej"].append("%s:%s" % (name, errs[0]))
                 return {"ok": False, "errors": list(errs)[:6]}
-            if protect and DECISION_TOOLS.get(d) in PROTECT_BLOCKED:
-                return {"ok": False, "errors": ["PROTECT_ONLY"]}
             res = self._execute(role, obj, run["job"], run["agent"], dict(meta), ctx, llm_info, run["meter"])
-            state["done"] = {"decision": d, "obj": obj, "result": res, "tool": name, "reason": a.get("reason")}
+            state["done"] = {"decision": d, "obj": obj, "result": res, "tool": name, "reason": a.get("reason"), "why": a.get("why")}
             return {"ok": res["outcome"] in ("decision", "hold"), "outcome": res["outcome"], "code": res["code"]}
         tl = [dict(t) for t in PM_TOOL_SPECS]
         base = req
         req = req.copy(system=(req.system or "") + PM_TOOL_NOTE, tools=tl, tool_choice="auto")
-        lr = toolloop.run(client, req, run_tool, max_rounds=max(3, role.max_rounds), schema=None, should_stop=lambda: self.clock() > deadline or self.stop_event.is_set())
-        if state["done"] is not None:
+        lr = self._run_tools_once(client, req, run_tool, state, max_rounds=max(3, role.max_rounds), schema=None,
+                                  should_stop=lambda: state["done"] is not None or self.clock() > deadline or self.stop_event.is_set())
+        if state["done"] is not None:          # действие исполнено: объяснение пришло аргументом why, второго раунда нет
             d = state["done"]
-            return {"obj": d["obj"], "code": "OK", "errors": [], "executed": True, "result": d["result"], "tool": d["tool"], "reason": d["reason"], "why_text": lr.text or "", "rounds": lr.rounds}
+            why = d.get("why") if isinstance(d.get("why"), str) and d["why"].strip() else (lr.text or "")
+            return {"obj": d["obj"], "code": "OK", "errors": [], "executed": True, "result": d["result"], "tool": d["tool"], "reason": d["reason"], "why_text": why, "rounds": lr.rounds}
         if lr.status not in ("ok",):
             code = {"loop": "LOOP", "max_rounds": "MAX_ROUNDS", "empty": "EMPTY", "truncated": "TRUNCATED", "cancelled": "TIMEOUT"}.get(lr.status, "BAD_FORMAT")
-            return {"obj": None, "code": code, "errors": lr.errors}
+            return {"obj": None, "code": code, "errors": lr.errors or state["rej"][-4:]}
         obj, errs = schema_mod.check_text(lr.text, role.schema)          # модель ответила старым JSON без вызова инструмента
         if lr.resp is not None and lr.resp.finish == "length" and errs and errs[0] != "TRUNCATED":
             errs = ["TRUNCATED"] + errs
@@ -891,8 +910,9 @@ class Runner(object):
             if protect and name in PROTECT_BLOCKED:
                 return {"ok": False, "errors": [{"code": "PROTECT_ONLY", "msg": "режим только защита"}]}
             return self.gateway.call(agent, name, args, meta=meta)
+        fix = validate.REPAIRS.get(role.output_schema)
         lr = toolloop.run(client, req, run_tool, max_rounds=role.max_rounds, schema=role.schema, format_retries=role.retries_format,
-                          should_stop=lambda: self.clock() > deadline or self.stop_event.is_set(), check=sem)
+                          should_stop=lambda: self.clock() > deadline or self.stop_event.is_set(), check=sem, repair=(lambda o: fix(o, ctx)) if fix else None)
         if lr.status != "ok":
             code = {"format": "BAD_FORMAT", "loop": "LOOP", "max_rounds": "MAX_ROUNDS", "empty": "EMPTY", "truncated": "TRUNCATED", "cancelled": "TIMEOUT"}.get(lr.status, "BAD_FORMAT")
             return {"obj": None, "code": code, "errors": lr.errors}

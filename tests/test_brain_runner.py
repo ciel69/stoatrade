@@ -135,11 +135,11 @@ class HappyPath(BrainBase):
 
 
 class ToolFirst(BrainBase):
-    """position_manager: действие вызовом pm_* исполняется сразу, объяснение приходит текстом постфактум и пишется как brain_why."""
+    """position_manager: действие вызовом pm_* исполняется сразу, объяснение приходит аргументом why и пишется как brain_why; второго раунда нет."""
 
     def test_tool_call_executes_then_why_is_recorded(self):
         from fakes.fake_llm import Tool
-        r = self.runner({"ds-pro": [Tool("pm_move_stop", {"to": "be", "reason": "PROFIT_LOCK"}), '{"why": "ушла +1R | px 146.9 | риск 0"}']})
+        r = self.runner({"ds-pro": [Tool("pm_move_stop", {"to": "be", "reason": "PROFIT_LOCK", "why": "ушла +1R | px 146.9 | риск 0"}), '{"why": "лишний раунд"}']})
         s = self.emit()
         self.job("J-1", seqs=[s])
         self.assertTrue(r.step())
@@ -152,11 +152,42 @@ class ToolFirst(BrainBase):
         self.assertEqual(len(why), 1)
         self.assertIn("+1R", why[0]["why"])
         self.assertEqual((why[0]["args"]["tool"], why[0]["args"]["decision"], why[0]["args"]["has_why"]), ("pm_move_stop", "move_stop", True))
-        self.assertEqual(len(self.factory.clients["ds-pro"].calls), 2)           # вызов + текст с объяснением
+        self.assertEqual(len(self.factory.clients["ds-pro"].calls), 1)           # объяснение аргументом: раунд с текстом не нужен
+
+    def test_model_failure_after_action_does_not_repeat_it(self):
+        """LM Studio 400 «output does not match the expected format» на раунде после действия повторял задание целиком: после действия раундов нет,
+        сбой следующего раунда не повторяет partial_close."""
+        from fakes.fake_llm import Tool, Err
+        r = self.runner({"ds-pro": [Tool("pm_partial_close", {"frac": 0.5, "reason": "PROFIT_LOCK"}), Err("bad_request", "output does not match the expected format")]})
+        self.job("J-1")
+        r.step()
+        self.assertEqual(len(self.gw.tool_calls("close_plan")), 1)
+        self.assertEqual(self.get_job("J-1")["result"]["outcome"], "decision")
+        self.assertEqual(len(self.factory.clients["ds-pro"].calls), 1)
+
+    def test_run_tools_once_keeps_executed_action_on_llm_error(self):
+        from tb.llm.types import LLMError, Req
+        r = self.runner({"ds-pro": []})
+
+        def boom(req):
+            raise LLMError("bad_request", "output does not match the expected format")
+        lr = r._run_tools_once(boom, Req(), None, {"done": {"obj": {}}})
+        self.assertEqual(lr.status, "ok")
+        with self.assertRaises(LLMError):
+            r._run_tools_once(boom, Req(), None, {"done": None})
+
+    def test_rejected_codes_reach_the_journal(self):
+        from fakes.fake_llm import Tool
+        r = self.runner({"ds-pro": [Tool("pm_move_stop", {"to": "abc", "reason": "RISK"})]})
+        self.job("J-1")
+        r.step()
+        skip = [x for x in self.decisions() if x["what"] == "brain_decision" and x["kind"] == "skip"]
+        self.assertTrue(skip)
+        self.assertIn("pm_move_stop:RANGE:args.to", skip[-1]["why"])
 
     def test_action_happens_even_without_explanation(self):
         from fakes.fake_llm import Tool
-        r = self.runner({"ds-pro": [Tool("pm_close", {"reason": "INVALIDATION"}), ""]})
+        r = self.runner({"ds-pro": [Tool("pm_close", {"reason": "INVALIDATION"}), '{"why": "лишний раунд"}']})
         self.job("J-1")
         r.step()
         self.assertEqual(len(self.gw.tool_calls("close_plan")), 1)
@@ -174,7 +205,7 @@ class ToolFirst(BrainBase):
     def test_extend_hold_tool_amends_max_hold(self):
         """pm_extend_hold: явный инструмент продления срока (BTC 2026-10-31: на hold_expiring модель ответила pm_hold, таймер закрыл позицию в плюсе)."""
         from fakes.fake_llm import Tool
-        r = self.runner({"ds-pro": [Tool("pm_extend_hold", {"minutes": 120, "reason": "OTHER"}), '{"why": "тезис цел | r +0.1 | риск без изменений"}']})
+        r = self.runner({"ds-pro": [Tool("pm_extend_hold", {"minutes": 120, "reason": "OTHER", "why": "тезис цел | r +0.1 | риск без изменений"})]})
         self.job("J-1")
         r.step()
         c = self.gw.tool_calls("amend_plan")
