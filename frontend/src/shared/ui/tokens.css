@@ -30,6 +30,8 @@
   --space-4: 16px;
   --space-5: 24px;
   --space-6: 32px;
+  /* единый потолок ширины всех страниц (общий класс .page в app/styles/global.css) */
+  --page-max: 1920px;
   --radius: 10px;
   --radius-sm: 6px;
 }

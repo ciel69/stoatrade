@@ -87,9 +87,9 @@ const when = (s: number): string => { const d = s - now.value; return d > 86400 
 .cal { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-5); font-size: 12px; font-variant-numeric: tabular-nums; }
 .muted { color: var(--muted); }
 .srcs { margin: 0; font-size: 12px; }
-.list { list-style: none; margin: 0; padding: 0; }
-.item { position: relative; padding: var(--space-3) 0 var(--space-3) var(--space-3); border-top: 1px solid var(--line); }
-.item:first-child { border-top: 0; }
+/* заголовки сеткой по 440 px (на широком экране 2-3 колонки); разделитель снизу, нижняя линия последнего ряда срезана clip-path */
+.list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(440px, 100%), 1fr)); column-gap: var(--space-5); clip-path: inset(0 0 1px 0); }
+.item { position: relative; padding: var(--space-3) 0 var(--space-3) var(--space-3); border-bottom: 1px solid var(--line); }
 .item::before { content: ''; position: absolute; left: 0; top: var(--space-3); bottom: var(--space-3); width: 3px; border-radius: 2px; background: var(--line2); }
 .item.w-mid::before { background: var(--warn); }
 .item.w-high::before { background: var(--neg); }

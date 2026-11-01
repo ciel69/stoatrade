@@ -53,7 +53,7 @@ const older = computed(() => Math.max(0, (trading.trades?.total ?? 0) - all.valu
 .title { margin: 0; font-size: 14px; font-weight: 600; display: flex; align-items: baseline; gap: var(--space-2); }
 .n { font-size: 12px; font-weight: 400; color: var(--muted); }
 .seg { margin-left: auto; }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--space-3); }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: var(--space-3); }
 .empty { margin: 0; padding: var(--space-5) 0; text-align: center; color: var(--muted); font-size: 13px; }
 .skel { height: 160px; border-radius: var(--radius-sm); background: var(--panel2); }
 .more { display: flex; justify-content: center; margin-top: var(--space-4); }

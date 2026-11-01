@@ -51,7 +51,7 @@ function pick(next: string): void {
 </template>
 
 <style scoped>
-.page { max-width: 1480px; margin: 0 auto; padding: var(--space-5); display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: var(--space-4); align-items: start; }
+.page { grid-template-columns: 250px minmax(0, 1fr); align-items: start; }
 .side { position: sticky; top: var(--space-4); min-width: 0; }
 .body { min-width: 0; }
 .note { margin: 0; padding: var(--space-5); background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); font-size: 13px; color: var(--muted); }

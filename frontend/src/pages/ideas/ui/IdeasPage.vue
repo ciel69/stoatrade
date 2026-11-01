@@ -58,7 +58,6 @@ const share = computed(() => (snap.value?.stats.agent.taken_share != null ? `${M
 </template>
 
 <style scoped>
-.page { max-width: 1180px; margin: 0 auto; padding: var(--space-5); display: grid; gap: var(--space-4); }
 .top { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-3) var(--space-4); }
 .title { margin: 0; font-size: 14px; font-weight: 600; margin-right: auto; }
 .sum { display: flex; flex-wrap: wrap; gap: var(--space-4); margin: 0; font-size: 12px; color: var(--muted); }

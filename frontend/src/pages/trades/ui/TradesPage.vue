@@ -39,8 +39,8 @@ function close(): void {
 </template>
 
 <style scoped>
-.page { max-width: 1180px; margin: 0 auto; padding: var(--space-5); display: grid; gap: var(--space-4); }
-.work { display: grid; grid-template-columns: minmax(0, 3fr) minmax(300px, 2fr); gap: var(--space-4); align-items: start; }
+/* история получает больше места (карточки сделок в 2-4 колонки), разбивки остаются узкой колонкой */
+.work { display: grid; grid-template-columns: minmax(0, 3fr) minmax(300px, 1fr); gap: var(--space-4); align-items: start; }
 .col { display: grid; gap: var(--space-4); min-width: 0; }
 @media (max-width: 900px) {
   .work { grid-template-columns: minmax(0, 1fr); }

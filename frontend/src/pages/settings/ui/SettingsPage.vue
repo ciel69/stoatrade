@@ -47,9 +47,9 @@ function close(): void {
 
 <template>
   <main class="page">
-    <RolesBoard :selected="role" @select="pickRole" />
-    <ConnectBoard :provider="provider" :exchange="exchange" @provider="pickProvider" @exchange="pickExchange" />
-    <UsageBoard :swaps-open="swaps" :selected="usage" @swaps="pickSwaps" @select="pickUsage" @close="close" />
+    <div class="w-roles"><RolesBoard :selected="role" @select="pickRole" /></div>
+    <div class="w-conn"><ConnectBoard :provider="provider" :exchange="exchange" @provider="pickProvider" @exchange="pickExchange" /></div>
+    <div class="w-cost"><UsageBoard :swaps-open="swaps" :selected="usage" @swaps="pickSwaps" @select="pickUsage" @close="close" /></div>
     <UiSidePanel :open="open" :label="label" @close="close">
       <RolePanel v-if="role" :key="'r' + role" :role="role" @close="close" />
       <ConnectPanel v-else-if="provider" :key="'p' + provider" kind="provider" :id="provider" @close="close" />
@@ -61,5 +61,13 @@ function close(): void {
 </template>
 
 <style scoped>
-.page { max-width: 1180px; margin: 0 auto; padding: var(--space-5); display: grid; gap: var(--space-6, 32px); }
+.page { gap: var(--space-6); }
+.w-roles, .w-conn, .w-cost { min-width: 0; }
+/* от 1500 px две колонки: «Кто думает» слева на всю высоту, «Что подключено» и «Сколько стоит» справа друг под другом */
+@media (min-width: 1500px) {
+  .page { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); column-gap: var(--space-6); row-gap: var(--space-6); align-items: start; }
+  .w-roles { grid-column: 1; grid-row: 1 / span 2; }
+  .w-conn { grid-column: 2; grid-row: 1; }
+  .w-cost { grid-column: 2; grid-row: 2; }
+}
 </style>

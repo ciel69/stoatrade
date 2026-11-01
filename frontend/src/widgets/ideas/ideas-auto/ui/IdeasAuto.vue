@@ -100,7 +100,7 @@ const mineText = computed(() => {
 .up { color: var(--pos); }
 .down { color: var(--neg); }
 .sub { margin: var(--space-2) 0 0; font-size: 13px; font-weight: 600; }
-.ev { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 12px; }
+.ev { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(420px, 100%), 1fr)); gap: 6px var(--space-5); font-size: 12px; }
 .ev li { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-3); }
 .t { width: 84px; color: var(--muted); }
 .outs { display: inline-flex; flex-wrap: wrap; gap: var(--space-3); font-variant-numeric: tabular-nums; }

@@ -58,7 +58,10 @@ const empty = computed(() => (filter.value === 'all' ? 'Планов пока н
 .plans { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--space-4); min-width: 0; }
 .top { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-3); }
 .title { margin: 0; font-size: 14px; font-weight: 600; margin-right: auto; }
-.list { list-style: none; margin: var(--space-3) 0 0; padding: 0; }
+/* строки идут сеткой: сколько влезает колонок по 460 px; разделитель снизу, нижняя линия последнего ряда срезана clip-path */
+.list { list-style: none; margin: var(--space-3) 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(460px, 100%), 1fr)); column-gap: var(--space-6); clip-path: inset(0 calc(var(--space-3) * -1) 1px calc(var(--space-3) * -1)); }
+.list > :deep(li) { border-top: 0; border-bottom: 1px solid var(--line); }
+.list > :deep(li:first-child) { padding-top: var(--space-3); }
 /* строка кликабельна: поля внутрь, чтобы выделение не упиралось в текст */
 .list > :deep(li.pick) { cursor: pointer; padding-inline: var(--space-3); margin-inline: calc(var(--space-3) * -1); border-radius: var(--radius-sm); transition: background-color var(--dur-fast) ease; }
 .list > :deep(li.pick.sel) { background: color-mix(in srgb, var(--accent) 9%, var(--panel)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent); }

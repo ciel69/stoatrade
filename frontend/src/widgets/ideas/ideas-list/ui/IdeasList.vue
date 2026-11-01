@@ -41,7 +41,10 @@ const EMPTY: Record<Exclude<IdeaTab, 'auto'>, string> = {
 
 <style scoped>
 .ideas { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--space-4); min-width: 0; }
-.list { list-style: none; margin: 0; padding: 0; }
+/* сетка по 440 px; разделитель снизу, нижняя линия последнего ряда срезана clip-path */
+.list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(440px, 100%), 1fr)); column-gap: var(--space-6); clip-path: inset(0 0 1px 0); }
+.list > :deep(li) { border-top: 0; border-bottom: 1px solid var(--line); }
+.list > :deep(li:first-child) { padding-top: var(--space-3); }
 .empty { margin: 0; font-size: 13px; color: var(--muted); max-width: 60ch; }
 .skel { height: 120px; border-radius: var(--radius-sm); background: var(--panel2); }
 .more { margin-top: var(--space-3); padding: 6px 14px; border: 1px solid var(--line2); border-radius: var(--radius-sm); background: var(--panel2); color: var(--text); font: inherit; font-size: 12px; cursor: pointer; transition: border-color var(--dur-fast) ease; }

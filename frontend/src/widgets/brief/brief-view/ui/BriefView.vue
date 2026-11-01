@@ -308,7 +308,7 @@ const kvLine = (d: Record<string, unknown> | undefined) => Object.entries(d ?? {
 .up { color: var(--pos); }
 .down { color: var(--neg); }
 .chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-2); }
-.kv { margin: 0; display: grid; gap: 5px; font-size: 12px; }
+.kv { margin: 0; display: grid; gap: 5px; font-size: 12px; max-width: 640px; }
 .kv > div { display: flex; justify-content: space-between; gap: var(--space-4); }
 dt { color: var(--muted); }
 dd { margin: 0; text-align: right; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }

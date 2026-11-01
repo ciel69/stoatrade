@@ -29,10 +29,10 @@ function close(): void {
 
 <template>
   <main class="page">
-    <PlatformHero />
-    <SystemNodes />
-    <SystemLimits />
-    <SystemMore :selected="panel" @open="open" />
+    <div class="w-hero"><PlatformHero /></div>
+    <div class="w-nodes"><SystemNodes /></div>
+    <div class="w-lim"><SystemLimits /></div>
+    <div class="w-more"><SystemMore :selected="panel" @open="open" /></div>
     <UiSidePanel :open="!!panel" label="Подробности системы" @close="close">
       <SystemPanel v-if="panel" :key="panel" :kind="panel" @close="close" />
     </UiSidePanel>
@@ -40,5 +40,14 @@ function close(): void {
 </template>
 
 <style scoped>
-.page { max-width: 1180px; margin: 0 auto; padding: var(--space-5); display: grid; gap: var(--space-5); }
+.page { gap: var(--space-5); }
+.w-hero, .w-nodes, .w-lim, .w-more { min-width: 0; }
+/* от 1500 px: состояние на всю ширину, ниже слева узлы, справа подробности, под ними сессия, запас и капитал тремя колонками */
+@media (min-width: 1500px) {
+  .page { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); column-gap: var(--space-5); align-items: start; }
+  .w-hero, .w-lim { grid-column: 1 / -1; }
+  .w-nodes { grid-column: 1; grid-row: 2; }
+  .w-more { grid-column: 2; grid-row: 2; }
+  .w-lim { grid-row: 3; }
+}
 </style>

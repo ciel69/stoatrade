@@ -90,11 +90,11 @@ function result(d: DecisionItem): { text: string; tone: 'ok' | 'bad' | 'warn' | 
 .field { height: 28px; padding: 0 var(--space-3); background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: var(--radius-sm); font: inherit; font-size: 12px; }
 .field:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .search { min-width: 180px; flex: 1 1 180px; max-width: 280px; }
-.list { list-style: none; margin: 0; padding: 0; }
-.row { border-top: 1px solid var(--line); }
-.row:first-child { border-top: 0; }
+/* строки идут сеткой: на широком экране 2-3 колонки по 520 px; разделитель снизу, нижняя линия последнего ряда срезана clip-path */
+.list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(520px, 100%), 1fr)); column-gap: var(--space-5); clip-path: inset(0 0 1px 0); }
+.row { border-bottom: 1px solid var(--line); }
 .line { display: grid; grid-template-columns: 62px minmax(0, 1fr); column-gap: var(--space-3); width: 100%; padding: var(--space-2) var(--space-2); background: transparent; border: 0; border-radius: var(--radius-sm); color: inherit; font: inherit; font-size: 12px; text-align: left; cursor: pointer; transition: background-color var(--dur-fast) ease; }
-.line[aria-pressed='true'] { background: var(--panel2); box-shadow: inset 3px 0 0 var(--accent); }
+.line[aria-pressed='true'] { background: var(--panel2); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
 @media (hover: hover) and (pointer: fine) {
   .line:hover { background: var(--panel2); }
 }
