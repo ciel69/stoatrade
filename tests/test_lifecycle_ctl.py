@@ -205,6 +205,18 @@ class TestRealLifecycleViaCtl(Base):
         self.c.watch()
         self.assertEqual(self.plat()["state"], "stopped")
         self.assertIn("Автостарт", (self.c.banner or {}).get("text", ""))
+        pend = self.e.r("state/control/auto_roll.json")                            # ждём старта: повтор переживает перезапуск ctl
+        self.assertEqual((pend["args"]["mode"], pend["args"]["allow_amber"], pend["tries"]), ("paper", True, 1))
+        self.e.advance_t(60)
+        self.e.ready()
+        self.c.watch()
+        self.assertEqual(self.plat()["state"], "stopped")                           # до повтора 10 мин
+        self.e.advance_t(600)
+        self.e.ready()
+        self.c.watch()
+        self.assertEqual((self.plat()["state"], self.plat()["mode"]), ("running", "paper"))
+        self.c.watch()
+        self.assertFalse(self.e.exists("state/control/auto_roll.json"))             # день идёт: ожидание снято
 
     def test_kill_halts_day_and_writes_emergency_report(self):
         day = self.start()

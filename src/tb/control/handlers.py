@@ -21,6 +21,9 @@ KEEP_OUTBOX_S = 7 * 86400
 LIVE_ACTIONS = ("day.start", "risk.set", "brain.use", "carry.decide", "platform.shutdown", "kill.set", "stop.emergency", "brain.role", "exchange.set")
 
 
+ROLL_FILE = "auto_roll.json"      # ожидание автостарта следующего paper-дня (переживает перезапуск ctl)
+ROLL_RETRY_S = 600
+
 class Reject(Exception):
     def __init__(self, code, data=None):
         Exception.__init__(self, code)
@@ -243,6 +246,8 @@ class Ctl(object):
     # ------------------------------------------------------------ day.start / day.stop
     def h_day_start(self, cmd):
         args = cmd["args"]
+        if cmd.get("src") != "auto":
+            self.roll_clear()                                       # владелец сам запускает день: автоповтор не нужен
         st = self.platform()
         if st["state"] != "stopped":
             raise Reject("E_STATE", {"state": st["state"]})
@@ -355,6 +360,7 @@ class Ctl(object):
             return self._fail_start(cmd, "E_INTERNAL", {}, prev)
 
     def h_day_stop(self, cmd):
+        self.roll_clear()                                           # владелец остановил день: автостарт не повторяем
         st = self.platform()
         if st["state"] != "running":
             raise Reject("E_STATE", {"state": st["state"]})
@@ -518,6 +524,12 @@ class Ctl(object):
         if r and not self.busy:
             self.sync_day(r)
         st = self.platform()
+        pend = ctlstate.read_json(paths.control_dir(ROLL_FILE, root=self.root))
+        if isinstance(pend, dict) and pend.get("args"):
+            if st["state"] == "running":
+                self.roll_clear()                                   # следующий день идёт: повтор не нужен
+            elif st["state"] == "stopped" and not self.busy and now >= float(pend.get("next") or 0) and self.cfg.get("auto_roll_paper", True):
+                self.auto_roll({"args": pend["args"]}, tries=int(pend.get("tries") or 0))
         if st["state"] == "running" and st.get("mode") == "live" and st.get("trading"):
             if now - getattr(self, "_last_mon", 0.0) >= float(self.cfg["auto_downgrade_s"]):
                 self._last_mon = now
@@ -543,17 +555,26 @@ class Ctl(object):
             if r.get("auto") and st.get("mode") == "paper" and self.cfg.get("auto_roll_paper", True):
                 self.auto_roll(r)
 
-    def auto_roll(self, r):
+    def roll_clear(self):
+        try:
+            os.remove(paths.control_dir(ROLL_FILE, root=self.root))
+        except OSError:
+            pass
+
+    def auto_roll(self, r, tries=0):
         """Paper: день закрылся сам (конец дня, max_day_hours, конец сессии) -> следующий стартует тем же путём, что кнопка «Старт» (gates, исполнитель, план дня).
         Без дыры между днями (2026-10-30 01:05-04:37 сессии не было, 13 входов на дне обвала BTC получили NO_SESSION). Мягкие предупреждения paper принимаются
         автоматически (записаны в аудит, src=auto); жёсткий запрет (KILL, gates) -> баннер и без старта. Live и testnet только командой владельца."""
-        a = dict(r.get("args") or {}, mode="paper")
+        a = dict(r.get("args") or {}, mode="paper", allow_amber=True)      # paper: жёлтые предстартовые проверки (недоступный RSS и т.п.) не мешают дню; красные блокируют
         ok, _msg, args = protocol.validate_args("day.start", a)
         if not ok:
             return None
+        # ждём старта: если попытка отклонится (в том числе в фоновом потоке старта), ctl повторит через ROLL_RETRY_S, пока платформа остановлена (2026-11-01: день не стартовал из-за P15)
+        ctlstate.write_json(paths.control_dir(ROLL_FILE, root=self.root), {"args": {k: a.get(k) for k in ("mode", "session", "allow_amber", "team") if a.get(k) is not None},
+                                                                          "next": round(self.now() + ROLL_RETRY_S, 1), "tries": tries + 1})
         req = self.requirements("day.start", args)
         if req["blocked"] or exec_cfg.kill_state(self.root) is not None:
-            self.banner = {"level": "warn", "text": "Paper-день закрыт по концу дня, следующий не запущен автоматически: есть запрет (см. проверки старта)", "day_report": None}
+            self.banner = {"level": "warn", "text": "Paper-день закрыт по концу дня, следующий не запущен: есть запрет (см. проверки старта); повтор через %d мин" % (ROLL_RETRY_S // 60), "day_report": None}
             return None
         args["accepted"] = sorted(w["id"] for w in req["warnings"])
         cmd = {"id": "K-%s-%s" % (time.strftime("%Y%m%dT%H%M%S", time.gmtime(self.now())), uuid.uuid4().hex[:6]), "action": "day.start", "args": args, "src": "auto", "sess": None}
@@ -562,7 +583,7 @@ class Ctl(object):
         except Reject as e:
             res = {"status": "rejected", "code": e.code}
         if isinstance(res, dict) and res.get("status") in ("rejected", "failed"):
-            self.banner = {"level": "warn", "text": "Автостарт следующего paper-дня отклонён (%s): запустите день кнопкой «Старт»" % res.get("code"), "day_report": None}
+            self.banner = {"level": "warn", "text": "Автостарт следующего paper-дня отклонён (%s): повтор через %d мин или кнопка «Старт»" % (res.get("code"), ROLL_RETRY_S // 60), "day_report": None}
         return res
 
     def downgrade(self, bad):
