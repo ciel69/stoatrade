@@ -17,7 +17,11 @@ import { BrainSim, LINKS, PULSE_POOL } from './brain-sim'
  * а дыхание «думает» это отдельная группа над дыханием «ждёт»: фоновые анимации ожидания не вырываются и не перезапускаются при смене состояния.
  */
 export type BrainIconState = 'idle' | 'thinking' | 'protect' | 'down'
-const props = withDefaults(defineProps<{ state?: BrainIconState; size?: number; label?: string; interactive?: boolean; lit?: readonly number[]; crisp?: boolean }>(), { state: 'idle', size: 88, interactive: false, lit: () => [], crisp: false })
+/*
+ * quiet: спокойный режим для постоянного места на странице (блок мозга на главной): без живой сети, вспышек, искр и свечения. Рисуется один кадр,
+ * а «думает» показывает цвет, более яркие связи и очень медленное (3,2 с) дыхание яркости нейронов; при prefers-reduced-motion движения нет совсем.
+ */
+const props = withDefaults(defineProps<{ state?: BrainIconState; size?: number; label?: string; interactive?: boolean; lit?: readonly number[]; crisp?: boolean; quiet?: boolean }>(), { state: 'idle', size: 88, interactive: false, lit: () => [], crisp: false, quiet: false })
 const emit = defineEmits<{ node: [index: number] }>()
 
 const nodes = BRAIN_NODES
@@ -168,7 +172,7 @@ function frame(ts: number): void {
 }
 function run(): void {
   if (!els) return
-  const alive = !calm && (props.state === 'idle' || props.state === 'thinking')
+  const alive = !calm && !props.quiet && (props.state === 'idle' || props.state === 'thinking')
   if (alive) {
     if (!loop) { last = performance.now(); acc = 0; loop = requestAnimationFrame(frame) }
     return
@@ -191,7 +195,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <svg ref="svg" class="brain" :class="[`s-${state}`, { live: interactive, fx, 'has-lit': hasLit, crisp }]" :style="{ '--amp': amp }" :width="size" :height="size" viewBox="0 0 64 64" role="img" :aria-label="label ?? 'мозг'" fill="none" stroke="currentColor"
+  <svg ref="svg" class="brain" :class="[`s-${state}`, { live: interactive, fx, 'has-lit': hasLit, crisp, quiet }]" :style="{ '--amp': amp }" :width="size" :height="size" viewBox="0 0 64 64" role="img" :aria-label="label ?? 'мозг'" fill="none" stroke="currentColor"
        stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" @pointermove="onMove" @pointerleave="onLeave">
     <g class="pulse">
     <g class="body">
@@ -278,7 +282,13 @@ onUnmounted(() => {
 @keyframes brain-breathe { 50% { transform: scale(1.012); } }
 @keyframes brain-pulse { 50% { transform: scale(calc(1 + 0.035 * var(--amp))); } }
 
+/* quiet: никаких общих масштабов и вспышек; смена состояния только плавной яркостью, «думает» медленно дышит яркостью нейронов */
+.quiet .body, .quiet .pulse { animation: none; }
+.quiet .wire, .quiet .node { transition: opacity var(--dur-enter) var(--ease-out); }
+.quiet.s-thinking .nodes { animation: brain-think 3.2s var(--ease-in-out) infinite; }
+@keyframes brain-think { 50% { opacity: 0.55; } }
+
 @media (prefers-reduced-motion: reduce) {
-  .s-idle .body, .s-thinking .body, .fx .pulse { animation: none; }
+  .s-idle .body, .s-thinking .body, .fx .pulse, .quiet.s-thinking .nodes { animation: none; }
 }
 </style>

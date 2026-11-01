@@ -1,13 +1,22 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { ThoughtBubble, assignRegions, pickThoughts, roleLabel, rolesOfRegion, useBrainStore } from '@/entities/brain'
-import { BRAIN_REGIONS, UiBrainIcon, regionOfNode, type BrainIconState } from '@/shared/ui'
-import { ageText, usd } from '@/shared/lib'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { ThoughtBubble, emptyNote, pickThoughts, plural, roleAnswer, roleName, roleWhat, stateWords, todayText, useBrainStore } from '@/entities/brain'
+import { UiBrainIcon, type BrainIconState } from '@/shared/ui'
+import { ageText, plainify, proper, usd } from '@/shared/lib'
 
 const brain = useBrainStore()
 const now = ref(Date.now() / 1000)
 const paused = ref(false)                       // пока курсор или фокус на облаке, время для мыслей стоит: можно дочитать, ничего не гаснет
 let timer: ReturnType<typeof setInterval> | null = null
+
+/*
+ * Отладка без сервера: ?brain=mock | mock-think | mock-down | mock-protect подставляет пример снимка; ?brain сам по себе открывает роли (для ссылок и скриншотов),
+ * &view=thoughts оставляет ленту мыслей.
+ */
+const query = new URLSearchParams(location.search)
+const dbg = query.get('brain')
+if (dbg?.startsWith('mock')) brain.mock(dbg === 'mock-think' ? 'thinking' : dbg === 'mock-down' ? 'down' : dbg === 'mock-protect' ? 'protect' : 'idle')
+
 onMounted(() => {
   brain.start()
   timer = setInterval(() => {
@@ -21,25 +30,18 @@ onUnmounted(() => {
 })
 
 /*
- * Интерактив мозга: клик, тап или Enter по иконке пускает импульс по нейронам и открывает «как думает мозг» поверх облака мыслей (того же размера, панель не растёт):
- * роли с моделью, вызовами и расходом за сегодня. Каждая роль живёт в своей области коры: наведение на строку подсвечивает область на мозге, наведение на нейрон
- * подсвечивает область и роли в списке. Только чтение: никаких команд платформе. Esc и повторный клик закрывают.
+ * Клик, тап или Enter по иконке (или по кнопке «Кто за что отвечает») открывает роли поверх ленты мыслей, того же размера, панель не растёт:
+ * имя роли, чем занимается, какая модель отвечала и сколько стоила сегодня. Только чтение: никаких команд платформе. Esc и повторное нажатие закрывают.
  */
-const open = ref(new URLSearchParams(location.search).has('brain'))        // ?brain открывает панель сразу (для скриншотов и ссылок)
-const icon_ = ref<InstanceType<typeof UiBrainIcon> | null>(null)
+const open = ref(query.has('brain') && query.get('view') !== 'thoughts')
 const trigger = ref<HTMLButtonElement | null>(null)
-const hoverRole = ref<string | null>(null)
-const hoverNode = ref(-1)
 
-function toggle(ev: MouseEvent): void {
-  icon_.value?.fire(ev)
+function toggle(): void {
   open.value = !open.value
-  if (!open.value) hoverRole.value = null
 }
 function onKey(ev: KeyboardEvent): void {
   if (ev.key === 'Escape' && open.value) {
     open.value = false
-    hoverRole.value = null
     trigger.value?.focus()
   }
 }
@@ -47,69 +49,77 @@ function onKey(ev: KeyboardEvent): void {
 const snap = computed(() => brain.snapshot)
 const loaded = computed(() => snap.value !== null)
 const icon = computed<BrainIconState>(() => (loaded.value ? brain.status : 'idle'))        // до первого снимка не показываем «не работает»
-const statusText = computed(() => (loaded.value ? brain.statusText : 'подключение…'))
+const words = computed(() => stateWords(loaded.value, brain.status))
 const thoughts = computed(() => pickThoughts(brain.decisions, now.value))
 const active = computed(() => snap.value?.active ?? null)
 const spend = computed(() => brain.roles.reduce((s, r) => s + (r.today?.usd ?? 0), 0))
 const calls = computed(() => brain.roles.reduce((s, r) => s + (r.today?.calls ?? 0), 0))
-const regionMap = computed(() => assignRegions(brain.roles.map((r) => r.role)))
-const litRegion = computed(() => (hoverRole.value != null ? regionMap.value[hoverRole.value] ?? -1 : hoverNode.value >= 0 ? regionOfNode(hoverNode.value) : -1))
-const lit = computed(() => (litRegion.value >= 0 ? BRAIN_REGIONS[litRegion.value] : []))
-// строка роли подсвечивается одна (на какую навели); при наведении на нейрон подсвечиваются все роли его области
-const litRoles = computed(() => (hoverRole.value != null ? new Set([hoverRole.value]) : litRegion.value >= 0 ? new Set(rolesOfRegion(regionMap.value, litRegion.value)) : new Set<string>()))
+const waiting = computed(() => snap.value?.queue?.new ?? 0)
+const provider = (p: string | null | undefined): string => (!p ? '' : p === 'local' ? 'локальная' : proper(p))
 const rows = computed(() => brain.roles.map((r) => ({
-  role: r.role, label: roleLabel(r.role), model: r.last?.profile ?? r.primary?.id ?? 'не назначена', last: r.last,
+  role: r.role, name: roleName(r.role), what: roleWhat(r.role), model: r.last?.profile ?? r.primary?.id ?? null, last: r.last,
   calls: r.today?.calls ?? 0, usd: r.today?.usd ?? 0, errors: r.today?.errors ?? 0, fb: r.last?.fallback_from ?? null,
 })))
-if (new URLSearchParams(location.search).get('brain') === 'hl') {        // ?brain=hl: сразу подсветить первую роль (для скриншотов)
-  const stop = watch(rows, (r) => { if (r.length) { hoverRole.value = r[0].role; stop() } })
-}
 const fell = computed(() => brain.roles.filter((r) => r.last?.fallback_from).length)       // отвечал запасной профиль (сервер помечает fallback_from)
+// причина режима защиты пишется сервером для владельца; если в ней служебные следы, показываем общую фразу
+const protectNote = computed(() => (snap.value?.protect_reason ? plainify(snap.value.protect_reason) ?? 'Сработало ограничение, из-за которого мозг не открывает новые сделки.' : null))
+const toggleLabel = computed(() => (open.value ? 'Назад к мыслям' : 'Кто за что отвечает'))
 </script>
 
 <template>
-  <section class="panel" aria-label="Мозг">
+  <section class="panel" aria-labelledby="brain-title">
+    <h2 id="brain-title" class="title">Мозг: что он делает сейчас</h2>
+
     <header class="top">
-      <button ref="trigger" type="button" class="brain-btn" :aria-expanded="open" aria-controls="brain-roles" :aria-label="`Мозг: ${statusText}. ${open ? 'Скрыть' : 'Показать'} роли и модели`" title="Как думает мозг"
+      <button ref="trigger" type="button" class="brain-btn" :aria-expanded="open" aria-controls="brain-roles"
+              :aria-label="`Мозг: ${words.title.toLowerCase()}. ${open ? 'Вернуться к мыслям' : 'Показать, кто за что отвечает'}`" :title="open ? 'Вернуться к мыслям' : 'Показать, кто за что отвечает'"
               @click="toggle">
-        <UiBrainIcon ref="icon_" :state="icon" :size="56" interactive :lit="lit" label="" @node="hoverNode = $event" />
+        <UiBrainIcon :state="icon" :size="96" quiet label="" />
       </button>
-      <div class="who">
-        <div class="model">{{ active?.profile ?? 'модель не отвечала' }}</div>
-        <div class="sub">
-          <span class="state" :class="loaded ? `st-${brain.status}` : ''">{{ statusText }}</span>
-          <template v-if="active"> · {{ active.provider }} · {{ active.role }} · {{ ageText(active.t, now) }}</template>
-        </div>
+      <div class="who" aria-live="polite">
+        <div class="state" :class="loaded ? `st-${brain.status}` : ''">{{ words.title }}</div>
+        <p class="hint">{{ words.hint }}</p>
       </div>
     </header>
 
-    <p v-if="snap?.protect_reason" class="alert">{{ snap.protect_reason }}</p>
-    <p v-else-if="fell" class="alert soft">отвечает запасная модель у ролей: {{ fell }}</p>
+    <p v-if="protectNote" class="alert">{{ protectNote }}</p>
+    <p v-else-if="fell" class="alert soft">Основная модель не ответила: у {{ fell }} {{ plural(fell, 'роли', 'ролей', 'ролей') }} сейчас отвечает запасная.</p>
+
+    <p v-if="loaded" class="facts">
+      <template v-if="active">
+        <span><span class="k">Модель:</span> {{ active.profile ?? 'без названия' }}<template v-if="provider(active.provider)">, {{ provider(active.provider) }}</template></span>
+        <span><span class="k">Ответила:</span> {{ ageText(active.t, now) }}<template v-if="active.role">, задача «{{ roleName(active.role) }}»</template></span>
+      </template>
+      <span v-else><span class="k">Модель:</span> ещё не отвечала</span>
+    </p>
+
+    <div class="bar">
+      <h3 class="cap">{{ open ? 'Кто за что отвечает' : 'Последние мысли' }}</h3>
+      <button type="button" class="link" :aria-expanded="open" aria-controls="brain-roles" @click="toggle">{{ toggleLabel }}</button>
+    </div>
 
     <!-- область под мысли фиксированной высоты: новые не раздвигают панель, лишние прокручиваются -->
     <div class="stage">
       <div class="sky" @pointerenter="paused = true" @pointerleave="paused = false" @focusin="paused = true" @focusout="paused = false">
-        <TransitionGroup name="feed" tag="ul" class="cloud" aria-live="polite">
+        <TransitionGroup name="feed" tag="ul" class="cloud" aria-label="Последние мысли мозга" aria-live="polite">
           <ThoughtBubble v-for="t in thoughts" :key="t.row.seq" :thought="t" :now="now" />
         </TransitionGroup>
-        <p v-if="!thoughts.length" class="quiet">{{ !loaded ? '' : brain.status === 'down' ? 'Мозг не отвечает.' : 'Тихо: новых мыслей нет.' }}</p>
+        <p v-if="!thoughts.length" class="silence">{{ emptyNote(loaded, brain.status) }}</p>
       </div>
 
       <Transition name="roles">
-        <div v-if="open" id="brain-roles" class="roles" role="region" aria-label="Как думает мозг: роли и модели">
+        <div v-if="open" id="brain-roles" class="roles" role="region" aria-label="Кто за что отвечает: роли мозга и их модели" tabindex="0">
           <ul v-if="rows.length" class="rlist">
-            <li v-for="r in rows" :key="r.role" class="role" :class="{ lit: litRoles.has(r.role) }" tabindex="0"
-                @pointerenter="hoverRole = r.role" @pointerleave="hoverRole = null" @focus="hoverRole = r.role" @blur="hoverRole = null">
+            <li v-for="r in rows" :key="r.role" class="role">
               <div class="rtop">
-                <b class="rname">{{ r.label }}</b>
-                <span v-if="r.label !== r.role" class="rid">{{ r.role }}</span>
-                <span class="rage">{{ r.last ? ageText(r.last.t, now) : 'не отвечала' }}</span>
+                <b class="rname">{{ r.name }}</b>
+                <span class="rage"><span class="dot" :class="r.last == null ? 'none' : r.last.ok === false ? 'bad' : 'ok'" aria-hidden="true" />{{ roleAnswer(r.last, now) }}</span>
               </div>
-              <div class="rsub">
-                <span class="dot" :class="r.last == null ? 'none' : r.last.ok === false ? 'bad' : 'ok'" aria-hidden="true" />
-                {{ r.model }} · {{ r.calls }} выз. · {{ usd(r.usd) }}<template v-if="r.errors"> · ошибок {{ r.errors }}</template>
-                <span v-if="r.fb" class="fb">запасная вместо {{ r.fb }}</span>
-              </div>
+              <p class="rwhat">{{ r.what }}</p>
+              <p class="rsub">
+                Модель: {{ r.model ?? 'не назначена' }} · {{ todayText(r.calls, usd(r.usd)) }}<template v-if="r.errors"> · ошибок: {{ r.errors }}</template>
+                <template v-if="r.fb"> · отвечает запасная модель вместо {{ r.fb }}</template>
+              </p>
             </li>
           </ul>
           <p v-else class="rnone">Данных по ролям пока нет.</p>
@@ -118,48 +128,62 @@ const fell = computed(() => brain.roles.filter((r) => r.last?.fallback_from).len
     </div>
 
     <footer class="foot">
-      очередь {{ snap?.queue?.new ?? 0 }} · вызовов сегодня {{ calls }} · {{ usd(spend) }}
+      <span title="События, которые мозг ещё не успел разобрать."><span class="k">Ждут разбора:</span> {{ waiting }}</span>
+      <span title="Сколько раз сегодня платформа обращалась к моделям мозга."><span class="k">Запросов сегодня:</span> {{ calls }}</span>
+      <span title="Сколько сегодня стоили запросы к моделям мозга."><span class="k">Расход сегодня:</span> {{ usd(spend) }}</span>
     </footer>
   </section>
 </template>
 
 <style scoped>
-.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.panel { --brain-size: 96px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.title { margin: 0; font-size: 14px; font-weight: 600; }
 .top { display: flex; align-items: center; gap: var(--space-4); }
 .who { min-width: 0; }
-.model { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15; overflow-wrap: anywhere; }
-.sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
-.state { font-weight: 600; }
+.state { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15; }
+.hint { margin: var(--space-1) 0 0; font-size: 13px; line-height: 1.4; color: var(--muted); }
 .st-thinking { color: var(--zone-brain); }
 .st-protect { color: var(--warn); }
 .st-down { color: var(--neg); }
 .st-idle { color: var(--pos); }
 .alert { margin: 0; padding: var(--space-2) var(--space-3); border: 1px solid var(--warn); border-radius: var(--radius-sm); color: var(--warn); font-size: 13px; }
 .alert.soft { border-color: var(--line2); color: var(--muted); }
-.stage { position: relative; }
-.sky { --thought-h: 76px; position: relative; height: calc(var(--thought-h) * 3 + var(--space-2) * 2); overflow-y: auto; scrollbar-gutter: stable; }
-.brain-btn { flex: none; padding: 4px; margin: -4px; background: transparent; border: 1px solid transparent; border-radius: 50%; color: inherit; cursor: pointer; display: grid; place-items: center; transition: border-color var(--dur-fast) ease; }
-.brain-btn[aria-expanded='true'] { border-color: var(--line2); }
-.brain-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.facts { margin: 0; display: grid; gap: 2px; font-size: 12px; color: var(--text); overflow-wrap: anywhere; }
+.k { color: var(--muted); }
+
+.brain-btn { flex: none; padding: var(--space-1); background: transparent; border: 1px solid transparent; border-radius: var(--radius); color: inherit; cursor: pointer; display: grid; place-items: center; transition: background-color var(--dur-fast) ease, border-color var(--dur-fast) ease; }
+.brain-btn :deep(svg) { width: var(--brain-size); height: var(--brain-size); }
+.brain-btn[aria-expanded='true'] { background: var(--panel2); border-color: var(--line2); }
+.brain-btn:focus-visible, .link:focus-visible, .roles:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (hover: hover) and (pointer: fine) {
-  .brain-btn:hover { border-color: var(--line2); }
+  .brain-btn:hover { background: var(--panel2); }
 }
 
-/* роли поверх облака мыслей: тот же размер, панель не растёт; редкое открытие, поэтому короткий выезд, закрытие быстрее */
+.bar { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); }
+.cap { margin: 0; font-size: 13px; font-weight: 600; }
+.link { padding: var(--space-1) var(--space-2); margin: calc(var(--space-1) * -1) calc(var(--space-2) * -1); background: transparent; border: 0; border-radius: var(--radius-sm); color: var(--accent); font: inherit; font-size: 13px; cursor: pointer; transition: background-color var(--dur-fast) ease; }
+@media (hover: hover) and (pointer: fine) {
+  .link:hover { background: var(--accent-bg); }
+}
+
+.stage { position: relative; }
+.sky { --thought-h: 76px; position: relative; height: calc(var(--thought-h) * 3 + var(--space-2) * 2); overflow-y: auto; scrollbar-gutter: stable; }
+
+/* роли поверх ленты мыслей: тот же размер, панель не растёт; редкое открытие, поэтому короткий выезд, закрытие быстрее */
 .roles { position: absolute; inset: 0; overflow-y: auto; scrollbar-gutter: stable; background: var(--panel); border: 1px solid var(--line2); border-radius: var(--radius-sm); padding: var(--space-2); }
-.rlist { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
-.role { padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm); outline: none; cursor: default; transition: background-color var(--dur-fast) ease; }
-.role.lit { background: var(--accent-bg); }
-.role:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.rlist { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-1); }
+.role { padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm); transition: background-color var(--dur-fast) ease; }
+@media (hover: hover) and (pointer: fine) {
+  .role:hover { background: var(--panel2); }
+}
 .rtop { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; }
 .rname { font-size: 13px; }
-.rid { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rage { margin-left: auto; font-size: 11px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
-.rsub { margin-top: 2px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.rage { margin-left: auto; font-size: 12px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.rwhat { margin: 2px 0 0; font-size: 12px; line-height: 1.4; color: var(--text); }
+.rsub { margin: 2px 0 0; font-size: 12px; line-height: 1.4; color: var(--muted); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .dot { display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; vertical-align: middle; background: var(--line2); }
 .dot.ok { background: var(--pos); }
 .dot.bad { background: var(--neg); }
-.fb { margin-left: var(--space-2); color: var(--warn); }
 .rnone { margin: 0; height: 100%; display: grid; place-items: center; color: var(--muted); font-size: 13px; }
 .roles-enter-from, .roles-leave-to { opacity: 0; }
 .roles-enter-from { transform: translateY(6px); }
@@ -167,9 +191,14 @@ const fell = computed(() => brain.roles.filter((r) => r.last?.fallback_from).len
 .roles-leave-active { transition: opacity 120ms var(--ease-out); }
 @media (prefers-reduced-motion: reduce) {
   .roles-enter-from { transform: none; }
-  .role { transition: none; }
+  .role, .brain-btn, .link { transition: none; }
 }
 .cloud { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); position: relative; }
-.quiet { position: absolute; inset: 0; margin: 0; display: grid; place-items: center; color: var(--muted); font-size: 13px; }
-.foot { margin-top: auto; padding-top: var(--space-2); border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.silence { position: absolute; inset: 0; margin: 0; padding: 0 var(--space-4); text-align: center; display: grid; place-items: center; color: var(--muted); font-size: 13px; }
+.foot { margin-top: auto; padding-top: var(--space-2); border-top: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-4); font-size: 12px; font-variant-numeric: tabular-nums; }
+
+@media (max-width: 520px) {
+  .panel { --brain-size: 80px; }
+  .top { gap: var(--space-3); }
+}
 </style>

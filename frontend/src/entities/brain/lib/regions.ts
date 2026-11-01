@@ -3,12 +3,6 @@ import { REGION_COUNT } from '@/shared/ui'
 /** Известные роли закреплены за областями, чтобы область роли не менялась от порядка в снимке. Новые роли занимают свободные области по алфавиту. */
 const FIXED: Record<string, number> = { entry_scout: 0, position_manager: 1, news_reader: 2 }
 
-const LABEL: Record<string, string> = { entry_scout: 'поиск входа', position_manager: 'сопровождение', news_reader: 'новости', morning_analyst: 'утренний обзор', day_auditor: 'аудит дня', reviewer: 'разбор сделок' }
-
-export function roleLabel(role: string): string {
-  return LABEL[role] ?? role
-}
-
 /** Область коры для каждой роли. Ролей может быть больше областей: тогда области делятся несколькими ролями. */
 export function assignRegions(roles: string[]): Record<string, number> {
   const out: Record<string, number> = {}
