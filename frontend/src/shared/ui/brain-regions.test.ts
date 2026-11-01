@@ -14,12 +14,12 @@ describe('brain-regions', () => {
     expect(regionOfNode(99)).toBe(-1)
   })
   it('nearestNode: ближайший в пределах радиуса, иначе -1', () => {
-    expect(nearestNode(19, 20)).toBe(0)
-    expect(nearestNode(45.5, 20.5)).toBe(HALF)
-    expect(nearestNode(32, 5, 4)).toBe(-1)
+    expect(nearestNode(BRAIN_NODES[0][0], BRAIN_NODES[0][1])).toBe(0)
+    expect(nearestNode(BRAIN_NODES[HALF][0] + 0.5, BRAIN_NODES[HALF][1])).toBe(HALF)
+    expect(nearestNode(32, 2, 4)).toBe(-1)
   })
   it('waveOrder: все нейроны, от ближайшего к дальнему', () => {
-    const o = waveOrder(19, 20)
+    const o = waveOrder(BRAIN_NODES[0][0], BRAIN_NODES[0][1])
     expect(o).toHaveLength(BRAIN_NODES.length)
     expect(o[0]).toBe(0)
     expect(new Set(o).size).toBe(BRAIN_NODES.length)
