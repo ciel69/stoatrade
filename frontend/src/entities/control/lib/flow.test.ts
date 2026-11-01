@@ -85,8 +85,8 @@ describe('buttonKind', () => {
   })
   it('недоступна и объясняет почему', () => {
     expect(buttonKind(null, true).kind).toBe('unavailable')
-    expect(buttonKind(base(), false).why).toMatch(/open_local/)
-    expect(buttonKind(base({}, { alive: false }), true).why).toMatch(/ctl/)
+    expect(buttonKind(base(), false).why).toMatch(/выключены/)
+    expect(buttonKind(base({}, { alive: false }), true).why).toMatch(/Служба управления не отвечает/)
     expect(buttonKind(base({}, { kill: { flatten: false, reason: '' } }), true).kind).toBe('blocked')
   })
 })

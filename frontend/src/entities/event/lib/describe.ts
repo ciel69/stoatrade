@@ -1,3 +1,4 @@
+import { decisionReason } from '@/shared/lib'
 import type { BusEvent } from '../model/types'
 
 const TYPE_TEXT: Record<string, string> = {
@@ -84,9 +85,21 @@ export function describe(e: BusEvent): EventText {
   const d = e.d ?? {}
   const pick = (k: string) => (typeof d[k] === 'string' || typeof d[k] === 'number' ? String(d[k]) : '')
   if (e.type === 'rule_fired') {
-    const act = [pick('rule'), pick('action')].filter(Boolean).join(' → ')
-    return { title: TYPE_TEXT.rule_fired, detail: d.ok === false ? `${act} · отказ ${pick('code')}` : act, tone: d.ok === false ? 'bad' : 'neutral' }
+    const why = d.ok === false ? decisionReason(pick('code')) : ''
+    const did = [plainDetail(pick('rule')), plainDetail(pick('action'))].filter(Boolean).join(' → ')
+    return { title: TYPE_TEXT.rule_fired, detail: d.ok === false ? [did, `отказ${why ? `: ${why}` : ''}`].filter(Boolean).join(' · ') : did, tone: d.ok === false ? 'bad' : 'neutral' }
   }
   const detail = [pick('kind'), pick('name'), pick('code'), pick('which'), pick('reason'), pick('why'), pick('state'), pick('action')].filter(Boolean)[0] ?? ''
-  return { title: TYPE_TEXT[e.type] ?? e.type, detail, tone: BAD.has(e.type) ? 'bad' : GOOD.has(e.type) ? 'good' : 'neutral' }
+  return { title: TYPE_TEXT[e.type] ?? 'событие платформы', detail: plainDetail(detail), tone: BAD.has(e.type) ? 'bad' : GOOD.has(e.type) ? 'good' : 'neutral' }
+}
+
+const DETAIL_WORD: Record<string, string> = {
+  hot_enter: 'монета стала горячей', hot_exit: 'монета перестала быть горячей', r_plus_1: 'прибыль достигла 1R', r_plus_2: 'прибыль достигла 2R', brain_budget: 'исчерпан бюджет мозга', daily_loss: 'дневной лимит убытка',
+}
+
+/** Служебное слово события (snake_case) по-русски; незнакомое не показывается сырым. Обычные фразы без подчёркиваний проходят как есть. */
+export function plainDetail(v: string): string {
+  if (!v) return ''
+  if (DETAIL_WORD[v]) return DETAIL_WORD[v]
+  return /^[a-z0-9]+(_[a-z0-9]+)+$/i.test(v) ? '' : v
 }

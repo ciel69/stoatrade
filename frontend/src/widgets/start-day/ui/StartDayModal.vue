@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { CTL_STEP_LABEL, acceptList, canStart, launchFill, litNodes, regionProgress, stepRows, useControlStore, type DayMode } from '@/entities/control'
 import { BRAIN_REGIONS, UiBrainIcon, UiMeter, UiSegment, type BrainIconState } from '@/shared/ui'
-import { useNow } from '@/shared/lib'
+import { dayLabel, failureText, humanize, modeName, plainify, useNow } from '@/shared/lib'
 
 /**
  * Старт торгового дня. Компактная карточка по центру: крупный мозг, под ним одно главное сообщение, одна тонкая шкала хода запуска и одна кнопка.
@@ -15,7 +15,7 @@ const now = useNow()
 const OLD_DASH = 'http://127.0.0.1:8766/#control'
 
 const PICKS: ReadonlyArray<{ value: DayMode | 'live'; label: string }> = [
-  { value: 'paper', label: 'Бумага' }, { value: 'testnet', label: 'Тестнет' }, { value: 'observe', label: 'Наблюдение' }, { value: 'live', label: 'Live' },
+  { value: 'paper', label: 'Бумага' }, { value: 'testnet', label: 'Тестнет' }, { value: 'observe', label: 'Наблюдение' }, { value: 'live', label: 'Реальные деньги' },
 ]
 const HINT: Record<string, string> = {
   paper: 'Виртуальные сделки, реальных денег нет.',
@@ -94,6 +94,12 @@ const ch = computed(() => control.challenge)
 const accept = computed(() => acceptList(ch.value))
 const ready = computed(() => control.phase === 'ready' && canStart(ch.value, control.accepted))
 const gates = computed(() => ch.value?.gates ?? [])
+const gateRows = computed(() => gates.value.map((g) => {
+  const h = humanize({ kind: 'gate', id: g.id, name: g.name, ok: !!g.ok, msg: g.msg }, { mode: pick.value })
+  const own = /не умеем объяснить/.test(h.title) ? plainify([g.name, g.msg].filter(Boolean).join(': ')) : null
+  return { id: g.id, ok: !!g.ok, title: own ?? h.title, todo: g.ok ? '' : own ? '' : h.todo }
+}))
+const failText = (code: string | null) => (code ? failureText(code) : 'Шаг не прошёл проверку. Устраните причину и запустите день снова.')
 const gatesOk = computed(() => gates.value.filter((g) => g.ok).length)
 const gatesBad = computed(() => gates.value.length - gatesOk.value)
 watch(gatesBad, (v) => { if (v) details.value = true })
@@ -102,7 +108,7 @@ watch(gatesBad, (v) => { if (v) details.value = true })
 const risk = computed(() => control.ctl?.risk)
 const dayId = computed(() => control.ctl?.platform.day_id ?? control.ctl?.day?.day_id ?? null)
 const tradeText = computed(() => (platform.value?.trading ? 'торговля включена' : platform.value?.observe ? 'только наблюдение' : 'торговля выключена'))
-const facts = computed(() => [`${platform.value?.mode ?? control.mode}`, tradeText.value, `риск ${risk.value?.level ?? '–'}${risk.value?.name ? ' · ' + risk.value.name : ''}`])
+const facts = computed(() => [modeName(platform.value?.mode ?? control.mode), tradeText.value, `уровень риска ${risk.value?.level ?? '–'}${risk.value?.name ? ' · ' + risk.value.name : ''}`])
 
 let autoTimer: ReturnType<typeof setTimeout> | undefined
 const holding = ref(false)
@@ -167,7 +173,7 @@ function stopNow(): void {
         <UiSegment class="modes" :model-value="pick" :options="PICKS" label="Режим дня" data-autofocus @update:model-value="onPick($event as DayMode | 'live')" />
 
         <template v-if="pick === 'live'">
-          <p class="note warn">Реальные деньги запускаются только в старом дашборде: там нужны токен управления, принятие предупреждений и фразы подтверждения.</p>
+          <p class="note warn">Торговля на реальные деньги запускается только в старом дашборде: там нужны отдельное подтверждение и принятие всех предупреждений.</p>
           <div class="foot"><a class="cta" :href="OLD_DASH" target="_blank" rel="noopener">Открыть старый дашборд</a></div>
         </template>
 
@@ -181,7 +187,7 @@ function stopNow(): void {
           </button>
           <div id="sd-gates" class="fold" :class="{ on: details }">
             <ul class="list" aria-label="Проверки готовности">
-              <li v-for="g in gates" :key="g.id" :class="g.ok ? 'ok' : 'bad'"><i class="mark" aria-hidden="true" /><span>{{ g.id }} {{ g.name }}</span><em v-if="g.msg">{{ g.msg }}</em></li>
+              <li v-for="g in gateRows" :key="g.id" :class="g.ok ? 'ok' : 'bad'"><i class="mark" aria-hidden="true" /><span>{{ g.title }}</span><em v-if="g.todo">{{ g.todo }}</em></li>
             </ul>
           </div>
 
@@ -208,7 +214,7 @@ function stopNow(): void {
         </button>
         <div id="sd-steps" class="fold" :class="{ on: details }">
           <ol class="list" aria-label="Шаги запуска дня">
-            <li v-for="r in rows" :key="r.name" :class="r.state"><i class="mark" aria-hidden="true" /><span>{{ r.name }} {{ r.label }}</span><em v-if="r.code && r.state === 'bad'">{{ r.code }}</em></li>
+            <li v-for="r in rows" :key="r.name" :class="r.state"><i class="mark" aria-hidden="true" /><span>{{ r.label }}</span><em v-if="r.state === 'bad'">{{ failText(r.code) }}</em></li>
           </ol>
         </div>
         <p class="fine">Обычно 20 до 60 секунд. Окно можно закрыть: запуск продолжится.</p>
@@ -221,13 +227,13 @@ function stopNow(): void {
 
       <!-- итог после запуска -->
       <template v-else-if="view === 'done'">
-        <p v-if="dayId" class="fine">{{ dayId }}</p>
+        <p v-if="dayId" class="fine">Торговый день: {{ dayLabel(dayId) }}</p>
         <div class="foot"><button type="button" class="cta" data-autofocus @click="emit('close')">Готово</button></div>
       </template>
 
       <!-- день идёт -->
       <template v-else-if="view === 'running'">
-        <p v-if="dayId" class="fine">{{ dayId }}</p>
+        <p v-if="dayId" class="fine">Торговый день: {{ dayLabel(dayId) }}</p>
         <p v-if="control.error && control.phase === 'failed'" class="err" role="alert">{{ control.error }}</p>
         <div class="foot">
           <template v-if="!confirmStop">

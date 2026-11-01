@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { RouterLink } from 'vue-router'
 import { UiChip, UiDetail } from '@/shared/ui'
-import { price, signed } from '@/shared/lib'
+import { decisionReason, price, signed } from '@/shared/lib'
 import { actorKey, humanAction, planShort } from '../lib/decisions'
 import type { DecisionItem } from '../model/types'
 
@@ -17,10 +17,10 @@ const flat = (o: Record<string, unknown>): string => Object.entries(o).map(([k, 
 
 const res = computed<{ text: string; tone: 'ok' | 'bad' | 'warn' | 'neutral' }>(() => {
   const d = props.decision
-  if (d.denied) return { text: `отказ ${d.code ?? ''}`.trim(), tone: 'bad' }
+  if (d.denied) return { text: d.code ? `отказ: ${decisionReason(d.code)}` : 'отказ', tone: 'bad' }
   if (d.idle) return { text: 'ждёт', tone: 'neutral' }
-  if (d.noop) return { text: `пропуск ${d.code ?? ''}`.trim(), tone: 'warn' }
-  if (d.ok === true) return { text: 'OK', tone: 'ok' }
+  if (d.noop) return { text: d.code ? `пропуск: ${decisionReason(d.code)}` : 'пропуск', tone: 'warn' }
+  if (d.ok === true) return { text: 'выполнено', tone: 'ok' }
   return { text: KIND_RU[d.kind] ?? d.kind, tone: 'neutral' }
 })
 const rows = computed<Array<[string, string]>>(() => {

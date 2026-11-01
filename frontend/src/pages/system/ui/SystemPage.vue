@@ -8,6 +8,7 @@ import { SystemLimits } from '@/widgets/system/system-limits'
 import { SystemMore } from '@/widgets/system/system-more'
 import { SystemNodes } from '@/widgets/system/system-nodes'
 import { SystemPanel } from '@/widgets/system/system-panel'
+import { usePlatformStatus } from '@/widgets/system/platform-status'
 import { UiSidePanel } from '@/shared/ui'
 
 /**
@@ -16,6 +17,8 @@ import { UiSidePanel } from '@/shared/ui'
  */
 const route = useRoute()
 const router = useRouter()
+/** Тот же вывод, что в индикаторе шапки: «могу ли я оставить платформу торговать». */
+const { summary } = usePlatformStatus()
 onMounted(() => { useSystemStore().start(); useControlStore().start() })
 const KINDS = ['ready', 'exec', 'sources', 'history']
 const panel = computed(() => (typeof route.query.panel === 'string' && KINDS.includes(route.query.panel) ? route.query.panel : null))
@@ -29,7 +32,7 @@ function close(): void {
 
 <template>
   <main class="page">
-    <div class="w-hero"><PlatformHero /></div>
+    <div class="w-hero"><PlatformHero :headline="summary.headline" /></div>
     <div class="w-nodes"><SystemNodes /></div>
     <div class="w-lim"><SystemLimits /></div>
     <div class="w-more"><SystemMore :selected="panel" @open="open" /></div>

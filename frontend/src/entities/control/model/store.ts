@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { useLive, type LiveMessage } from '@/shared/api'
+import { failureText } from '@/shared/lib'
 import { buttonKind, startArgs } from '../lib/flow'
 import type { ChallengeData, CtlFinal, CtlHello, CtlResult, CtlSnapshot, DayMode, FlowPhase } from './types'
 
@@ -54,10 +55,10 @@ export const useControlStore = defineStore('control', () => {
       if (r.code === 'OK') phase.value = 'ready'
       else if (r.code === 'E_GATE' || r.code === 'E_STATE') {
         phase.value = 'blocked'
-        error.value = r.msg
+        error.value = failureText(r.code, r.msg)
       } else {
         phase.value = 'failed'
-        error.value = r.msg
+        error.value = failureText(r.code, r.msg)
       }
       return
     }
@@ -68,7 +69,7 @@ export const useControlStore = defineStore('control', () => {
       return
     }
     phase.value = 'failed'
-    error.value = r.msg
+    error.value = failureText(r.code, r.msg)
   }
 
   function applyFinal(m: LiveMessage): void {
@@ -79,7 +80,7 @@ export const useControlStore = defineStore('control', () => {
       error.value = null
     } else {
       phase.value = 'failed'
-      error.value = f.msg || f.code
+      error.value = failureText(f.code, f.msg)
     }
   }
 
@@ -95,14 +96,14 @@ export const useControlStore = defineStore('control', () => {
 
   function send(kind: 'challenge' | 'command', action: string, args: Record<string, unknown>): boolean {
     if (!hello.value.enabled || !hello.value.csrf) {
-      error.value = 'управление из этого дашборда недоступно'
+      error.value = 'Управление из этого дашборда недоступно.'
       phase.value = 'failed'
       return false
     }
     const id = `c${++seq}`
     const ok = useLive().socket.send({ op: 'ctl', id, csrf: hello.value.csrf, kind, action, args })
     if (!ok) {
-      error.value = 'нет связи с сервером'
+      error.value = failureText('E_LINK')
       phase.value = 'failed'
       return false
     }

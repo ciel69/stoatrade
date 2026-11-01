@@ -40,5 +40,5 @@ export function roomFill(r: SysRoomRow): number {
 /** Строка запаса словами: «осталось 4.00 из 5.00 USDT». */
 export function roomText(r: SysRoomRow): string {
   const f = (x: number | null) => (x == null ? '–' : r.unit === 'USDT' ? x.toFixed(2) : String(Math.round(x)))
-  return r.id === 'stops' ? `${f(r.used)} из ${f(r.limit)}` : `осталось ${f(r.room)} из ${f(r.limit)}${r.unit === 'USDT' ? ' USDT' : ''}`
+  return r.id === 'stops' ? `${f(r.used)} из ${f(r.limit)}` : `осталось ${f(r.room == null ? null : Math.max(0, r.room))} из ${f(r.limit)}${r.unit === 'USDT' ? ' USDT' : ''}`
 }

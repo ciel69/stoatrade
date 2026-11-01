@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { useLive, type LiveMessage } from '@/shared/api'
+import { failureText, plainify } from '@/shared/lib'
 import { FINAL_TIMEOUT_MS, TIMEOUT_TEXT, buildCommand, isExpired, isRisky, risksOf, secondsLeft, unavailableReason } from '../lib/flow'
 import { createKeySender } from './key'
 import type { KeyOutcome } from '../lib/key'
@@ -24,6 +25,8 @@ export const useActionStore = defineStore('action', () => {
   const challenge = ref<Challenge | null>(null)
   const receivedAt = ref(0)                      // когда пришёл challenge (мс): от него считаются пауза min_delay и срок expires_in
   const error = ref<string | null>(null)
+  /** Исходный код и текст сервера последнего отказа: только для «Подробностей для специалиста». */
+  const errorDetails = ref<string | null>(null)
   const resultText = ref('')
   /** Рискованный ли запуск: null пока challenge не пришёл. От этого зависит поверхность: диалог (true, blocked) или уведомление (false, null). */
   const riskyRun = ref<boolean | null>(null)
@@ -78,13 +81,14 @@ export const useActionStore = defineStore('action', () => {
   }
 
   /** Конец запуска. Безрисковый запуск сообщает итог уведомлением, рискованный остаётся в диалоге (done или failed). */
-  function finish(ok: boolean, text: string): void {
+  function finish(ok: boolean, text: string, details: string | null = null): void {
     clearTimer()
     pendingId = null
     cmdId = null
     phase.value = ok ? 'done' : 'failed'
     resultText.value = ok ? text : ''
     error.value = ok ? null : text
+    errorDetails.value = ok ? null : details
     const s = spec.value
     if (riskyRun.value !== true) pushToast(ok ? 'ok' : 'bad', s?.title ?? 'Действие', text)
     if (ok) s?.onDone?.()
@@ -94,7 +98,7 @@ export const useActionStore = defineStore('action', () => {
     const id = `a${++seq}`
     const ok = !!hello.value.csrf && transport({ op: 'ctl', id, csrf: hello.value.csrf, kind, action, args, ...extra })
     if (!ok) {
-      finish(false, 'нет связи с сервером')
+      finish(false, failureText('E_LINK'), 'E_LINK')
       return null
     }
     return id
@@ -109,6 +113,7 @@ export const useActionStore = defineStore('action', () => {
     spec.value = next
     challenge.value = null
     error.value = null
+    errorDetails.value = null
     resultText.value = ''
     riskyRun.value = null
     pendingId = cmdId = null
@@ -125,16 +130,18 @@ export const useActionStore = defineStore('action', () => {
   /** Условия получены: заблокировано, нужно подтверждение рисков или можно отправлять сразу. */
   function onChallenge(r: ActionResult): void {
     const blockedCode = r.code === 'E_GATE' || r.code === 'E_STATE'
-    if (!r.ok && !blockedCode) return finish(false, r.msg || r.code)
+    const raw = [r.code, r.msg].filter(Boolean).join(' | ') || null
+    if (!r.ok && !blockedCode) return finish(false, failureText(r.code, r.msg), raw)
     if (!r.data) {
-      if (blockedCode) { phase.value = 'blocked'; error.value = r.msg; return }
-      return finish(false, 'ctl не вернул условия выполнения')
+      if (blockedCode) { phase.value = 'blocked'; error.value = failureText(r.code, r.msg); errorDetails.value = raw; return }
+      return finish(false, 'Платформа не прислала условия выполнения. Повторите; если повторяется, сообщите разработчику.', raw)
     }
     challenge.value = r.data
     receivedAt.value = Date.now()
     if (blockedCode || r.data.blocked) {
       phase.value = 'blocked'
-      error.value = r.msg || null
+      error.value = r.msg || r.code ? failureText(r.code, r.msg) : null
+      errorDetails.value = raw
       return
     }
     riskyRun.value = isRisky(r.data)
@@ -166,15 +173,15 @@ export const useActionStore = defineStore('action', () => {
     if (r.id !== pendingId) return
     pendingId = null
     if (r.kind === 'challenge') return onChallenge(r)
-    if (!r.ok) return finish(false, r.msg || r.code)
+    if (!r.ok) return finish(false, failureText(r.code, r.msg), [r.code, r.msg].filter(Boolean).join(' | ') || null)
     if (phase.value === 'sending') phase.value = 'waiting'
   }
 
   function applyFinal(m: LiveMessage): void {
     const f = m.data as ActionFinal
     if (f.rid !== cmdId || (phase.value !== 'sending' && phase.value !== 'waiting')) return
-    if (f.status === 'done') finish(true, f.msg || 'выполнено')
-    else finish(false, f.msg || f.code || f.status)
+    if (f.status === 'done') finish(true, plainify(f.msg) ?? 'Готово.')
+    else finish(false, failureText(f.code, f.msg), [f.status, f.code, f.msg].filter(Boolean).join(' | ') || null)
   }
 
   /** «Принимаю риски»: после паузы min_delay отправляет команду; если срок challenge вышел, сам запрашивает условия заново. */
@@ -292,10 +299,10 @@ export const useActionStore = defineStore('action', () => {
       spec.value = demo
       riskyRun.value = true
       phase.value = 'failed'
-      error.value = 'E_RATE: слишком частые команды, повторите через несколько секунд.'
+      error.value = failureText('E_RATE')
     } else if (kind === 'toast') {
       pushToast('ok', 'Аварийная остановка', 'Торговля остановлена, позиции не тронуты.')
-      pushToast('bad', 'Остановка дня', 'E_STATE: день уже завершается.')
+      pushToast('bad', 'Остановка дня', failureText('E_STATE'))
     }
   }
 
@@ -306,5 +313,5 @@ export const useActionStore = defineStore('action', () => {
     transport = mockTransport(calm ? 'full' : 'confirm')
   }
 
-  return { hello, phase, spec, challenge, receivedAt, error, resultText, riskyRun, toasts, active, risks, start, can, run, sendKey, accept, recheck, cancel, reset, dismissToast, mock, mockEdit, applyHello, applyResult, applyFinal }
+  return { hello, phase, spec, challenge, receivedAt, error, errorDetails, resultText, riskyRun, toasts, active, risks, start, can, run, sendKey, accept, recheck, cancel, reset, dismissToast, mock, mockEdit, applyHello, applyResult, applyFinal }
 })

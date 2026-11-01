@@ -108,7 +108,7 @@ const resultText = (x: DecisionItem) => (x.denied ? 'отказ' : x.noop ? 'п�
           <template v-for="[k, v] in facts" :key="k"><dt>{{ k }}</dt><dd>{{ v }}</dd></template>
         </dl>
         <p v-if="card.warnings.length" class="warns">
-          <UiChip v-for="w in card.warnings" :key="w" tone="warn" :title="w">{{ WARN_RU[w] ?? w }}</UiChip>
+          <UiChip v-for="w in card.warnings" :key="w" tone="warn" >{{ WARN_RU[w] ?? 'замечание к плану' }}</UiChip>
         </p>
 
         <section class="blk">

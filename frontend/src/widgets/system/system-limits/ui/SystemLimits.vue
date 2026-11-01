@@ -2,11 +2,11 @@
 import { computed } from 'vue'
 import { roomFill, roomText, useSystemStore } from '@/entities/system'
 import { UiChip, UiMeter } from '@/shared/ui'
-import { countdown, fixed, signed, useNow } from '@/shared/lib'
+import { countdown, fixed, humanize, sessionName, signed, thesisText, useNow } from '@/shared/lib'
 
 /**
  * Три ответа на вопрос «сколько ещё можно»: сессия (идёт ли, входы разрешены, сделки и бюджет убытка), запас до каждого лимита шкалами и капитал (просадка от пика, свободные средства).
- * Лимиты только показываются: менять их здесь нельзя и не нужно (config/risk_profile.json, уровень риска задаёт владелец).
+ * Лимиты только показываются: менять их здесь нельзя и не нужно, уровень риска задаёт владелец.
  */
 const sys = useSystemStore()
 const now = useNow()
@@ -16,6 +16,9 @@ const left = computed(() => (sess.value?.expires_at != null ? sess.value.expires
 const budgetFill = computed(() => (sess.value?.budget_usdt ? Math.max(0, 1 - (sess.value.budget_used ?? 0) / sess.value.budget_usdt) : 0))
 const venues = computed(() => Object.entries(s.value?.account.venues ?? {}).filter(([, v]) => (v.equity ?? 0) > 0))
 const tone = (x: number | null | undefined) => (x == null || x === 0 ? '' : x > 0 ? 'up' : 'down')
+/** Причины закрытых входов простыми словами: «Дневной лимит убытка исчерпан», а не служебная фраза сервера. */
+const roomLabel = (l: string): string => l.replace(/слоты позиций/i, 'Одновременных позиций').replace(/бюджет убытка сессии/i, 'Лимит убытка сессии')
+const say = (list: string[]): string => list.map((t) => humanize({ kind: 'text', level: 'warn', text: t }).title).join('; ')
 </script>
 
 <template>
@@ -23,8 +26,8 @@ const tone = (x: number | null | undefined) => (x == null || x === 0 ? '' : x > 
     <article class="card">
       <h3 class="cap">Сессия</h3>
       <template v-if="sess">
-        <p class="big">{{ sess.type }} <UiChip :tone="sess.entries_allowed ? 'ok' : 'warn'">{{ sess.entries_allowed ? 'входы разрешены' : 'входы запрещены' }}</UiChip></p>
-        <p v-if="sess.block_reasons.length" class="muted">Причина: {{ sess.block_reasons.join(', ') }}</p>
+        <p class="big">{{ sessionName(sess.type) }} <UiChip :tone="sess.entries_allowed ? 'ok' : 'warn'">{{ sess.entries_allowed ? 'новые сделки разрешены' : 'новые сделки закрыты' }}</UiChip></p>
+        <p v-if="sess.block_reasons.length" class="muted">Почему закрыты: {{ say(sess.block_reasons) }}.</p>
         <div class="kv">
           <span>Сделок</span><b>{{ sess.trades ?? '–' }}<template v-if="sess.max_trades"> из {{ sess.max_trades }}</template></b>
           <span>Результат</span><b :class="tone(sess.realized)">{{ signed(sess.realized, 2) }} USDT</b>
@@ -33,21 +36,21 @@ const tone = (x: number | null | undefined) => (x == null || x === 0 ? '' : x > 
         </div>
         <div class="bud"><span>Бюджет убытка</span><span>{{ fixed(sess.budget_used) }} из {{ fixed(sess.budget_usdt) }} USDT</span></div>
         <UiMeter :fill="budgetFill" :level="budgetFill < 0.15 ? 'bad' : budgetFill < 0.35 ? 'warn' : 'ok'" label="Остаток бюджета убытка сессии" />
-        <p v-if="sess.thesis" class="thesis">{{ sess.thesis }}</p>
+        <p v-if="thesisText(sess.thesis)" class="thesis">{{ thesisText(sess.thesis) }}</p>
       </template>
       <p v-else class="muted">Активной сессии нет. Входы разрешены только внутри сессии: она создаётся запуском дня.</p>
     </article>
 
     <article class="card">
-      <h3 class="cap">Запас до лимитов<UiChip v-if="s.room.allowed === false" tone="bad">входы закрыты</UiChip></h3>
+      <h3 class="cap">Запас до лимитов<UiChip v-if="s.room.allowed === false" tone="bad">новые сделки закрыты</UiChip></h3>
       <ul v-if="s.room.rows.length" class="rows">
-        <li v-for="r in s.room.rows" :key="r.id" :title="r.help">
-          <span class="top"><span>{{ r.label }}</span><b>{{ roomText(r) }}</b></span>
+        <li v-for="r in s.room.rows" :key="r.id">
+          <span class="top"><span>{{ roomLabel(r.label) }}</span><b>{{ roomText(r) }}</b></span>
           <UiMeter :fill="roomFill(r)" :level="r.level === 'info' ? 'ok' : r.level" :label="r.label" />
         </li>
       </ul>
-      <p v-else class="muted">Нет данных о лимитах (config/risk_profile.json).</p>
-      <p v-if="s.room.reasons.length" class="muted">Входы закрыты: {{ s.room.reasons.join('; ') }}</p>
+      <p v-else class="muted">Данные о лимитах риска пока не загружены.</p>
+      <p v-if="s.room.reasons.length" class="muted">Почему новые сделки закрыты: {{ say(s.room.reasons) }}.</p>
     </article>
 
     <article class="card">

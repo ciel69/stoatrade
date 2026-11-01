@@ -1,16 +1,17 @@
+import { humanize, plainify, stepLabel } from '@/shared/lib'
 import type { ChallengeData, CtlSnapshot, DayStepRow } from '../model/types'
 
-/** Шаги запуска дня в ctl (lifecycle): S1..S9. Подписи как в старом дашборде. */
+/** Шаги запуска дня в ctl (lifecycle): S1..S9. Имена шагов служебные, человеку показываются только подписи из общего словаря. */
 export const START_STEPS: ReadonlyArray<{ name: string; label: string; region: number }> = [
-  { name: 'S1', label: 'Предстартовые проверки', region: 0 },
-  { name: 'S2', label: 'Свежие факты: новости и календарь', region: 0 },
-  { name: 'S3', label: 'Сверка с биржей', region: 1 },
-  { name: 'S4', label: 'Досье для мозга', region: 1 },
-  { name: 'S5', label: 'Утренний аналитик', region: 2 },
-  { name: 'S6', label: 'План дня', region: 2 },
-  { name: 'S7', label: 'Сессия и бюджет дня', region: 3 },
-  { name: 'S8', label: 'Включение торговли', region: 3 },
-  { name: 'S9', label: 'Стартовый отчёт', region: 3 },
+  { name: 'S1', label: stepLabel('S1'), region: 0 },
+  { name: 'S2', label: stepLabel('S2'), region: 0 },
+  { name: 'S3', label: stepLabel('S3'), region: 1 },
+  { name: 'S4', label: stepLabel('S4'), region: 1 },
+  { name: 'S5', label: stepLabel('S5'), region: 2 },
+  { name: 'S6', label: stepLabel('S6'), region: 2 },
+  { name: 'S7', label: stepLabel('S7'), region: 3 },
+  { name: 'S8', label: stepLabel('S8'), region: 3 },
+  { name: 'S9', label: stepLabel('S9'), region: 3 },
 ]
 
 /** Ожидаемая длительность шагов, с (S5 и S6 идут через LLM и занимают основное время): вес шага на шкале и постоянная времени его плавного хода. */
@@ -89,8 +90,14 @@ export function litNodes(progress: ReadonlyArray<{ done: number }>, regions: Rea
 /** Что владелец должен принять перед стартом: мягкие предупреждения ctl (warnings) и жёлтые предстартовые проверки (pre_amber). */
 export function acceptList(ch: ChallengeData | null | undefined): Array<{ id: string; msg: string; kind: 'warning' | 'amber' }> {
   const out: Array<{ id: string; msg: string; kind: 'warning' | 'amber' }> = []
-  for (const w of ch?.warnings ?? []) out.push({ id: w.id, msg: w.msg ?? w.code ?? w.id, kind: 'warning' })
-  ;(ch?.pre_amber ?? []).forEach((a, i) => out.push({ id: a.id ?? `amber-${i}`, msg: a.msg ?? a.name ?? a.code ?? 'предупреждение', kind: 'amber' }))
+  for (const w of ch?.warnings ?? []) {
+    const h = humanize({ kind: 'warning', id: w.id, code: w.code, msg: w.msg })
+    out.push({ id: w.id, msg: /не умеем объяснить/.test(h.title) ? (plainify(w.msg) ?? h.title) : [h.title, h.what].filter(Boolean).join('. '), kind: 'warning' })
+  }
+  ;(ch?.pre_amber ?? []).forEach((a, i) => {
+    const h = humanize({ kind: 'gate', id: a.id ?? '', name: a.name, ok: false, msg: a.msg, sev: 'amber' })
+    out.push({ id: a.id ?? `amber-${i}`, msg: /не умеем объяснить/.test(h.title) ? (plainify([a.name, a.msg].filter(Boolean).join(': ')) ?? 'Есть замечание к запуску') : h.title, kind: 'amber' })
+  })
   return out
 }
 
@@ -114,15 +121,15 @@ export function startArgs(mode: string, ch: ChallengeData | null | undefined): {
 export type ButtonKind = 'start' | 'starting' | 'running' | 'closing' | 'blocked' | 'unavailable'
 
 export function buttonKind(ctl: CtlSnapshot | null, enabled: boolean): { kind: ButtonKind; why: string | null } {
-  if (!ctl) return { kind: 'unavailable', why: 'нет данных от платформы' }
-  if (!enabled) return { kind: 'unavailable', why: 'управление из этого дашборда не включено: нужен режим входа open_local и ключ подписи' }
-  if (!ctl.alive) return { kind: 'unavailable', why: 'сервис управления (ctl) не отвечает: запустите платформу (./tb start)' }
-  if (ctl.kill) return { kind: 'blocked', why: 'включена аварийная остановка: снять её можно только в терминале (./tb exec resume)' }
+  if (!ctl) return { kind: 'unavailable', why: 'Платформа пока не прислала данные.' }
+  if (!enabled) return { kind: 'unavailable', why: 'Запуск и остановка из этого дашборда выключены. Включает их владелец в настройках дашборда.' }
+  if (!ctl.alive) return { kind: 'unavailable', why: 'Служба управления не отвечает. Платформа, возможно, не запущена: запустите её в терминале.' }
+  if (ctl.kill) return { kind: 'blocked', why: 'Включена аварийная остановка. Снять её можно только в терминале платформы.' }
   const st = ctl.platform.state
   if (st === 'starting') return { kind: 'starting', why: null }
   if (st === 'running') return { kind: 'running', why: null }
   if (st === 'closing') return { kind: 'closing', why: null }
-  if (st === 'halted') return { kind: 'blocked', why: 'платформа остановлена аварийно' }
+  if (st === 'halted') return { kind: 'blocked', why: 'Платформа остановилась аварийно. Разберитесь с причиной и запустите её заново.' }
   if (st === 'stopped') return { kind: 'start', why: null }
-  return { kind: 'unavailable', why: 'состояние платформы неизвестно' }
+  return { kind: 'unavailable', why: 'Состояние платформы пока неизвестно.' }
 }

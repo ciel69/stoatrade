@@ -27,8 +27,10 @@ describe('isRisky', () => {
 describe('risksOf', () => {
   it('опасность сверху, затем предупреждения, затем жёлтые проверки', () => {
     expect(risksOf(risky).map((r) => [r.level, r.id])).toEqual([['danger', 'danger'], ['warn', 'W1'], ['warn', 'W2'], ['amber', 'P1']])
-    expect(risksOf(risky)[1].text).toBe('мало истории')
-    expect(risksOf(risky)[3].text).toBe('Жёлтая: почти предел')
+    expect(risksOf(risky)[1].text).toMatch(/^На бумаге пока мало опыта/)
+    expect(risksOf(risky)[1].text).not.toMatch(/\bW\d\b/)
+    expect(risksOf(risky)[3].text).toBe('Платформа не готова к запуску дня')
+    expect(risksOf({ pre_amber: [{ id: 'Z9', name: 'Жёлтая', msg: 'почти предел' }] })[0].text).toBe('Жёлтая: почти предел')
   })
   it('только фразы: один общий пункт, чтобы список не был пустым', () => {
     expect(risksOf({ phrases: ['x'] })).toHaveLength(1)
@@ -43,8 +45,10 @@ describe('условия', () => {
   })
   it('причины блокировки: непройденные условия, иначе текст ответа', () => {
     expect(blockReasons(risky, 'x')).toEqual(['Сверка: устарела'])
+    expect(blockReasons({ gates: [{ id: 'H1', ok: false, msg: 'KILL активен' }] }, '')[0]).toMatch(/^Включена аварийная остановка\./)
     expect(blockReasons({ gates: [] }, 'сервер отказал')).toEqual(['сервер отказал'])
-    expect(blockReasons(null, '')).toEqual(['условия для выполнения не выполнены'])
+    expect(blockReasons({ gates: [] }, 'E_GATE x_y')).toEqual(['Условия для выполнения пока не выполнены.'])
+    expect(blockReasons(null, '')).toEqual(['Условия для выполнения пока не выполнены.'])
   })
 })
 

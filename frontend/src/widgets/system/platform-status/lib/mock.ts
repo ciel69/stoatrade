@@ -5,18 +5,27 @@ import type { MarketSnapshot } from '@/entities/market'
 import type { SysNode, SystemSnapshot } from '@/entities/system'
 import type { StatusInput } from './types'
 
-export type StatusMockKind = 'mock' | 'mock-warn' | 'mock-bad'
+export type StatusMockKind = 'mock' | 'mock-warn' | 'mock-bad' | 'mock-paper' | 'mock-limit'
 
-/** Читает ?status=mock|mock-warn|mock-bad: образцовые состояния для проверки глазами без сервера. */
+/** Читает ?status=mock|mock-warn|mock-bad|mock-paper|mock-limit: образцовые состояния для проверки глазами без сервера. */
 export function mockKind(search: string): StatusMockKind | null {
   const v = new URLSearchParams(search).get('status')
-  return v === 'mock' || v === 'mock-warn' || v === 'mock-bad' ? v : null
+  return v === 'mock' || v === 'mock-warn' || v === 'mock-bad' || v === 'mock-paper' || v === 'mock-limit' ? v : null
+}
+
+/** Образец «исчерпан дневной лимит убытка»: платформа работает, новые входы закрыты. */
+export function mockLimitStatus(now: number): StatusInput {
+  const base = mockStatus('mock', now)
+  const system = base.system as SystemSnapshot
+  return { ...base, system: { ...system, room: { allowed: false, reasons: ['дневной лимит убытка достигнут (1.95 USDT)'], rows: [] } } }
 }
 
 const node = (o: Partial<SysNode> & Pick<SysNode, 'id' | 'label' | 'level'>): SysNode => ({ ...o })
 
 /** Образцовые данные платформы (вымышлены). mock: всё в норме; mock-warn: новости и карта отстают; mock-bad: потеряна связь с биржей и мозг не отвечает. */
 export function mockStatus(kind: StatusMockKind, now: number): StatusInput {
+  if (kind === 'mock-paper') return mockPaperStatus(now)
+  if (kind === 'mock-limit') return mockLimitStatus(now)
   const warn = kind === 'mock-warn'
   const bad = kind === 'mock-bad'
   const nodes: SysNode[] = [
@@ -53,11 +62,39 @@ export function mockStatus(kind: StatusMockKind, now: number): StatusInput {
     alive: true, configured: true, platform: { state: 'running', mode: 'paper', session: 'day', health: 'green', day_id: 'D-mock', trading: true, observe: false }, step: null, kill: null,
     risk: { level: 3, name: 'Базовый' }, busy: false, banner: null, day: null,
     checks: [
-      { id: 'H1', name: 'Чистый KILL', sev: 'red', ok: true, msg: '' },
-      { id: 'H3', name: 'Связь', sev: 'red', ok: !bad, msg: bad ? 'нет приватного канала биржи' : 'исполнитель жив, сверка свежая' },
+      { id: 'H1', name: 'KILL чист', sev: 'red', ok: true, msg: 'state/KILL нет' },
+      { id: 'H3', name: 'Связь с биржей и исполнителем', sev: 'red', ok: !bad, msg: bad ? 'приватный WS не подключён; сверка с биржей не проводилась' : 'исполнитель жив, режим будет переключён на live; связь перепроверится после переключения' },
       { id: 'H6', name: 'Мозг доступен', sev: 'red', ok: !bad, msg: bad ? 'мозг не отвечает' : '' },
-      { id: 'W1', name: 'W_PAPER_HISTORY', sev: 'amber', ok: !warn, msg: 'Мало paper-истории: рекомендуется 30 сделок и 7 дней' },
+      { id: 'W1', name: 'paper_history', sev: 'amber', ok: !warn, msg: 'paper-сделок 12 из рекомендованных 30; дней 3 из 7' },
     ],
   }
   return { now, link: 'open', home: null, system, brain, market, news, ctl }
+}
+
+/**
+ * Образец «как у владельца»: платформа торгует на бумаге и всё работает, но проверки допуска к живой торговле не пройдены (агенту не разрешён live),
+ * а баннер запуска перечисляет шаги с замечаниями. Раньше этот образец горел красным и показывал коды H7, S1, S5, S6.
+ */
+export function mockPaperStatus(now: number): StatusInput {
+  const base = mockStatus('mock', now)
+  const ctl = base.ctl as CtlSnapshot
+  const live = 'исполнитель жив, режим будет переключён на live; связь перепроверится после переключения'
+  const checks: CtlSnapshot['checks'] = [
+    { id: 'H1', name: 'KILL чист', sev: 'red', ok: true, msg: 'state/KILL нет' },
+    { id: 'H2', name: 'Стоп на бирже у каждой позиции', sev: 'red', ok: true, msg: 'проверится после переключения исполнителя на live' },
+    { id: 'H3', name: 'Связь с биржей и исполнителем', sev: 'red', ok: true, msg: live },
+    { id: 'H4', name: 'Сверка портфеля с биржей', sev: 'red', ok: true, msg: 'проверится после переключения исполнителя на live' },
+    { id: 'H5', name: 'Суточный лимит убытка', sev: 'red', ok: true, msg: 'убыток за сутки 0.00 из 1.95 USDT' },
+    { id: 'H6', name: 'Мозг доступен', sev: 'red', ok: true, msg: '' },
+    { id: 'H7', name: 'Конфигурации читаются и не ослабляют защиту', sev: 'red', ok: false, msg: 'агенту api не разрешён live (agents.json limits.modes)' },
+    { id: 'H8', name: 'Лимит запусков live', sev: 'red', ok: true, msg: 'запусков за сутки 0 из 3' },
+    { id: 'W1', name: 'paper_history', sev: 'amber', ok: false, msg: 'paper-сделок 12 из рекомендованных 30; дней 3 из 7' },
+    { id: 'W2', name: 'no_live_ok', sev: 'amber', ok: false, msg: 'профиль deepseek.fast: метки live_ok нет, eval не проводился' },
+    { id: 'W4', name: 'recent_swap', sev: 'amber', ok: false, msg: 'модель или команда live-ролей сменена 35 мин назад (порог 240)' },
+    { id: 'W5', name: 'risk_level', sev: 'amber', ok: false, msg: 'уровень 4 «Агрессивный»: риск на сделку 3% капитала' },
+    { id: 'W7', name: 'carry', sev: 'amber', ok: false, msg: 'перенос через сутки включён в режиме agent' },
+    { id: 'W9', name: 'session_stats', sev: 'amber', ok: false, msg: 'day: сделок в журнале 0 из 10' },
+  ]
+  const steps = ['S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8', 'S9'].map((name) => ({ name, phase: 'start', ok: true, code: null }))
+  return { ...base, ctl: { ...ctl, checks, banner: { level: 'warn', text: 'День D-20261101-2 запущен (paper); замечания: S1,S5,S6' }, day: { day_id: 'D-20261101-2', state: 'running', mode: 'paper', steps } } }
 }

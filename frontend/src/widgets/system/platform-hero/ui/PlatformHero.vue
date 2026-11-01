@@ -2,33 +2,39 @@
 import { computed } from 'vue'
 import { useActionStore } from '@/entities/action'
 import { useControlStore, type PlatformState } from '@/entities/control'
-import { useSystemStore, verdict, worst } from '@/entities/system'
+import { useSystemStore } from '@/entities/system'
 import { UiChip } from '@/shared/ui'
+import { dayLabel, humanize, modeName, sessionName, type Headline } from '@/shared/lib'
 
 /**
  * Главное на странице: что с платформой и что делать. Слева состояние словами (работает, остановлена, запускается) с режимом, днём и сессией, под ним вывод по узлам (всё работает
  * или что проверить). Справа одно главное действие: запустить день, остановить день или показать ход; недоступное действие объясняет причину рядом. Параметры, проверки и подтверждения
  * показывает то же окно, что открывает кнопка в боковой колонке. Аварийная остановка и смена режима и риска здесь не делаются: сервер дашборда принимает только безопасный старт и стоп дня.
  */
+/** Вывод «можно ли оставить платформу торговать» считает индикатор состояния (он же в шапке); страница передаёт его сюда, чтобы два места не расходились. */
+const props = defineProps<{ headline?: Headline | null }>()
 const control = useControlStore()
 const sys = useSystemStore()
 const action = useActionStore()
 
-const STATE: Record<PlatformState, string> = { stopped: 'Платформа остановлена', starting: 'Платформа запускается', running: 'Платформа работает', closing: 'День завершается', halted: 'Аварийно остановлена', unknown: 'Состояние неизвестно' }
-const MODE: Record<string, string> = { observe: 'Наблюдение', paper: 'Бумага', testnet: 'Тестовая сеть', live: 'Реальные деньги' }
+const STATE: Record<PlatformState, string> = { stopped: 'Платформа остановлена', starting: 'Платформа запускается', running: 'Платформа работает', closing: 'День завершается', halted: 'Платформа остановилась аварийно', unknown: 'Состояние неизвестно' }
 const LABEL = { start: 'Запустить день', starting: 'Показать ход запуска', running: 'Остановить день', closing: 'Показать ход завершения', blocked: 'Запуск недоступен', unavailable: 'Управление недоступно' } as const
 
 const p = computed(() => control.ctl?.platform ?? null)
 const state = computed<PlatformState>(() => (control.ctl ? (p.value?.state ?? 'unknown') : 'unknown'))
 const btn = computed(() => control.button)
-const v = computed(() => (sys.snapshot ? verdict(sys.snapshot) : null))
-/** Цвет сводки: худшее из состояния платформы и узлов. */
-const tone = computed(() => worst([sys.snapshot?.level, state.value === 'halted' ? 'bad' : state.value === 'unknown' ? 'warn' : state.value === 'starting' || state.value === 'closing' ? 'warn' : 'ok', control.ctl?.alive === false ? 'bad' : 'ok']))
+const v = computed(() => props.headline ?? null)
+/** Цвет точки: тот же, что у индикатора в шапке (зелёный, жёлтый, красный; серый, когда торговли нет). */
+const tone = computed(() => (v.value ? (v.value.tone === 'idle' ? 'idle' : v.value.tone === 'ok' ? 'ok' : v.value.tone === 'warn' ? 'warn' : v.value.tone === 'bad' ? 'bad' : 'ok') : 'idle'))
 const sub = computed(() => {
   const x = p.value
-  if (!x) return 'Нет связи с сервисом управления.'
-  return [x.mode ? (MODE[x.mode] ?? x.mode) : null, x.day_id ? `день ${x.day_id}` : null, x.session ? `сессия «${x.session}»` : null, state.value === 'running' ? (x.trading ? 'торговля включена' : 'торговля выключена') : null].filter(Boolean).join(' · ')
+  if (!x) return 'Нет связи со службой управления.'
+  return [x.mode ? modeName(x.mode) : null, x.day_id ? dayLabel(x.day_id) : null, x.session ? sessionName(x.session) : null, state.value === 'running' ? (x.trading ? 'торговля включена' : 'торговля выключена') : null].filter(Boolean).join(' · ')
 })
+/** Сообщение платформы и предупреждения системы простым языком; исходный текст сервера в подробностях для специалиста. */
+const banner = computed(() => (control.ctl?.banner?.text ? humanize({ kind: 'banner', level: control.ctl.banner.level, text: control.ctl.banner.text }, { mode: p.value?.mode, running: state.value === 'running' }) : null))
+const warns = computed(() => (sys.snapshot?.warnings ?? []).filter((w) => w.text).map((w) => humanize({ kind: 'text', level: w.level ?? 'info', text: w.text as string })))
+const techLines = computed(() => [banner.value?.details, ...warns.value.map((w) => w.details)].filter(Boolean).join('\n'))
 const disabled = computed(() => btn.value.kind === 'unavailable' || btn.value.kind === 'blocked')
 
 /** Аварийная остановка: только при расширенном управлении (hello.full и kill.set в modes); если KILL уже активен, кнопки нет, а как снять, сказано в сводке выше. */
@@ -49,7 +55,7 @@ function stopNow(flatten: boolean): void {
     <div class="row">
       <i class="dot" aria-hidden="true" />
       <div class="txt">
-        <h2 class="title">{{ STATE[state] }}<UiChip v-if="p?.mode === 'live'" tone="bad">live</UiChip></h2>
+        <h2 class="title">{{ STATE[state] }}<UiChip v-if="p?.mode === 'live'" tone="bad">реальные деньги</UiChip></h2>
         <p class="sub">{{ sub }}</p>
       </div>
       <div class="act">
@@ -63,23 +69,29 @@ function stopNow(flatten: boolean): void {
     </div>
 
     <p v-if="v" class="verdict"><b>{{ v.title }}.</b> {{ v.detail }}</p>
-    <p v-if="control.ctl && !control.ctl.alive" class="note bad">Сервис управления не отвечает: действия заблокированы. Платформа запускается в терминале: <code>./tb up --detach</code>.</p>
-    <p v-if="control.ctl?.banner?.text" class="note" :class="control.ctl.banner.level === 'bad' ? 'bad' : control.ctl.banner.level === 'warn' ? 'warn' : ''">{{ control.ctl.banner.text }}</p>
-    <ul v-if="sys.snapshot?.warnings.length" class="warns">
-      <li v-for="(w, i) in sys.snapshot.warnings" :key="i" :class="w.level === 'bad' ? 'bad' : 'warn'">{{ w.text }}</li>
+    <p v-if="control.ctl && !control.ctl.alive" class="note bad">Служба управления не отвечает, поэтому запуск и остановка дня сейчас недоступны. Возможно, платформа не запущена: запустите её в терминале.</p>
+    <div v-if="banner" class="note" :class="banner.tone">
+      <p class="n-title">{{ banner.title }}</p>
+      <p v-if="banner.what" class="n-text">{{ banner.what }}</p>
+      <p v-if="banner.why" class="n-text">{{ banner.why }}</p>
+      <p v-if="banner.todo" class="n-text n-todo">{{ banner.todo }}</p>
+    </div>
+    <ul v-if="warns.length" class="warns">
+      <li v-for="(w, i) in warns" :key="i" :class="w.tone">
+        <b>{{ w.title }}.</b> <span>{{ [w.what, w.todo].filter(Boolean).join(' ') }}</span>
+      </li>
     </ul>
+    <details v-if="techLines" class="tech"><summary>Подробности для специалиста</summary><pre>{{ techLines }}</pre></details>
   </section>
 </template>
 
 <style scoped>
-.hero { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--space-5); display: grid; gap: var(--space-3); border-left-width: 3px; }
-.hero.lv-ok { border-left-color: var(--pos); }
-.hero.lv-warn { border-left-color: var(--warn); }
-.hero.lv-bad { border-left-color: var(--neg); }
+.hero { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--space-5); display: grid; gap: var(--space-3); }
 .row { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-4); }
 .dot { flex: none; width: 12px; height: 12px; border-radius: 50%; background: var(--pos); }
 .lv-warn .dot { background: var(--warn); }
 .lv-bad .dot { background: var(--neg); }
+.lv-idle .dot { background: var(--muted); }
 .txt { flex: 1 1 260px; min-width: 0; }
 .title { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -0.01em; display: flex; align-items: center; gap: var(--space-2); }
 .sub { margin: 2px 0 0; font-size: 13px; color: var(--muted); }
@@ -98,12 +110,20 @@ function stopNow(flatten: boolean): void {
 .stopbtn:focus-visible, .link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
 .verdict { margin: 0; font-size: 13px; color: var(--muted); }
 .verdict b { color: var(--text); }
-.note { margin: 0; padding: var(--space-3); border-radius: var(--radius-sm); background: var(--panel2); font-size: 12px; line-height: 1.5; }
-.note.bad { color: var(--neg); }
-.note.warn { color: var(--warn); }
-.warns { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 12px; }
-.warns .warn { color: var(--warn); }
-.warns .bad { color: var(--neg); }
+.note { margin: 0; padding: var(--space-3); border-radius: var(--radius-sm); background: var(--panel2); font-size: 13px; line-height: 1.5; display: grid; gap: 2px; }
+.note p { margin: 0; text-wrap: pretty; }
+.n-title { font-weight: 600; }
+.n-text { color: var(--muted); }
+.note.bad .n-title { color: var(--neg); }
+.note.warn .n-title { color: var(--warn); }
+.warns { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); font-size: 13px; line-height: 1.5; color: var(--muted); }
+.warns b { color: var(--text); }
+.warns .warn b { color: var(--warn); }
+.warns .bad b { color: var(--neg); }
+.tech { font-size: 12px; color: var(--muted); }
+.tech summary { cursor: pointer; min-height: 32px; display: flex; align-items: center; }
+.tech summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+.tech pre { margin: var(--space-1) 0 0; padding: var(--space-3); background: var(--panel2); border-radius: var(--radius-sm); font-family: var(--mono, ui-monospace, monospace); font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; user-select: all; }
 @media (hover: hover) and (pointer: fine) {
   .cta:hover:not(:disabled):not(.primary) { border-color: var(--muted); }
   .cta.primary:hover:not(:disabled) { filter: brightness(1.08); }

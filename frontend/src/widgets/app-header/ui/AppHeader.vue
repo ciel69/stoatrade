@@ -6,8 +6,8 @@ import { UiSegment } from '@/shared/ui'
 /** Шапка: переключатель режима слева, справа слот `status` (индикатор состояния платформы подставляет app-слой: виджеты друг друга не импортируют). */
 const MODE_OPTIONS: ReadonlyArray<{ value: TradingMode; label: string }> = [
   { value: 'paper', label: 'бумага' },
-  { value: 'live', label: 'live' },
-  { value: 'testnet', label: 'testnet' },
+  { value: 'live', label: 'реальные' },
+  { value: 'testnet', label: 'тест-биржа' },
   { value: 'all', label: 'все' },
 ]
 

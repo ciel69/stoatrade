@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch, watchEffect } from 'vue'
-import { acceptLabel, blockReasons, isExpired, passedGates, secondsLeft, useActionStore, type ActionMock, type ActionPhase, type RiskItem } from '@/entities/action'
+import { acceptLabel, blockReasons, failedGates, isExpired, passedGates, plainLine, secondsLeft, useActionStore, type ActionMock, type ActionPhase, type Challenge, type RiskItem } from '@/entities/action'
+
+/** Исходные коды и тексты непройденных условий: только для «Подробностей для специалиста». */
+const failedRaw = (ch: Challenge | null): string => failedGates(ch).map((g) => [g.id, g.name, g.msg].filter(Boolean).join(' · ')).join('\n')
 
 /**
  * Единое подтверждение рисков для любого действия управления и уведомления о безрисковых.
@@ -34,8 +37,8 @@ const visible = computed(() => {
 const busy = computed(() => !visible.value && (action.phase === 'sending' || action.phase === 'waiting'))
 
 /** Снимок для показа: при закрытии окно успевает плавно исчезнуть с прежним содержимым, а не пустым. */
-interface View { phase: ActionPhase; title: string; what: string; risks: RiskItem[]; passed: Array<{ id: string; text: string }>; reasons: string[]; text: string }
-const view = ref<View>({ phase: 'idle', title: '', what: '', risks: [], passed: [], reasons: [], text: '' })
+interface View { phase: ActionPhase; title: string; what: string; risks: RiskItem[]; passed: Array<{ id: string; text: string }>; reasons: string[]; text: string; details: string | null }
+const view = ref<View>({ phase: 'idle', title: '', what: '', risks: [], passed: [], reasons: [], text: '', details: null })
 watchEffect(() => {
   if (action.phase === 'idle') return
   view.value = {
@@ -43,9 +46,10 @@ watchEffect(() => {
     title: action.spec?.title ?? '',
     what: action.spec?.what ?? '',
     risks: action.risks,
-    passed: passedGates(action.challenge).map((g) => ({ id: g.id, text: [g.name, g.msg].filter(Boolean).join(': ') || g.id })),
+    passed: passedGates(action.challenge).map((g) => ({ id: g.id, text: plainLine(g.id, g.name, g.msg, true).title })),
     reasons: action.phase === 'blocked' ? blockReasons(action.challenge, action.error ?? '') : [],
     text: action.phase === 'done' ? action.resultText : (action.error ?? ''),
+    details: action.errorDetails ?? (action.phase === 'blocked' ? (failedRaw(action.challenge) || null) : null),
   }
 })
 
@@ -191,6 +195,7 @@ onUnmounted(() => {
               </li>
             </ul>
             <p class="fine">Пока условия не выполнены, действие не выполняется.</p>
+            <details v-if="view.details" class="tech"><summary>Подробности для специалиста</summary><pre>{{ view.details }}</pre></details>
             <div class="foot">
               <button type="button" class="ghost" @click="action.recheck()">Проверить заново</button>
               <button type="button" class="cta" data-autofocus @click="action.cancel()">Закрыть</button>
@@ -212,8 +217,9 @@ onUnmounted(() => {
           <template v-else-if="view.phase === 'failed'">
             <p class="result bad" role="alert">
               <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
-              <span><b>Не удалось выполнить</b><em>{{ view.text }}</em></span>
+              <span><b>Действие не выполнено</b><em>{{ view.text }}</em></span>
             </p>
+            <details v-if="view.details" class="tech"><summary>Подробности для специалиста</summary><pre>{{ view.details }}</pre></details>
             <div class="foot"><button type="button" class="cta" data-autofocus @click="action.reset()">Закрыть</button></div>
           </template>
 
@@ -248,6 +254,10 @@ onUnmounted(() => {
 .sub { margin: var(--space-2) 0 0; font-size: 13px; font-weight: 600; }
 .status { margin: 0; display: flex; align-items: center; gap: var(--space-2); font-size: 13px; color: var(--muted); }
 .fine { margin: 0; font-size: 12px; line-height: 1.45; color: var(--muted); }
+.tech { font-size: 12px; color: var(--muted); }
+.tech summary { cursor: pointer; min-height: 32px; display: flex; align-items: center; }
+.tech summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+.tech pre { margin: var(--space-1) 0 0; padding: var(--space-3); background: var(--panel2); border-radius: var(--radius-sm); font-family: var(--mono, ui-monospace, monospace); font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; user-select: all; }
 
 .risks { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); }
 .risks li { display: grid; grid-template-columns: 16px minmax(0, 1fr); align-items: start; gap: var(--space-2); font-size: 13px; line-height: 1.45; }

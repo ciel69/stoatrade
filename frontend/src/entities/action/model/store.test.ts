@@ -98,14 +98,16 @@ describe('action store', () => {
     expect(s.phase).toBe('idle')
   })
 
-  it('отказ E_* на команду: failed с текстом сервера', () => {
+  it('отказ E_* на команду: failed с человеческим текстом, код и текст сервера только в подробностях', () => {
     const s = setup()
     s.run(KILL)
     answerChallenge({})
     answerCommand({ ok: false, code: 'E_RATE', msg: 'слишком часто' })
     expect(s.phase).toBe('failed')
-    expect(s.error).toBe('слишком часто')
-    expect(s.toasts[0]).toMatchObject({ tone: 'bad', text: 'слишком часто' })
+    expect(s.error).toBe('Слишком частые попытки. Подождите минуту и повторите.')
+    expect(s.error).not.toMatch(/E_RATE/)
+    expect(s.errorDetails).toContain('E_RATE')
+    expect(s.toasts[0]).toMatchObject({ tone: 'bad', text: 'Слишком частые попытки. Подождите минуту и повторите.' })
   })
 
   it('отказ на challenge и итог rejected', () => {
@@ -113,16 +115,17 @@ describe('action store', () => {
     s.run(KILL)
     answerChallenge(undefined, { ok: false, code: 'E_ELEVATE', msg: 'режим выключен' })
     expect(s.phase).toBe('failed')
-    expect(s.error).toBe('режим выключен')
+    expect(s.error).toMatch(/расширенное управление/)
+    expect(s.error).not.toMatch(/E_ELEVATE/)
     s.run(KILL)
     answerChallenge({})
     answerCommand()
     final(last().id, { status: 'rejected', code: 'E_STATE', msg: 'уже активно' })
     expect(s.phase).toBe('failed')
-    expect(s.error).toBe('уже активно')
+    expect(s.error).toMatch(/Сейчас так сделать нельзя/)
   })
 
-  it('таймаут ожидания итога: failed, «ctl не ответил»', () => {
+  it('таймаут ожидания итога: failed, «платформа не ответила»', () => {
     const s = setup()
     s.run(KILL)
     answerChallenge({})
@@ -132,7 +135,7 @@ describe('action store', () => {
     vi.advanceTimersByTime(2)
     expect(s.phase).toBe('failed')
     expect(s.error).toBe(TIMEOUT_TEXT)
-    expect(TIMEOUT_TEXT).toMatch(/ctl не ответил/)
+    expect(TIMEOUT_TEXT).toMatch(/Платформа не ответила/)
   })
 
   it('min_delay: до конца паузы accept не отправляет', () => {
@@ -198,7 +201,7 @@ describe('action store', () => {
     linkUp = false
     s.run(KILL)
     expect(s.phase).toBe('failed')
-    expect(s.error).toBe('нет связи с сервером')
+    expect(s.error).toMatch(/^Нет связи с платформой/)
   })
 
   it('отмена: поздний ответ сервера не оживляет запуск', () => {

@@ -1,3 +1,4 @@
+import { humanize, plainify } from '@/shared/lib'
 import type { ActionCommand, ActionHello, ActionSpec, Challenge, ChallengeGate, RiskItem } from '../model/types'
 
 /**
@@ -14,9 +15,9 @@ export const ACCEPT_KEYS: Readonly<Record<string, { accepted: boolean; allowAmbe
   'brain.role': { accepted: true, allowAmber: false },
 }
 
-export const UNAVAILABLE_TEXT = 'это действие недоступно в этом дашборде: включите расширенное управление в config/control.json (auth.dash2_full)'
-export const NO_CTL_TEXT = 'управление из этого дашборда недоступно'
-export const TIMEOUT_TEXT = 'ctl не ответил: итог выполнения не пришёл за 60 секунд, проверьте состояние платформы'
+export const UNAVAILABLE_TEXT = 'Это действие здесь пока недоступно: владелец должен включить расширенное управление дашборда.'
+export const NO_CTL_TEXT = 'Управление из этого дашборда недоступно.'
+export const TIMEOUT_TEXT = 'Платформа не ответила за 60 секунд, поэтому неизвестно, выполнено ли действие. Проверьте состояние платформы и только потом повторяйте.'
 /** Сколько ждём итог принятой команды. */
 export const FINAL_TIMEOUT_MS = 60_000
 
@@ -36,14 +37,31 @@ export function isRisky(ch: Challenge | null | undefined): boolean {
   return !!ch.danger || (ch.phrases?.length ?? 0) > 0 || warnings(ch).length > 0 || preAmber(ch).length > 0
 }
 
+/** Одна проверка или предупреждение простым языком: известные коды (H1–H8, W1–W9, P1–P16) переводит словарь, прочее проходит, только если уже написано простым русским. */
+export function plainLine(id: string | undefined, name: string | undefined, msg: string | undefined, ok: boolean, sev?: string): { title: string; todo: string } {
+  const h = humanize({ kind: 'gate', id: id ?? '', name, ok, msg, sev })
+  const known = !!id && /^[HWP]\d{1,2}$/.test(id) && !/не умеем объяснить/.test(h.title)
+  if (known) return { title: h.title, todo: ok ? '' : h.todo }
+  const own = plainify([name, msg].filter(Boolean).join(': '))
+  if (own) return { title: own, todo: '' }
+  return { title: h.title, todo: ok ? '' : h.todo }
+}
+
 /** Последствия по-человечески, важное сверху: опасность, предупреждения, жёлтые проверки. */
 export function risksOf(ch: Challenge | null | undefined): RiskItem[] {
   if (!ch) return []
   const out: RiskItem[] = []
-  if (ch.danger) out.push({ id: 'danger', level: 'danger', text: 'Опасное действие: сервер относит его к рискованным, последствия нельзя откатить одним нажатием.' })
-  for (const w of warnings(ch)) out.push({ id: w.id, level: 'warn', text: w.msg || w.code || w.id })
-  preAmber(ch).forEach((a, i) => out.push({ id: a.id ?? `amber-${i}`, level: 'amber', text: [a.name, a.msg].filter(Boolean).join(': ') || 'жёлтая проверка' }))
-  if (!out.length && (ch.phrases?.length ?? 0) > 0) out.push({ id: 'phrases', level: 'warn', text: 'Сервер требует явного подтверждения этого действия.' })
+  if (ch.danger) out.push({ id: 'danger', level: 'danger', text: 'Это действие нельзя откатить одним нажатием: прочтите последствия ниже.' })
+  for (const w of warnings(ch)) {
+    const known = /^W\d$/.test(w.id) ? humanize({ kind: 'warning', id: w.id, msg: w.msg }) : null
+    const own = known ? null : plainify(w.msg)
+    out.push({ id: w.id, level: 'warn', text: known ? [known.title, known.what].filter(Boolean).join('. ') : (own ?? humanize({ kind: 'text', level: 'warn', text: w.msg ?? w.code ?? w.id }).title) })
+  }
+  preAmber(ch).forEach((a, i) => {
+    const l = plainLine(a.id, a.name, a.msg, false, 'amber')
+    out.push({ id: a.id ?? `amber-${i}`, level: 'amber', text: l.title })
+  })
+  if (!out.length && (ch.phrases?.length ?? 0) > 0) out.push({ id: 'phrases', level: 'warn', text: 'Платформа просит явно подтвердить это действие.' })
   return out
 }
 
@@ -55,10 +73,13 @@ export function passedGates(ch: Challenge | null | undefined): ChallengeGate[] {
   return (ch?.gates ?? []).filter((g) => g.ok !== false)
 }
 
-/** Причины блокировки: непройденные условия с их текстом; если сервер их не перечислил, общий текст ответа. */
+/** Причины блокировки: непройденные условия простым языком и что делать; если сервер их не перечислил, понятный текст по коду ответа. */
 export function blockReasons(ch: Challenge | null | undefined, fallback: string): string[] {
-  const list = failedGates(ch).map((g) => [g.name, g.msg].filter(Boolean).join(': ') || g.id)
-  return list.length ? list : [fallback || 'условия для выполнения не выполнены']
+  const list = failedGates(ch).map((g) => {
+    const l = plainLine(g.id, g.name, g.msg, false)
+    return l.todo ? `${l.title}. ${l.todo}` : l.title
+  })
+  return list.length ? list : [plainify(fallback) ?? 'Условия для выполнения пока не выполнены.']
 }
 
 /** Команда после подтверждения: nonce и фразы из challenge как есть, accepted и allow_amber только там, где они есть в схеме действия. */

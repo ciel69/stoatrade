@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { actorKey, filterDecisions, humanAction, planShort, useTradingStore, type ActorFilter, type DecisionItem } from '@/entities/trading'
 import { UiChip, UiSegment } from '@/shared/ui'
-import { price, signed } from '@/shared/lib'
+import { decisionReason, price, signed } from '@/shared/lib'
 
 /** Лента решений: кто решил, что сделал, почему и чем кончилось. Фильтры: исполнитель, только отказы, план, поиск по тексту. Строка выбирается: параметры, основание, ответ и идентификаторы показывает страница боковой панелью. */
 defineProps<{ selected: number | null }>()
@@ -30,10 +30,10 @@ const timeFmt = new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-d
 const at = (d: DecisionItem, f: Intl.DateTimeFormat) => (d.t != null ? f.format(new Date(d.t * 1000)) : d.ts.slice(11, 19))
 
 function result(d: DecisionItem): { text: string; tone: 'ok' | 'bad' | 'warn' | 'neutral' } {
-  if (d.denied) return { text: `отказ ${d.code ?? ''}`.trim(), tone: 'bad' }
+  if (d.denied) return { text: d.code ? `отказ: ${decisionReason(d.code)}` : 'отказ', tone: 'bad' }
   if (d.idle) return { text: 'ждёт', tone: 'neutral' }
-  if (d.noop) return { text: `пропуск ${d.code ?? ''}`.trim(), tone: 'warn' }
-  if (d.ok === true) return { text: 'OK', tone: 'ok' }
+  if (d.noop) return { text: d.code ? `пропуск: ${decisionReason(d.code)}` : 'пропуск', tone: 'warn' }
+  if (d.ok === true) return { text: 'выполнено', tone: 'ok' }
   return { text: KIND_RU[d.kind] ?? d.kind, tone: 'neutral' }
 }
 </script>

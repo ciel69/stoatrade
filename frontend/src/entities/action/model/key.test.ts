@@ -48,7 +48,7 @@ describe('формат ключа', () => {
   })
   it('тексты по коду не берут msg, неизвестный код безопасен', () => {
     expect(keyOutcomeText('E_KEY')).toBe('Ключ не принят сервером.')
-    expect(keyOutcomeText('E_SOMETHING')).toBe('Ключ не сохранён (E_SOMETHING).')
+    expect(keyOutcomeText('E_SOMETHING')).toBe('Ключ не сохранён: платформа сообщила о причине, которую мы пока не умеем объяснить.')
     expect(keyOutcomeText('произвольный текст с fake-key-123')).toBe('Ключ не сохранён.')
   })
 })

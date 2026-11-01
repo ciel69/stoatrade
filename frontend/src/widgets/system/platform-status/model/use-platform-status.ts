@@ -33,11 +33,19 @@ export function usePlatformStatus() {
     market.start()
     news.start()
     control.start()
+    // образец без сервера: те же данные видят и другие блоки страницы «Система» (баннер, готовность к живой торговле, узлы)
+    if (mocked) {
+      if (mocked.system) system.apply({ topic: 'system', seq: 0, ts: 0, data: mocked.system })
+      if (mocked.ctl) control.applyCtl({ topic: 'ctl', seq: 0, ts: 0, data: mocked.ctl })
+    }
   })
 
   const input = computed<StatusInput>(() => mocked
     ? { ...mocked, now: now.value }
     : { now: now.value, link: link.value, home: trading.snapshot, system: system.snapshot, brain: brain.snapshot, market: market.snapshot, news: news.snapshot, ctl: control.ctl })
-  const summary = computed(() => summarize(buildRows(input.value)))
+  const summary = computed(() => {
+    const i = input.value
+    return summarize(buildRows(i), { mode: i.ctl?.platform.mode ?? i.system?.mode ?? i.home?.platform.mode ?? null })
+  })
   return { summary }
 }
