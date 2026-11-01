@@ -325,6 +325,27 @@ def _be_offset_bps(rt, limits):
     return base + BE_EXTRA_BPS
 
 
+PROFIT_MIN_R = 0.2           # стоп, перенесённый в прибыль, гарантирует не меньше 0.2R чистыми (auto_protect.min_profit_r)
+STOP_SLIP_BPS = 5.0          # проскальзывание рыночного исполнения стопа (auto_protect.stop_slip_bps)
+
+
+def profit_floor(rt, limits, s):
+    """Пол переноса стопа в прибыль: вход + издержки круга + проскальзывание стопа + min_profit_r R. -> цена или None.
+    Указание владельца 2026-11-01: безубыток только в плюс (выше безубытка), иначе ждать с исходным стопом
+    (EVAA, LIT, BTC закрылись по «безубытку» в минус: комиссии и проскальзывание больше зафиксированного хода).
+    Без секции auto_protect в limits (тесты, старые конфиги) пола нет."""
+    ap = (limits or {}).get("auto_protect")
+    pos = _pos(rt) or {}
+    avg = _f(pos.get("avg"))
+    if not isinstance(ap, dict) or not avg:
+        return None
+    ru = _f(pos.get("r_unit")) or abs(avg - (_f(pos.get("initial_stop")) or avg))
+    slip = _f(ap.get("stop_slip_bps"))
+    mr = _f(ap.get("min_profit_r"))
+    bps = (_be_offset_bps(rt, limits) - BE_EXTRA_BPS) + (STOP_SLIP_BPS if slip is None else slip)
+    return avg * (1 + s * bps / 1e4) + s * (PROFIT_MIN_R if mr is None else mr) * (ru or 0.0)
+
+
 def trail_candidate(rule, plan, rt, view):
     """-> float | None: абсолютная цена стопа-кандидата (монотонность проверяет вызывающий).
 
@@ -533,6 +554,15 @@ def evaluate_manage(plan, rt, view, now, limits):
             if to is None or to <= 0:
                 skip(rid, "NO_DATA")
                 continue
+            if (act == "move_stop" and do.get("to") == "breakeven") or (act == "trail" and do.get("mode") == "mfe_lock"):
+                fl = profit_floor(rt, limits, s)
+                if fl is not None:
+                    if act == "move_stop":
+                        to = max(to, fl) if s == 1 else min(to, fl)             # безубыток не ниже пола прибыли
+                        if s * (last - to) < last * gap:
+                            continue                                              # до пола цена ещё не дошла: ждём с прежним стопом, без записи
+                    elif s * (to - fl) < 0:
+                        continue                                                  # трейл ниже пола прибыли стоп не двигает
             if act == "trail":
                 to = min(to, last * (1 - gap)) if s == 1 else max(to, last * (1 + gap))   # не ближе зазора к цене
             elif s * (last - to) < last * gap:

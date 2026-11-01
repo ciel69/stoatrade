@@ -21,7 +21,7 @@ DEFAULTS = {
     "pyramid": {"enabled": False, "min_r": 1.0, "max_adds": 1, "max_add_risk_frac": 1.0, "min_gap_s": 60},
     "stop_moves": {"min_interval_s": 5, "min_step_ticks": 2, "min_step_r": 0.1, "min_gap_bps_from_price": 8, "max_moves_per_hour": 30},      # min_step_r: ход стопа по правилу не меньше 0.1R
     # автозащита прибыли: исполнитель сам подтягивает стоп у любой позиции (в том числе без правил manage в плане); только в сторону прибыли
-    "auto_protect": {"enabled": True, "be_r": 0.7, "trail_activate_r": 1.0, "trail_lock_frac": 0.5},
+    "auto_protect": {"enabled": True, "be_r": 0.7, "trail_activate_r": 1.0, "trail_lock_frac": 0.5, "min_profit_r": 0.2, "stop_slip_bps": 5},
     # сторож позиции (logic/watch.py): будит мозг (position_manager) по STALLED / FLOW_TURN. paper_only=true: пока только бумажные позиции.
     # TODO(live): если на paper сторож окажется жизнеспособным (число пробуждений и результат решений мозга, ./tb exp stats), включить для live: paper_only=false (решение владельца)
     "position_watch": {"enabled": True, "paper_only": True, "stalled_min": 15, "stalled_min_r": 0.5, "flow_turn_s": 30, "max_wakes_per_hour": 3},
@@ -53,6 +53,7 @@ def defaults():
 SAFER = {
     "pyramid.enabled": "bool_false", "pyramid.min_r": "max", "pyramid.max_adds": "min", "pyramid.max_add_risk_frac": "min",
     "auto_protect.enabled": "bool_true", "auto_protect.be_r": "min", "auto_protect.trail_activate_r": "min", "auto_protect.trail_lock_frac": "max",
+    "auto_protect.min_profit_r": "max", "auto_protect.stop_slip_bps": "max",
     "pyramid.min_gap_s": "max", "blackout.pre_min": "max", "stop_moves.max_moves_per_hour": "min", "paper.blackout_size_mult": "min",
     "entry.max_price_age_s": "min", "entry.max_chase_bps": "min", "entry.no_confirm_max_size_mult": "min",
     "entry.blocked_attempts_max": "min", "entry.max_level_distance_pct": "min", "entry.chase_atr_frac": "min", "entry.chase_rr_floor": "max",

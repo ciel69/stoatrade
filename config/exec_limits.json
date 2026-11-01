@@ -19,7 +19,9 @@
   "enabled": true,
   "be_r": 0.7,
   "trail_activate_r": 1.0,
-  "trail_lock_frac": 0.5
+  "trail_lock_frac": 0.5,
+  "min_profit_r": 0.2,
+  "stop_slip_bps": 5
  },
  "position_watch": {
   "enabled": true,

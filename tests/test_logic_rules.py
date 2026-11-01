@@ -788,6 +788,27 @@ class AutoProtectTest(unittest.TestCase):
         rt["pos"]["best_px"] = 102.0
         self.assertEqual(stops(R.evaluate_manage(long_plan(), rt, view(101.8), T0, self.AP)), [])
 
+    def test_profit_floor_waits_when_costs_eat_the_lock(self):
+        # узкий стоп 0.23% (BTC 2026-11-01): издержки круга 18 бп + проскальзывание 5 бп ~ 1R, пол = 100.23 + 0.2R = 100.276
+        rt = managing_rt(r=0.23)
+        rt["pos"]["best_px"] = 100.161                               # +0.7R: безубыток с комиссиями был бы ниже пола
+        self.assertEqual(stops(R.evaluate_manage(long_plan(), rt, view(100.161), T0, self.AP)), [])
+        rt = managing_rt(side="short", r=0.23)
+        rt["pos"]["best_px"] = 99.839
+        self.assertEqual(stops(R.evaluate_manage(short_plan(), rt, view(99.839), T0, self.AP)), [])
+
+    def test_profit_floor_lifts_breakeven_and_blocks_lock_below_it(self):
+        rt = managing_rt(r=0.23)
+        rt["pos"]["best_px"] = 100.5                                 # mfe_lock дал бы 100.25 (ниже пола), безубыток поднят до пола
+        s = stops(R.evaluate_manage(long_plan(), rt, view(100.5), T0, self.AP))
+        self.assertEqual(len(s), 1)
+        self.assertGreaterEqual(s[0]["to"], 100.27)
+        self.assertLess(s[0]["to"], 100.5)
+        rt = managing_rt(side="short", r=0.23)
+        rt["pos"]["best_px"] = 99.5
+        s = stops(R.evaluate_manage(short_plan(), rt, view(99.5), T0, self.AP))
+        self.assertLessEqual(s[0]["to"], 99.73)
+
 
 if __name__ == "__main__":
     unittest.main()
