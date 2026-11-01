@@ -228,12 +228,20 @@ class LifecycleTest(unittest.TestCase):
         z["entry"]["when"] = {"kind": "price_in_zone", "low": 99.7, "high": 100.3}
         self.assertTrue(R.evaluate_entry(z, {"status": "armed"}, view(100.25), T0, LIM)["fire"])                 # 25 б.п. внутри зоны ±30 б.п.
 
-    def test_max_hold(self):
+    def test_max_hold_never_closes_only_wakes_brain(self):
+        """Срок удержания позицию не закрывает (указание владельца 2026-11-01): выход только по стопу, целям или решению мозга. По истечении веха hold_expired один раз на срок."""
         p = long_plan(lifecycle={"max_hold_min": 10})
         rt = managing_rt(entered=T0 - 600)
-        a = R.evaluate_lifecycle(p, rt, view(100.0), T0, LIM)
-        self.assertEqual((a[0]["type"], a[0]["reason"], a[0]["why"]), ("close", "timeout", "LIFECYCLE:MAX_HOLD"))
-        self.assertEqual(R.evaluate_lifecycle(p, managing_rt(entered=T0 - 599), view(100.0), T0, LIM), [])
+        self.assertEqual(R.evaluate_lifecycle(p, rt, view(100.0), T0, LIM), [])
+        self.assertEqual(R.evaluate_lifecycle(p, managing_rt(entered=T0 - 6000), view(100.0), T0, LIM), [])
+        res = R.evaluate_manage(p, rt, view(100.0), T0, LIM)
+        ev = [e for e in res["events"] if e["name"] == "hold_expired"]
+        self.assertEqual((len(ev), ev[0]["hold"]), (1, 10))
+        rt2 = merge(rt, res["rt_patch"])
+        self.assertEqual([e for e in R.evaluate_manage(p, rt2, view(100.0), T0 + 60, LIM)["events"] if e["name"] == "hold_expired"], [])      # один раз
+        p["lifecycle"]["max_hold_min"] = 20                                                                                                     # продлили: новая веха по новому сроку
+        self.assertEqual(len([e for e in R.evaluate_manage(p, rt2, view(100.0), T0 + 600, LIM)["events"] if e["name"] == "hold_expired"]), 1)
+        self.assertEqual([e for e in R.evaluate_manage(p, managing_rt(entered=T0 - 599), view(100.0), T0, LIM)["events"] if e["name"] == "hold_expired"], [])
 
     def test_hold_expiring_wake(self):
         """Веха hold_expiring за 20% срока (не раньше 30 и не позже 5 мин до MAX_HOLD) один раз на срок; после продления срока будит снова."""

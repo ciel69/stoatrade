@@ -494,7 +494,7 @@ def _plan_position(c, it, snap):
     px = c.price(sym)["price"]
     r_now = _r_of(sign, px, avg, unit)
     ent = common.parse_ts((rt.get("ts") or {}).get("entered"))
-    mh = common.num((spec.get("lifecycle") or {}).get("max_hold_min")) if isinstance(spec.get("lifecycle"), dict) else None      # срок удержания: позицию закроет MAX_HOLD, если мозг не продлит
+    mh = common.num((spec.get("lifecycle") or {}).get("max_hold_min")) if isinstance(spec.get("lifecycle"), dict) else None      # плановый срок удержания: по его истечении мозг решает (таймер позицию не закрывает, 2026-11-01)
     mh = int(mh) if mh is not None else None
     targets = []
     for tid, t in sorted((rt.get("targets") or {}).items()) if isinstance(rt.get("targets"), dict) else []:
@@ -959,19 +959,11 @@ def _b_struct(c, wanted, limit=STRUCT_MAX_SYMS, budget=STRUCT_BUDGET, base_first
 
 def _b_deriv(root, now, sym):
     """Деривативы монеты события из runtime/intel/facts.json (intel_block: fund_pct, oi24_pct, ls, xfund_pct, basis_bps, bybit_vol_pct, lead) -> строка по монете | None."""
-    blk = intel_block(root, now, [sym]) or {}
+    blk = intel_block(root, now, [sym]) or {}      # только facts.json: монеты позиций, планов и запросов структуры сервис intel включает в свой список сам (store.symbols_now)
     row = (blk.get("deriv") or {}).get(sym) if isinstance(blk.get("deriv"), dict) else None
-    if isinstance(row, dict) and row:
-        return dict(row, stale_s=blk["stale_s"]) if blk.get("stale_s") is not None else row
-    # монеты вне списка facts.json (ушла из горячих): прямое чтение кеша intel (oi_<sym>, ls_<sym>), только числа
-    try:
-        from tb.intel import fetch as ifetch
-        oi = (ifetch.read_cache("oi_%s" % sym, root) or {}).get("data") or {}
-        ls = (ifetch.read_cache("ls_%s" % sym, root) or {}).get("data") or {}
-    except (ValueError, OSError):
+    if not isinstance(row, dict) or not row:
         return None
-    out = _drop_none({"oi24_pct": _r(oi.get("oi_chg_24h_pct"), 1), "ls": _r(ls.get("ls_ratio"), 2)})
-    return out or None
+    return dict(row, stale_s=blk["stale_s"]) if blk.get("stale_s") is not None else row
 
 
 def _b_crowd(root, now, b, sym, sd):

@@ -23,9 +23,10 @@ DEFAULTS = {
     # автозащита прибыли: исполнитель сам подтягивает стоп у любой позиции (в том числе без правил manage в плане); только в сторону прибыли.
     # be_r 0.7 проверен контрфактом по минутным свечам (31 paper-сделка 29.10-01.11): 0.7R -0.79R, 1.0R -1.28R, без безубытка -2.99R, без защиты -6.11R.
     "auto_protect": {"enabled": True, "be_r": 0.7, "trail_activate_r": 1.0, "trail_lock_frac": 0.5, "min_profit_r": 0.2, "stop_slip_bps": 5},
-    # сторож позиции (logic/watch.py): будит мозг (position_manager) по STALLED / FLOW_TURN. paper_only=true: пока только бумажные позиции.
-    # TODO(live): если на paper сторож окажется жизнеспособным (число пробуждений и результат решений мозга, ./tb exp stats), включить для live: paper_only=false (решение владельца)
-    "position_watch": {"enabled": True, "paper_only": True, "stalled_min": 15, "stalled_min_r": 0.5, "flow_turn_s": 30, "max_wakes_per_hour": 3},
+    # сторож позиции (logic/watch.py): будит мозг (position_manager) по NEWS / FAST_MOVE / STRUCT_BREAK / CROWD_TURN / BOOK_WALL / VOL_SPIKE / REGIME_CHANGE / FLOW_TURN / STALLED.
+    # Указание владельца 2026-11-01: монета в позиции под постоянным надзором, paper и live одинаково (paper_only=false), до 12 пробуждений в час на позицию.
+    "position_watch": {"enabled": True, "paper_only": False, "stalled_min": 15, "stalled_min_r": 0.5, "flow_turn_s": 30, "max_wakes_per_hour": 12,
+                       "fast_move_atr": 2.0, "fast_move_s": 60, "struct_break_s": 30, "struct_break_buf_pct": 0.1, "wall_atr": 1.5, "vol_spike_x": 3.0, "news_max_age_s": 180},
     # WebSocket Trade API Bybit (executor/ws_trade.py): ордерные запросы (create/amend/cancel) по постоянному соединению. Выключено до проверки на testnet: ./tb exec wscheck
     "ws_trade": {"enabled": False, "request_timeout_s": 5.0, "ping_s": 20.0},
     "entry": {"max_price_age_s": 3, "max_chase_bps": 15, "chase_atr_frac": 0.3, "chase_rr_floor": 1.5, "no_confirm_max_size_mult": 0.5, "blocked_attempts_max": 3,

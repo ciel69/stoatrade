@@ -25,6 +25,7 @@ from tb.intel import reader as ireader
 from tb.intel import sources as src_mod
 from tb.intel import store
 from tb.intel import xex as ixex
+from tb.xdata import xstream as xstream_mod
 
 
 class Service(object):
@@ -52,6 +53,12 @@ class Service(object):
         # кросс-биржевые данные (ccxt, без ключей); с подменённым транспортом (тесты, разработка) живой сети через ccxt нет
         self.xex = ixex.Collector(root, self.cfg, clock, log=self.log) if ixex.xcfg(self.cfg)["enabled"] and transport is None else None
         self._xex_thread = None
+        # потоковые кросс-биржевые данные по сокетам ccxt.pro (сделки, стакан, тикер, ликвидации) по монетам позиций и планов: отдельный поток с asyncio
+        self.xstream = None
+        if transport is None and ixex.xcfg(self.cfg)["enabled"] and xstream_mod.scfg(self.cfg)["enabled"] and xstream_mod.available():
+            self.xstream = xstream_mod.XStream(root, self.cfg, clock, log=self.log,
+                                               symbols_fn=lambda: xstream_mod.symbol_set(root, self.symbols, xstream_mod.scfg(self.cfg)["n_syms"]))
+            self.xstream.start()
 
     # ---- карантинный читатель (WP13b): LLM-вызов не должен задерживать загрузку источников, поэтому отдельный поток, один за раз
     def reader_step(self, now):
@@ -92,6 +99,8 @@ class Service(object):
     def close(self):
         if self._pool is not None:
             self._pool.shutdown(wait=False)
+        if self.xstream is not None:
+            self.xstream.stop()
 
     # ---- шина ----
     def _emit_bus(self, type_, d, now, sym=None):

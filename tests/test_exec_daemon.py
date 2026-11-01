@@ -196,8 +196,10 @@ class PaperProfile(unittest.TestCase):
             e.close()
 
 
-    def test_max_hold_close_not_resent_on_every_tick(self):
-        """Регрессия: закрытие по max_hold повторялось на каждом тике (cancel_all снимал живой ордер, новый не успевал за latency 300 мс), позиция висела часами."""
+    def test_max_hold_wakes_brain_and_never_closes(self):
+        """Срок удержания позицию не закрывает (указание владельца 2026-11-01): после max_hold позиция остаётся managing со стопом и целями, на шину уходит веха
+        hold_expired один раз (мозг решает закрыть, продлить или держать); никаких записей close от исполнителя."""
+        from tb.core import bus
         from tb.executor.paper_port import PaperPort
         e = Env(env="paper", port=lambda clk, root: PaperPort.from_config(equity=40.0, root=root, clock=clk))
         try:
@@ -212,10 +214,14 @@ class PaperProfile(unittest.TestCase):
                 e.tick(100.3, dt=0.5)
             self.assertEqual(e.rt(pid)["status"], "managing")
             e.clock.advance(61.0)
-            for _ in range(40):                       # тики чаще latency (0.1 с < 0.3 с)
+            for _ in range(40):
                 e.tick(100.3, dt=0.1)
-            self.assertIn(e.rt(pid)["status"], ("closed", "closing"))
-            self.assertLess(len(e.decisions(what="close")), 10)      # не по записи на каждый тик
+            self.assertEqual(e.rt(pid)["status"], "managing")
+            self.assertEqual(e.decisions(what="close"), [])
+            ms = [x for x in bus.read(0, limit=1000, root=e.root) if x["type"] == "milestone" and (x.get("d") or {}).get("name") == "hold_expired"]
+            self.assertEqual(len(ms), 1, ms)
+            self.assertEqual(ms[0]["d"]["hold"], 1)
+            self.assertGreater(float(e.rt(pid)["pos"]["qty"]), 0)
         finally:
             e.close()
 

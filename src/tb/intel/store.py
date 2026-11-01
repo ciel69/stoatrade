@@ -6,6 +6,7 @@ facts.json: ТОЛЬКО числа, bool, enum и идентификаторы 
 """
 import copy
 import json
+import time
 import math
 import re
 
@@ -74,7 +75,9 @@ def read_facts(root=None):
 
 
 def symbols_now(root, cfg):
-    """BTC/ETH/SOL (cfg.symbols) + symbols из watch_config.json + hot_n горячих монет из runtime/hot.json (только tradable)."""
+    """BTC/ETH/SOL (cfg.symbols) + монеты открытых позиций и планов исполнителя (exec_snapshot.json) + монеты, запрошенные для структуры (structure_req.json: монеты событий
+    мозга) + symbols из watch_config.json + hot_n горячих монет из runtime/hot.json (только tradable). Указание владельца 2026-11-01: монета в сделке и монета события
+    получают деривативы (OI, лонг/шорт) в фактах, а не остаются без данных."""
     out = []
 
     def add(s):
@@ -82,6 +85,23 @@ def symbols_now(root, cfg):
             out.append(s)
     for s in cfg.get("symbols") or []:
         add(s)
+    try:
+        with open(paths.exec_snapshot_file(root=root), encoding="utf-8") as f:
+            snap = json.load(f)
+        for key in ("positions", "plans"):
+            for p in (snap.get(key) if isinstance(snap, dict) and isinstance(snap.get(key), list) else []):
+                add(p.get("sym") if isinstance(p, dict) else None)
+    except (OSError, ValueError, AttributeError, TypeError):
+        pass
+    try:
+        with open(paths.runtime("structure_req.json", root=root), encoding="utf-8") as f:
+            req = (json.load(f) or {}).get("req") or {}
+        now = time.time()
+        for s, t in sorted(req.items(), key=lambda kv: -float(kv[1]) if isinstance(kv[1], (int, float)) else 0.0):
+            if isinstance(t, (int, float)) and 0 <= now - t < 1800:
+                add(s)
+    except (OSError, ValueError, AttributeError, TypeError):
+        pass
     try:
         with open(paths.config("watch_config.json", root=root), encoding="utf-8") as f:
             for s in (json.load(f) or {}).get("symbols") or []:
@@ -200,6 +220,13 @@ def build_facts(root, cfg, now, srcs=None, symbols=None):
     by_ex = {s["exchange"]: data(s["id"]).get("symbols") or {} for s in srcs if s.get("kind") == "ccxt"}       # без "vols": обороты всех монет только для карты
     for sym, x in ixex.cross_rows(by_ex, symbols).items():          # Bybit против других бирж в один момент (ccxt)
         der.setdefault(sym, {})["x"] = x
+    try:                                                                 # потоковые/опросные кросс-биржевые данные (xflow.json: CVD, стакан, стены, ликвидации, OI других бирж)
+        from tb.intel import xflow as ixflow
+        for sym, x in ixflow.summary(ixflow.read(root), now, cfg).items():
+            if sym in symbols:
+                der.setdefault(sym, {}).setdefault("x", {}).update(x)
+    except Exception:  # noqa: BLE001 - кросс-биржевой поток не роняет факты
+        pass
     f["deriv"] = der
     # --- календарь ---
     ccfg = cfg.get("calendar") or {}

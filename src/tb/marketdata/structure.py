@@ -314,6 +314,20 @@ class Collector(object):
         self.tried = {}
         self.last = None
         self.last_step = -1e18
+        self.src, self.xfallbacks = {}, 0                 # источник свечей по монете (bybit | биржа ccxt) и число запасных загрузок
+        self.xklines = None                               # запасные свечи с других бирж (marketdata/xklines.rows); включает сервис: enable_xklines(); класс сам в сеть ccxt не ходит
+
+    def enable_xklines(self, exchanges=None):
+        """Включить запасной источник свечей через ccxt (структура монеты не остаётся пустой при сбое REST Bybit: VPN, гео-блок, лимит). -> True, если ccxt доступен."""
+        try:
+            from tb.marketdata import xklines
+        except Exception:  # noqa: BLE001
+            return False
+        if not xklines.available():
+            return False
+        exs = tuple(exchanges) if exchanges else xklines.EXCHANGES
+        self.xklines = lambda sym, interval, limit: xklines.rows(sym, interval, limit, exchanges=exs)
+        return True
 
     def _ttls(self, sym, fast):
         return (self.every_s, self.h1_every_s) if (sym in BASE or sym in fast) else (self.hot_every_s, self.hot_h1_every_s)
@@ -323,6 +337,24 @@ class Collector(object):
         now = self.clock() if now is None else now
         have = ((self.last or {}).get("symbols") or {})
         return [s for s in read_requests(self.root, now) if s not in have and now - self.tried.get(s, -1e18) >= REQ_RETRY_S]
+
+    def _rows_any(self, sym, symbol, interval, limit):
+        """Свечи с Bybit; при сбое REST Bybit (VPN, гео-блок, лимит) те же свечи с другой биржи через ccxt (marketdata/xklines): монета не остаётся без структуры.
+        Источник запоминается в self.src[sym] ("bybit" | биржа ccxt) и попадает в файл."""
+        try:
+            got = _rows(self.c, symbol, interval, limit)
+            self.src[sym] = "bybit"
+            return got
+        except Exception as e:  # noqa: BLE001
+            if self.xklines is None:
+                raise
+            try:
+                got, eid = self.xklines(sym, interval, limit)
+            except Exception:  # noqa: BLE001 - запасной источник тоже молчит: наружу исходная ошибка Bybit
+                raise e
+            self.src[sym] = eid
+            self.xfallbacks += 1
+            return got
 
     def step(self, symbols=None, write=True):
         """Один проход: свежие свечи -> структура всех символов. Ошибка по символу не валит остальные. -> dict файла."""
@@ -338,11 +370,11 @@ class Collector(object):
             self.tried[sym] = now
             try:
                 if now - self.t1h.get(sym, -1e18) >= ttl1:
-                    book.seed(60, _rows(self.c, symbol, 60, LIMIT_1H), now=now)
+                    book.seed(60, self._rows_any(sym, symbol, 60, LIMIT_1H), now=now)
                     self.t1h[sym] = now
                     self.sleep(self.pause_s)
                 if now - self.t5.get(sym, -1e18) >= ttl5:
-                    book.seed(5, _rows(self.c, symbol, 5, LIMIT_5M), now=now)
+                    book.seed(5, self._rows_any(sym, symbol, 5, LIMIT_5M), now=now)
                     self.t5[sym] = now
                     self.sleep(self.pause_s)
             except Exception as e:                       # сеть/лимит/формат/геоблок: цикл живёт, причина попадает в файл (err_why)
@@ -357,12 +389,16 @@ class Collector(object):
                 row = None
             if row:
                 row["ts"] = int(self.t5.get(sym, now))
+                if self.src.get(sym) and self.src[sym] != "bybit":
+                    row["src"] = self.src[sym]                              # свечи взяты с другой биржи (REST Bybit был недоступен)
                 data[sym] = row
         keep = set(x[0] for x in syms)
-        for d in (self.books, self.t5, self.t1h, self.tried):          # монеты, ушедшие из состава (вышли из hot, запрос истёк), выбрасываются
+        for d in (self.books, self.t5, self.t1h, self.tried, self.src):    # монеты, ушедшие из состава (вышли из hot, запрос истёк), выбрасываются
             for k in [k for k in d if k not in keep]:
                 del d[k]
         doc = {"schema": SCHEMA, "ts_epoch": round(now, 3), "symbols": data}
+        if self.xfallbacks:
+            doc["xfallbacks"] = self.xfallbacks
         if errs:
             doc["err"] = errs
             doc["err_why"] = why
@@ -385,6 +421,8 @@ def run_loop(client, root=None, cfg=None, clock=time.time, sleep=time.sleep, sto
     col = Collector(client, root, cfg.get("every_s", 60.0), cfg.get("h1_every_s", 600.0), cfg.get("max_syms", MAX_SYMS), clock, sleep,
                     hot_n=cfg.get("hot_n", HOT_N), hot_every_s=cfg.get("hot_every_s", HOT_EVERY_S), hot_h1_every_s=cfg.get("hot_h1_every_s", HOT_H1_EVERY_S),
                     pause_s=cfg.get("pause_s", PAUSE_S))
+    if cfg.get("xklines", True):                              # запасные свечи с других бирж через ccxt, когда REST Bybit молчит (scan.structure.xklines=false выключает)
+        col.enable_xklines(cfg.get("xklines_exchanges"))
     while not stop():
         try:
             col.step()

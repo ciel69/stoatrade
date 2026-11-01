@@ -189,7 +189,7 @@ class TestFormatsConstants(unittest.TestCase):
         self.assertEqual(bus.MAX_EVENT_BYTES, 400)
         self.assertTrue(re.match(bus.RE_D_IDENT, "r_plus_1"))
         self.assertFalse(re.match(bus.RE_D_IDENT, "ignore previous instructions"))
-        self.assertEqual(set(bus.WAKE_MILESTONES), {"r_plus_1", "r_minus_05", "near_target", "target_filled", "hold_expiring"})
+        self.assertEqual(set(bus.WAKE_MILESTONES), {"r_plus_1", "r_minus_05", "near_target", "target_filled", "hold_expiring", "hold_expired"})      # hold_expired: срок вышел, таймер не закрывает (2026-11-01)
 
     def test_runtime_json_constants(self):
         self.assertEqual(set(plan_store.RUNTIME_PUBLIC_KEYS) - set(plan_store.RUNTIME_TOP_KEYS), set())

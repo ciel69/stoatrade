@@ -13,7 +13,7 @@ from tb.gateway import catalog
 from tb.llm import schema as schema_mod
 
 ROOT = _bootstrap.ROOT
-MAX_SYSTEM_CHARS = 12000          # около 4500 токенов (07b п. 5.2)
+MAX_SYSTEM_CHARS = 13000          # около 4800 токенов (07b п. 5.2: было 12000; +1000 на коды сторожа позиции и настроение толпы, указание владельца 2026-11-01)
 NEW_ROLES = ("morning_analyst", "position_manager", "reviewer", "day_auditor")
 
 

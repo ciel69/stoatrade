@@ -304,10 +304,8 @@ def evaluate_lifecycle(plan, rt, view, now, limits):
             return [_act("close", "LIFECYCLE:INVALIDATION", frac=1.0, reason="invalidation")]
         if lc.get("flatten_at_session_end") and session_end is not None and now >= session_end - lead:
             return [_act("close", "LIFECYCLE:SESSION_END", frac=1.0, reason="session_end")]
-        mh = _f(lc.get("max_hold_min"))
-        ent_ts = _f(((rt or {}).get("ts") or {}).get("entered"))
-        if mh and ent_ts is not None and now - ent_ts >= mh * 60.0 - _EPS:
-            return [_act("close", "LIFECYCLE:MAX_HOLD", frac=1.0, reason="timeout")]
+        # max_hold_min позицию НЕ закрывает (указание владельца 2026-11-01: выход только по стопу, целям или решению мозга; BTC 01.11 закрылся таймером
+        # после pm_hold и pm_escalate). Срок даёт вехи hold_expiring / hold_expired (_events): мозг решает закрыть, продлить или держать.
     return []
 
 
@@ -691,6 +689,13 @@ def _events(plan, rt, view, now, limits, pos):
             if r is not None:
                 ev["r"] = round(r, 4)
             events.append(ev)
+    key2 = "hold_expired:%d" % int(mh) if mh else None          # срок вышел: таймер позицию не закрывает (2026-11-01), мозг решает закрыть/продлить/держать
+    if mh and ent is not None and key2 not in done and now >= ent + mh * 60.0 - _EPS:
+        ms[key2] = now
+        ev = {"name": "hold_expired", "hold": int(mh), "px": last, "ts": now}
+        if r is not None:
+            ev["r"] = round(r, 4)
+        events.append(ev)
     frac = _f(_lim(limits, "events", "near_target_frac", 0.8))
     avg = _f(pos.get("avg"))
     if last and avg and frac:

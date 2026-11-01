@@ -63,8 +63,8 @@ PM_TOOL_SPECS = [
     _spec("pm_close", "Close the whole position at market."),
     _spec("pm_cancel", "Cancel the entry while there is no position."),
     _spec("pm_amend", "Patch the plan (tightening, targets, ttl; never size).", {"patch": {"type": "object"}}, ("patch",)),
-    _spec("pm_extend_hold", "Extend the holding time so the executor does not close the position at max_hold (on milestone hold_expiring). minutes: the new total "
-                            "max_hold_min (up to 2x hold_min; without stop at breakeven at most 240 for scalp, 1440 for intraday).",
+    _spec("pm_extend_hold", "Extend the planned holding time (on milestone hold_expiring / hold_expired). No timer closes the position: only you, the stop or the targets; "
+                            "pm_hold = keep. minutes: the new total max_hold_min (up to 2x; without stop at breakeven at most 240 for scalp, 1440 for intraday).",
           {"minutes": {"type": "integer", "minimum": 1, "maximum": 43200}}, ("minutes",)),
     _spec("pm_hold_plan", "Pause your own plan."),
     _spec("pm_release_plan", "Lift your own pause."),

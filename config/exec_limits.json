@@ -25,11 +25,18 @@
  },
  "position_watch": {
   "enabled": true,
-  "paper_only": true,
+  "paper_only": false,
   "stalled_min": 15,
   "stalled_min_r": 0.5,
   "flow_turn_s": 30,
-  "max_wakes_per_hour": 3
+  "max_wakes_per_hour": 12,
+  "fast_move_atr": 2.0,
+  "fast_move_s": 60,
+  "struct_break_s": 30,
+  "struct_break_buf_pct": 0.1,
+  "wall_atr": 1.5,
+  "vol_spike_x": 3.0,
+  "news_max_age_s": 180
  },
  "ws_trade": {
   "enabled": false,

@@ -20,15 +20,15 @@ entry_filled: check that the stop is in place and targets exist; usually hold.
 milestone r_plus_1: move_stop "be" if the plan's rules do not do it; otherwise hold.
 milestone r_minus_05: hold; close only on invalidation by the level price.
 milestone near_target and target_filled: hold (targets are limit orders).
-milestone hold_expiring: max_hold closes the position soon (positions[].hold_left_min). Thesis intact (no invalidation, flow/structure not against, r > -0.5): call pm_extend_hold, minutes = new max_hold_min <= 2x hold_min (stop at be: any; else scalp <= 240, intraday <= 1440). pm_hold lets the timer close it. Thesis broken: close.
+milestone hold_expiring / hold_expired: holding time (hold_left_min) ends or is over. No timer closes positions: only you, the stop or the targets. Thesis broken (invalidation passed, structure and flow against, r < -0.5): pm_close. Intact: pm_extend_hold (new max_hold_min <= 2x; scalp <= 240, intraday <= 1440) or pm_hold = keep.
 entry_blocked: CHASE (price ran past the entry tolerance): hold, never cancel for it (the executor retries every 15 s; cancel_above and ttl protect). On a repeated STALE or SPREAD cancel; otherwise hold.
 action_rejected: hold, do not repeat the reason; on STOP_NOT_TIGHTER check that the stop is not already better.
 connectivity and reconcile_alert: hold_plan and escalate NEED_OWNER, do not close in a hurry (the exchange stop works).
 session_ending: scalp and intraday without a carry mark: close; swing and position: hold.
-brain_wake_request: read the reason (code) in the event; hold by default.
-  code STALLED (15+ min without a new profit peak, profit >= +0.5R) or FLOW_TURN (cvd_1m and book imbalance against the position 30+ s): a rare paid wake, so decide with numbers from brief.flow, levels, mfe_r, stop; never close on the code alone.
-  Flow and structure still support the position (cvd_5m, imb with it, no wall against, last 5m swing holds): hold; at most tighten the stop ("be" or behind the swing, not closer than ATR(5m)). Sideways without reversal signs is no reason to exit.
-  Flow against AND structure weakens (swing broken, wall within ~1 ATR, cvd_5m flipped): partial_close 0.5 and tighten the stop; full close only on 2+ independent reversal signals or invalidation.
+brain_wake_request: the position guard saw something on your coin (code in the event); decide with numbers from brief.flow, struct levels, brief.crowd, mfe_r and the stop, never on the code alone.
+  Codes: NEWS (fresh news: brief.flash cls/dir/imp; move_pct already large = priced in), FAST_MOVE (1-minute move of 2+ ATR(5m)), STRUCT_BREAK (price beyond the nearest level against you 30+ s), CROWD_TURN (brief.crowd mood or bias turned against you), BOOK_WALL (stable wall against you within 1.5 ATR), VOL_SPIKE (turnover 3x norm), REGIME_CHANGE (1h regime flipped), FLOW_TURN (cvd_1m and book against you 30+ s), STALLED (15+ min without a new peak, profit >= 0.5R).
+  Flow and structure still support the position (cvd_5m, imb with it, no wall against, last 5m swing holds, crowd not against): hold; at most tighten the stop ("be" or behind the swing, not closer than ATR(5m)).
+  Against you AND structure weakens (swing broken, wall within ~1 ATR, cvd_5m flipped, crowd panic/euphoria against you): partial_close 0.5 and tighten; full close on 2+ independent reversal signals, invalidation or news that breaks the thesis.
   No brief.flow or older than 30 s: hold, do not guess.
 position_closed and other informational events: hold.
 
