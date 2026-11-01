@@ -718,7 +718,11 @@ def intel_block(root, now, syms=()):
     for sym in want:
         r = der.get(sym)
         if isinstance(r, dict):
-            row = _drop_none({"fund_pct": common.num(r.get("funding_pct")), "oi24_pct": _r(r.get("oi_chg_24h_pct"), 1), "ls": _r(r.get("ls_ratio"), 2)})
+            x = r.get("x") if isinstance(r.get("x"), dict) else {}
+            row = _drop_none({"fund_pct": common.num(r.get("funding_pct")), "oi24_pct": _r(r.get("oi_chg_24h_pct"), 1), "ls": _r(r.get("ls_ratio"), 2),
+                              # другие биржи (Binance, OKX, Bitget) в тот же момент: средний фандинг, цена Bybit против них в бп, доля Bybit в обороте, лидер оборота
+                              "xfund_pct": common.num(x.get("xfund_pct")), "basis_bps": _r(x.get("basis_bps"), 1), "bybit_vol_pct": _r(x.get("bybit_vol_pct"), 0),
+                              "lead": x.get("lead") if isinstance(x.get("lead"), str) and x.get("lead").isalnum() else None})
             if row:
                 dd[sym] = row
     if dd:

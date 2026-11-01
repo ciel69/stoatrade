@@ -24,6 +24,7 @@ from tb.intel import items as iitems
 from tb.intel import reader as ireader
 from tb.intel import sources as src_mod
 from tb.intel import store
+from tb.intel import xex as ixex
 
 
 class Service(object):
@@ -48,6 +49,9 @@ class Service(object):
         self.reader = ireader.Reader(root, self.cfg, call=reader_call, clock=clock, log=self.log) if ireader.reader_cfg(self.cfg)["enabled"] else None
         self._reader_thread = None
         self.flash = iflash.Flash(root, self.cfg, clock, self._emit_flash, self.log)         # быстрый канал: правила по заголовкам без LLM -> news_flash
+        # кросс-биржевые данные (ccxt, без ключей); с подменённым транспортом (тесты, разработка) живой сети через ccxt нет
+        self.xex = ixex.Collector(root, self.cfg, clock, log=self.log) if ixex.xcfg(self.cfg)["enabled"] and transport is None else None
+        self._xex_thread = None
 
     # ---- карантинный читатель (WP13b): LLM-вызов не должен задерживать загрузку источников, поэтому отдельный поток, один за раз
     def reader_step(self, now):
@@ -67,6 +71,24 @@ class Service(object):
         except Exception as e:  # noqa: BLE001
             self.log("intel: сбой читателя (%s)" % type(e).__name__)
 
+    # ---- кросс-биржевые данные: ccxt медленнее HTTP-источников (загрузка рынков), поэтому отдельный поток, один за раз
+    def xex_step(self, now):
+        if self.xex is None:
+            return
+        if self.inline:
+            self.xex.step(list(self.symbols), now)
+            return
+        if self._xex_thread is not None and self._xex_thread.is_alive():
+            return
+        self._xex_thread = threading.Thread(target=self._xex_run, args=(list(self.symbols), now), daemon=True)
+        self._xex_thread.start()
+
+    def _xex_run(self, symbols, now):
+        try:
+            self.xex.step(symbols, now)
+        except Exception as e:  # noqa: BLE001
+            self.log("intel: сбой кросс-биржевых данных (%s)" % type(e).__name__)
+
     def close(self):
         if self._pool is not None:
             self._pool.shutdown(wait=False)
@@ -84,14 +106,14 @@ class Service(object):
         if force or now - self._t["symbols"] >= float(self.cfg.get("symbols_s", 120.0)):
             self._t["symbols"] = now
             self.symbols = store.symbols_now(self.root, self.cfg)
-            self.sources = src_mod.expand(self.cfg, self.symbols)
+            self.sources = src_mod.expand(self.cfg, self.symbols) + (ixex.source_defs(self.cfg) if self.xex is not None and ixex.available() else [])
 
     def _one(self, src, now, force):
         ctx = {"symbols": self.symbols, "symbol": src.get("symbol")}
         return self.fetcher.fetch(src, ctx, now, force=force)
 
     def fetch_due(self, now, force=False, only=None):
-        sel = [s for s in self.sources if s.get("enabled", True) and (not only or s["id"] in only or s.get("base") in only)]
+        sel = [s for s in self.sources if s.get("enabled", True) and s.get("kind") != "ccxt" and (not only or s["id"] in only or s.get("base") in only)]
         if not force:
             sel = [s for s in sel if self.fetcher.due(s, now)]
         if not sel:
@@ -218,6 +240,10 @@ class Service(object):
             self.reader_step(now)
         except Exception as e:  # noqa: BLE001
             self.log("intel: сбой читателя (%s)" % type(e).__name__)
+        try:
+            self.xex_step(now)
+        except Exception as e:  # noqa: BLE001
+            self.log("intel: сбой кросс-биржевых данных (%s)" % type(e).__name__)
         try:
             self.flash.macro_step(self._events, now)      # реакция BTC на макро-релиз из календаря
         except Exception as e:  # noqa: BLE001
