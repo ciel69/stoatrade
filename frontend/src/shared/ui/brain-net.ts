@@ -9,7 +9,7 @@ import { MAX_OFFSET, nodeRadius } from './brain-shape'
  * Единицы: рисунок мозга 64×64.
  */
 export type NetMode = 'thinking' | 'idle' | 'protect' | 'down'
-export interface NetPulse { link: number; from: number; to: number; age: number; dur: number; power: number; depth: number; boost: number }
+export interface NetPulse { link: number; from: number; to: number; age: number; dur: number; power: number; depth: number; boost: number; sent?: boolean }
 export type NetLink = readonly [number, number]
 
 interface ModeCfg { spawn: number; branch: number; depth: number; speed: number; drift: number; wire: number }
@@ -240,6 +240,7 @@ export class BrainNet {
     const alive: NetPulse[] = []
     for (const p of old) {
       p.age += dt
+      if (!p.sent && p.age >= 0) { p.sent = true; this.recv[p.from] = Math.max(this.recv[p.from], 0.8 * p.power) }       // нейрон испускает импульс: на миг «просыпается»
       if (p.age < p.dur) { if (p.age > 0) this.glow[p.link] = 1; alive.push(p); continue }
       this.recv[p.to] = Math.max(this.recv[p.to], p.power)
       const maxDepth = p.boost >= 1 ? 4 : p.boost > 0 ? 1 : MODE_DEPTH(this.mode, this.cur)

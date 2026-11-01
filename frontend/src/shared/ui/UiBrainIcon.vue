@@ -66,10 +66,14 @@ function draw(): void {
     if (rv === prevRecv[i]) continue
     prevRecv[i] = rv
     const r0 = radii[i]
-    e.body[i].setAttribute('r', num(r0 * (1 + 0.22 * rv)))
-    e.hot[i].setAttribute('r', num(r0 * (1 + 0.22 * rv)))
-    e.hot[i].style.opacity = String(rv.toFixed(3))
-    e.core[i].setAttribute('r', num(r0 * (0.34 + 0.18 * rv)))
+    const k = Math.min(1, rv)
+    const s = k * k * (3 - 2 * k)                                         // 0 в покое, 1 при приёме или испускании импульса
+    e.body[i].setAttribute('r', num(r0 * (0.4 + 0.82 * s)))               // в покое нейрон крошечный, при сигнале крупнеет
+    e.body[i].style.opacity = String((0.4 + 0.6 * s).toFixed(3))
+    e.hot[i].setAttribute('r', num(r0 * (0.4 + 0.82 * s)))
+    e.hot[i].style.opacity = String(s.toFixed(3))
+    e.core[i].setAttribute('r', num(r0 * (0.14 + 0.22 * s)))
+    e.core[i].style.opacity = String((0.3 + 0.7 * s).toFixed(3))
     e.rip[i].setAttribute('r', num(r0 * (1.2 + 1.2 * (1 - rv))))
     e.rip[i].style.opacity = String((0.5 * rv * rv).toFixed(3))
   }
@@ -275,11 +279,11 @@ defineExpose({ fire })
 <style scoped>
 .brain {
   color: var(--muted);
-  transition: color var(--dur-fast) ease;
+  transition: color 260ms var(--ease-out);       /* между состояниями цвет плавно «разгорается» или остывает */
   overflow: visible;
   transform-origin: 50% 50%;
 }
-.s-idle { color: var(--zone-brain); }
+.s-idle { color: var(--muted); }
 .s-thinking { color: var(--zone-brain); }
 .s-protect { color: var(--warn); }
 .s-down { color: var(--neg); }
