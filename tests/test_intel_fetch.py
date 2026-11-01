@@ -247,5 +247,42 @@ class TestTransport(IntelCase):
         self.assertEqual(F._host("https://WWW.Example.com/x"), "example.com")
 
 
+class _Stalled(object):
+    """Ответ, передача которого останавливается после chunks (обрыв Cloudflare/Vercel у провайдера)."""
+
+    def __init__(self, chunks, ct):
+        self.chunks, self.headers = list(chunks), {"Content-Type": ct}
+
+    def read(self, n):
+        if self.chunks:
+            return self.chunks.pop(0)
+        raise TimeoutError()
+
+
+ITEM = b"<item><title>T%d</title><link>https://x.example/%d</link><pubDate>Sun, 01 Nov 2026 08:00:00 GMT</pubDate></item>"
+
+
+class TestPartialFeed(IntelCase):
+    def test_stalled_xml_returns_partial_and_parses_complete_items(self):
+        body = b'<?xml version="1.0"?><rss version="2.0"><channel><title>f</title>' + b"".join(ITEM % (i, i) for i in range(40)) + b"<item><title>cut"
+        data, partial = F._read_body(_Stalled([body], "application/rss+xml"), F.MAX_BYTES, 20)
+        self.assertTrue(partial)
+        out = S.parse_feed(data, {})
+        self.assertEqual(out["n"], 40)
+        self.assertEqual(out["items"][0]["title"], "T0")
+
+    def test_stalled_json_is_timeout(self):
+        with self.assertRaises(TimeoutError):
+            F._read_body(_Stalled([b"{" + b" " * 4000], "application/json"), F.MAX_BYTES, 20)
+
+    def test_too_little_xml_is_timeout(self):
+        with self.assertRaises(TimeoutError):
+            F._read_body(_Stalled([b"<rss>"], "text/xml"), F.MAX_BYTES, 20)
+
+    def test_atom_repair(self):
+        body = b'<feed xmlns="http://www.w3.org/2005/Atom"><entry><title>A</title></entry><entry><title>B'
+        self.assertEqual([x["title"] for x in S.parse_feed(body, {})["items"]], ["A"])
+
+
 if __name__ == "__main__":
     unittest.main()
