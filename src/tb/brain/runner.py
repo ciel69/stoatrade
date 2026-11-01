@@ -35,6 +35,7 @@ def _flaky_generation(e):
     low = (e.msg or "").lower()
     return e.code == "bad_request" and ("does not match the expected" in low or "failed to parse" in low)
 MAX_EVENTS = 20
+STRUCT_WAIT_MAX_S = 240.0       # сколько ждать структуру по монете события (поток структуры подтягивает свечи обычно за минуту); дальше NO_DATA без вызова модели
 PROTECT_BLOCKED = ("submit_plan", "amend_plan", "release_plan")
 DECISION_TOOLS = {"move_stop": "stop_plan", "close": "close_plan", "partial_close": "close_plan", "cancel": "cancel_plan", "amend": "amend_plan",
                   "hold_plan": "hold_plan", "release_plan": "release_plan"}
@@ -454,8 +455,11 @@ class Runner(object):
             out.update(outcome="no_action", code="DOSSIER")
             self._journal(job, role, agent_id, None, "skip", "DOSSIER", str(e)[:100], meta, None, meter, assign)
             return out
-        if role.output_schema == "entry/1" and ctx.get("struct_missing") and int(job.get("attempts") or 1) < int(self.conf.runtime.get("max_attempts") or 3):
-            raise Deferred("STRUCT", 45.0)                   # структуры по монете события ещё нет (свечи подтягиваются): ждём, а не пропускаем; последняя попытка идёт к модели
+        if role.output_schema == "entry/1" and ctx.get("struct_missing"):
+            age = self.clock() - float(job.get("ts_first") or self.clock())
+            if age < STRUCT_WAIT_MAX_S:
+                raise Deferred("STRUCT", 45.0)               # структуры по монете события ещё нет (свечи подтягиваются): ждём, а не пропускаем
+            # структура так и не пришла: модель НЕ зовём (UAI 2026-11-01: без данных она выдумала уровень); ниже entry_precheck даст NO_DATA
         if role.output_schema == "entry/1":                  # детерминированные отказы по данным досье ДО вызова модели: токены не тратятся
             pre = validate.entry_precheck(ctx)
             if pre:

@@ -28,24 +28,9 @@ def _px(x):
 
 
 def pool(brief, sym):
-    """-> отсортированный список цен уровней монеты (без дублей ближе CLUSTER_PCT)."""
-    raw = []
-    st = (((brief.get("struct") or {}).get("s") or {}).get(sym)) if isinstance(brief.get("struct"), dict) else None
-    if isinstance(st, dict):
-        for k in ("res", "sup"):
-            raw += [r[0] for r in (st.get(k) or []) if isinstance(r, list) and r]
-        for k in ("day", "wk"):
-            raw += list(st.get(k) or [])[:2]
-        raw += list(st.get("pd") or [])[:2]
-    lv = (brief.get("levels") or {}).get(sym) if isinstance(brief.get("levels"), dict) else None
-    if isinstance(lv, dict):
-        raw += list(lv.get("swing_5m") or []) + list(lv.get("swing_1h") or [])
-        for k in ("day", "prev_day", "week"):
-            v = lv.get(k)
-            if isinstance(v, dict):
-                raw += [v.get("hi"), v.get("lo")]
+    """-> отсортированный список цен уровней монеты (validate.level_pool: struct, levels, идеи) без дублей ближе CLUSTER_PCT."""
     out = []
-    for p in sorted(x for x in (_num(v) for v in raw) if x and x > 0):
+    for p in V.level_pool(brief, sym):
         if not out or (p - out[-1]) / out[-1] * 100.0 > CLUSTER_PCT:
             out.append(p)
     return out

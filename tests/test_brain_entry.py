@@ -180,8 +180,10 @@ class EntrySchema(unittest.TestCase):
         self.assertIn("FADE_IMPULSE", check(propose(setup="level_reject", **short), b)[1])
         self.assertNotIn("FADE_IMPULSE", check(propose(setup="sweep_reject", **short), b)[1])
         self.assertNotIn("FADE_IMPULSE", check(propose(setup="range_fade"), b)[1])              # long по движению вверх
-        b["recent"][0]["d"]["turn_surge_5m"] = 2.0
+        b["recent"][0]["d"].update({"turn_surge_5m": 2.0, "ret_5m_pct": 0.3})                  # оборот ниже 3x и свеча 1.2 ATR: не импульс
         self.assertNotIn("FADE_IMPULSE", check(propose(setup="range_fade", **short), b)[1])
+        b["recent"][0]["d"]["ret_5m_pct"] = 1.0                                                 # свеча 4 ATR против шорта без оборота: импульс, фейд запрещён (2026-11-01)
+        self.assertIn("FADE_IMPULSE", check(propose(setup="range_fade", **short), b)[1])
 
     def test_loose_rules_at_risk_levels_4_5(self):
         """Уровни 4-5 (paper-разведка): широкая свеча события не закрывает вход с подтверждением свечой, уровень допустим до 5%; на уровне 3 прежние правила."""
@@ -206,6 +208,25 @@ class EntrySchema(unittest.TestCase):
         self.assertEqual(validate.entry_precheck(ctx), "WIDE_RANGE")
         ctx["risk_level"] = 4
         self.assertIsNone(validate.entry_precheck(ctx))
+
+    def test_propose_level_must_come_from_dossier(self):
+        """UAI 2026-11-01: структуры по монете не было, модель выдумала уровень 0.2004, стоп и цели, сделка -2.9R. Код: без уровней propose отклоняется
+        (NO_LEVELS, допустим только skip), при известных уровнях уровень входа обязан совпасть с одним из struct/levels/ideas (допуск 0.3% или 0.5 ATR 5м)."""
+        none = with_brief(struct_missing=["SOL"], levels={}, struct={"s": {}})
+        self.assertIn("NO_LEVELS", check(propose(), none)[1])
+        self.assertEqual(check(skip(skip_code="no_levels"), none)[1], [])
+        self.assertNotIn("NO_LEVELS", check(propose(), SCAN_BRIEF)[1])                        # структура есть, но уровней в ней нет: сравнивать нечем, прежние правила
+        b = copy.deepcopy(SCAN_BRIEF)
+        b["struct"]["s"]["SOL"].update(res=[[146.5, 0.9, 0.5, "dh"]], sup=[[144.0, -0.8, 0.4, "s1h"]])
+        b["levels"]["SOL"]["swing_5m"] = [145.0]
+        self.assertEqual(check(propose(), b)[1], [])                                            # 145.0 = swing_5m
+        self.assertEqual(check(propose(level=145.3), b)[1], [])                                 # в допуске 0.3%
+        codes = check(propose(level=145.9, stop=144.4), b)[1]
+        self.assertIn("LEVEL_NOT_IN_STRUCT", codes)
+        self.assertTrue(any(x.startswith("LEVEL:145.9_NEAREST:146.5") for x in codes), codes)
+        b["ideas"] = {"active": [{"id": "I1", "sym": "SOL", "side": "long", "level": 145.9, "stop": 144.4, "tp": 148.0}]}
+        self.assertNotIn("LEVEL_NOT_IN_STRUCT", check(propose(level=145.9, stop=144.4), b)[1])   # уровень идеи тоже известен коду
+        self.assertEqual(validate.level_pool(b, "SOL"), [144.0, 145.0, 145.9, 146.5])
 
     def test_struct_missing_flag(self):
         b = with_brief(struct_missing=["SOL"], levels={})
@@ -360,7 +381,8 @@ class Scout(BrainBase):
         self.assertEqual(rows[0]["level"], self.gw.brief["cands"][0]["level"])
 
     def test_struct_missing_defers_instead_of_skipping(self):
-        """Структуры по монете события ещё нет: задание откладывается (модель не зовём), а не получает skip no_levels; на последней попытке идёт к модели."""
+        """Структуры по монете события ещё нет: задание откладывается (модель не зовём), а не получает skip no_levels; после STRUCT_WAIT_MAX_S без структуры:
+        NO_DATA без вызова модели (UAI 2026-11-01: на «последней попытке» модель выдумала уровень)."""
         self.gw.brief = with_brief(struct_missing=["SOL"], levels={})
         r = self.runner({"ds-flash": [skip()]})
         j, _s = self.scan_job()
@@ -370,6 +392,37 @@ class Scout(BrainBase):
         self.assertEqual(j1["result"]["code"], "STRUCT")
         self.assertEqual(self.factory.calls(), 0)
         self.assertEqual([x for x in self.decisions() if x["what"] == "brain_decision"], [])      # в ленте решений шума нет
+        r2 = self.runner({"ds-flash": [propose(event_seq=1)]})
+        j2, _s2 = self.scan_job(jid="J-old", ts_first=self.t - 1000)                          # задание старше окна ожидания структуры
+        r2.step()
+        j3 = self.get_job(j2["id"])
+        self.assertEqual(j3["result"]["roles"][0]["code"], "NO_DATA", j3["result"])
+        self.assertEqual(self.factory.calls(), 0)                                                 # модель без данных не зовём
+        self.assertEqual(self.gw.tool_calls("submit_plan"), [])
+
+    def test_fade_impulse_for_any_setup_and_crowd_rules(self):
+        """Вход против свечи события от 2 ATR запрещён любому сетапу, кроме sweep_reject и level_reclaim; против паники/эйфории толпы те же два сетапа и только со свечой."""
+        b = copy.deepcopy(SCAN_BRIEF)
+        b["recent"][0]["d"].update({"ret_5m_pct": -0.9, "range_5m_pct": 1.0, "turn_surge_5m": 1.0})           # a5 0.25% -> импульс 3.6 ATR вниз, оборота нет
+        self.assertIn("FADE_IMPULSE", check(propose(setup="trend_pullback"), b)[1])
+        self.assertIn("FADE_IMPULSE", check(propose(setup="breakout_retest"), b)[1])
+        self.assertNotIn("FADE_IMPULSE", check(propose(setup="level_reclaim"), b)[1])
+        self.assertNotIn("FADE_IMPULSE", check(propose(setup="sweep_reject"), b)[1])
+        short = dict(side="short", level=145.0, stop=146.6, tp=[142.0, 140.0])
+        self.assertNotIn("FADE_IMPULSE", check(propose(setup="trend_pullback", **short), b)[1])     # по движению можно
+        b["recent"][0]["d"]["ret_5m_pct"] = -0.3                                                      # 1.2 ATR: не импульс
+        self.assertNotIn("FADE_IMPULSE", check(propose(setup="trend_pullback"), b)[1])
+        p = with_brief(crowd={"mood": "panic", "bias": "short", "flags": ["dump_24h", "impulse_down"]})
+        codes = check(propose(setup="trend_pullback"), p)[1]
+        self.assertIn("CROWD_AGAINST", codes)
+        self.assertNotIn("CROWD_AGAINST", check(propose(setup="level_reclaim"), p)[1])
+        self.assertIn("CROWD_NO_CONFIRM", check(propose(setup="level_reclaim", confirm="none", size_mult=0.4, tags=["no-confirm"], zone={"low": 144.9, "high": 145.1}), p)[1])
+        self.assertNotIn("CROWD_AGAINST", check(propose(setup="trend_pullback", **short), p)[1])     # шорт в панике не против толпы
+        e = with_brief(crowd={"mood": "euphoria", "bias": "long"})
+        self.assertIn("CROWD_AGAINST", check(propose(setup="range_fade", **short), e)[1])
+        self.assertNotIn("CROWD_AGAINST", check(propose(setup="trend_pullback"), e)[1])
+        nd = with_brief(data={"struct": True, "levels": 0, "ready": False})
+        self.assertEqual(validate.entry_precheck(validate.entry_context(nd, EV)), "NO_DATA")
 
     def test_model_mode_never_used(self):
         r, j, s = self.run_job(propose(event_seq=1))

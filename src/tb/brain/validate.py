@@ -31,7 +31,10 @@ ENTRY_TAGS = ("no-confirm", "blackout")
 ENTRY_PROPOSE_KEYS = ("sym", "side", "horizon", "level", "stop", "tp", "setup", "hypothesis", "ttl_min", "confirm", "thesis")
 ENTRY_OPTIONAL_KEYS = ("zone", "size_mult", "tags", "entry_type")
 ENTRY_MIN_RR = 2.0                                  # риск/прибыль брутто не ниже 2, когда в досье нет порога сессии (по средней цене целей при равных долях)
-ENTRY_PRECHECK_CODES = ("WIDE_RANGE", "DAY_NO_PLANS", "NO_SLOTS", "ROOM_CLOSED", "SYM_BUSY", "PAUSE_SYM", "PAUSE_ALL", "MIN_SIZE_SYM")   # отказы по данным досье без вызова модели
+ENTRY_PRECHECK_CODES = ("WIDE_RANGE", "DAY_NO_PLANS", "NO_SLOTS", "ROOM_CLOSED", "SYM_BUSY", "PAUSE_SYM", "PAUSE_ALL", "MIN_SIZE_SYM", "NO_DATA")   # отказы по данным досье без вызова модели
+FADE_IMPULSE_ATR = 2.0                              # свеча события от 2 ATR(5м) против входа = импульс (кит, каскад): вход против него без реакции запрещён любому сетапу,
+                                                    # кроме sweep_reject и level_reclaim (они по определению после реакции). UAI 2026-11-01: trend_pullback long в свечу -2.85%
+REACTION_SETUPS = ("sweep_reject", "level_reclaim")  # сетапы «после реакции цены»: единственные, которым можно входить против импульса и против паники/эйфории
 ENTRY_SIZE_MULT_MAX = 0.5                           # потолок size_mult, который вообще может назвать модель (только уменьшение)
 ENTRY_MIN_STOP_PCT = 0.1                            # стоп не ближе 0.1% к уровню входа (и не ближе ENTRY_STOP_ATR_MULT*ATR(5м) и трёх спредов)
 ENTRY_STOP_ATR_MULT = 1.5                           # стоп не ближе 1.5 ATR(5м): стоп в одну свечу выбивало шумом за минуты (разбор paper 2026-10-29/30: LIT, USELESS, ERA, XPL)
@@ -61,6 +64,34 @@ ENTRY_MAX_LEVEL_DIST_PCT = 3.0                      # уровень входа 
 ENTRY_MAX_LEVEL_DIST_LOOSE_PCT = 5.0                # на уровнях риска 4-5 (paper-разведка входов): до 5%, лимитная заявка ждёт у уровня до ttl
 LOOSE_RISK_LEVEL = 4                                # с этого уровня риска мягче правила диапазона свечи и дальности уровня (entry_scout работает только в paper)
 ENTRY_MAX_ZONE_PCT = 1.0                            # ширина зоны входа без подтверждения не шире 1% от уровня
+LEVEL_POOL_TOL_PCT = 0.3                            # уровень входа обязан совпадать с уровнем из struct/levels/ideas досье (допуск 0.3% или половина ATR 5м):
+                                                    # UAI 2026-11-01: структуры по монете не было, локальная модель выдумала уровень, стоп и цели, сделка -2.9R
+
+
+def level_pool(brief, sym):
+    """Все известные уровни монеты из досье: struct.s[sym] res/sup/day/pd/wk, levels[sym] swing_5m/swing_1h/day/prev_day/week, активные идеи по монете.
+    -> отсортированный список цен без точных дублей (кластеризация близких уровней в cands). Пусто = уровней код не знает."""
+    brief = brief if isinstance(brief, dict) else {}
+    raw = []
+    st = ((brief.get("struct") or {}).get("s") or {}).get(sym) if isinstance(brief.get("struct"), dict) else None
+    if isinstance(st, dict):
+        for k in ("res", "sup"):
+            raw += [r[0] for r in (st.get(k) or []) if isinstance(r, list) and r]
+        for k in ("day", "wk"):
+            raw += list(st.get(k) or [])[:2]
+        raw += list(st.get("pd") or [])[:2]
+    lv = (brief.get("levels") or {}).get(sym) if isinstance(brief.get("levels"), dict) else None
+    if isinstance(lv, dict):
+        raw += list(lv.get("swing_5m") or []) + list(lv.get("swing_1h") or [])
+        for k in ("day", "prev_day", "week"):
+            v = lv.get(k)
+            if isinstance(v, dict):
+                raw += [v.get("hi"), v.get("lo")]
+    ideas = (brief.get("ideas") or {}).get("active") if isinstance(brief.get("ideas"), dict) else None
+    for i in ideas or []:
+        if isinstance(i, dict) and i.get("sym") == sym:
+            raw.append(i.get("level"))
+    return sorted(set(float(v) for v in raw if _num(v) and v > 0))
 RE_SYM = r"^[A-Z0-9]{2,20}$"
 SESSION_ORDER = ("scalp", "intraday", "swing", "position")
 OPPOSITE_OK = ("range_fade", "level_reject")        # watch против bias допустим только для этих сетапов (07b 5.3)
@@ -313,6 +344,12 @@ def entry_context(brief, event=None):
     ctx["risk_level"] = int(rl) if rl is not None else None
     sm_ = brief.get("struct_missing") if isinstance(brief.get("struct_missing"), list) else []
     ctx["struct_missing"] = bool(sym and sym in sm_)      # структуры по монете события ещё нет (свечи подтягиваются): раннер ждёт её, а не зовёт модель без уровней (levels без struct бывает пустым)
+    ctx["level_pool"] = level_pool(brief, sym) if sym else []      # известные коду уровни монеты: уровень входа обязан быть одним из них (_entry: NO_LEVELS / LEVEL_NOT_IN_STRUCT)
+    cr = brief.get("crowd") if isinstance(brief.get("crowd"), dict) else {}
+    ctx["crowd_mood"] = cr.get("mood") if cr.get("mood") in ("panic", "euphoria", "crowded_long", "crowded_short", "calm", "unclear") else None
+    ctx["crowd_bias"] = cr.get("bias") if cr.get("bias") in ("long", "short", "none") else None
+    dt = brief.get("data") if isinstance(brief.get("data"), dict) else {}
+    ctx["data_ready"] = dt.get("ready") if isinstance(dt.get("ready"), bool) else None      # полнота данных монеты события (brief.data): False = входа нет
     nc = (brief.get("risk_level") or {}).get("no_confirm") if isinstance(brief.get("risk_level"), dict) else None
     if isinstance(nc, dict):
         ctx["no_confirm_allowed"] = nc.get("allowed") if isinstance(nc.get("allowed"), bool) else None
@@ -395,6 +432,8 @@ def entry_precheck(ctx):
     ctx = ctx or {}
     if not ctx.get("has_brief"):
         return None
+    if ctx.get("struct_missing") or ctx.get("data_ready") is False:
+        return "NO_DATA"                                     # нет структуры/уровней по монете события: без полного набора данных модель не зовём (UAI 2026-11-01)
     if ctx.get("day_max_new_plans") == 0 and not ctx.get("off_plan_ok"):
         return "DAY_NO_PLANS"
     r5, ms = ctx.get("range_5m_pct"), ctx.get("max_stop_pct")
@@ -602,6 +641,15 @@ def _entry(o, ctx):
         lvl_dist = abs(lvl - px) / px * 100.0
         if lvl_dist > lvl_max:
             errs += ["LEVEL_FAR", "LEVEL_DIST_PCT:%.1f_MAX:%.1f" % (lvl_dist, lvl_max)]      # числа в подсказке повтора: модель видит, что исправлять (только наши числа, не цитата ответа)
+    pool = ctx.get("level_pool") or []
+    if o.get("setup") != CHASE_SETUP:                        # momentum_chase входит по рынку у текущей цены, уровень ему не нужен
+        if ctx.get("struct_missing") and not pool:
+            errs.append("NO_LEVELS")                         # структуры и уровней по монете нет: уровень выдуман, вход только skip no_levels (UAI 2026-11-01)
+        elif pool:
+            near = min(pool, key=lambda p: abs(p - lvl))
+            tol = max(LEVEL_POOL_TOL_PCT, 0.5 * (ctx.get("a5_pct") or 0.0))
+            if abs(near - lvl) / lvl * 100.0 > tol:
+                errs += ["LEVEL_NOT_IN_STRUCT", "LEVEL:%.6g_NEAREST:%.6g" % (lvl, near)]      # уровень не из struct/levels/ideas досье: взять уровень кода, не свой
     rr = _entry_rr(side, lvl, px, stop, tps)
     dist = abs(lvl - stop) / lvl * 100.0
     min_rr, max_stop, cost = ctx.get("min_rr"), ctx.get("max_stop_pct"), ctx.get("cost_rt_pct")
@@ -632,6 +680,17 @@ def _entry(o, ctx):
         errs += chase_errors(o, ctx, sign)
     if o.get("setup") in FADE_SETUPS and surge is not None and ret5 and surge >= FADE_SURGE_X and ret5 * sign < 0:
         errs += ["FADE_IMPULSE", "SURGE_X:%.1f_MAX:%.1f" % (surge, FADE_SURGE_X)]      # фейд против импульса на всплеске оборота: пропускают или ждут отката/сетапа с реакцией
+    elif ret5 and ret5 * sign < 0 and o.get("setup") not in REACTION_SETUPS + (CHASE_SETUP,):
+        a5 = ctx.get("a5_pct")
+        imp = abs(ret5) / a5 if a5 else None
+        if (imp is not None and imp >= FADE_IMPULSE_ATR) or (imp is None and abs(ret5) >= 1.5):
+            errs += ["FADE_IMPULSE", "IMPULSE_ATR:%.1f_MAX:%.1f" % (imp if imp is not None else abs(ret5), FADE_IMPULSE_ATR)]      # вход против свечи события от 2 ATR без реакции (UAI 2026-11-01)
+    mood = ctx.get("crowd_mood")
+    if (mood == "panic" and sign > 0) or (mood == "euphoria" and sign < 0):
+        if o.get("setup") not in REACTION_SETUPS:
+            errs.append("CROWD_AGAINST")                     # против паники/эйфории толпы только сетапы после реакции цены (sweep_reject, level_reclaim)
+        if o.get("confirm") != "candle":
+            errs.append("CROWD_NO_CONFIRM")                  # и только со свечным подтверждением
     stop_max = max_stop if max_stop is not None else ENTRY_MAX_STOP_PCT
     wide = exec_stop_pct(lvl, px, stop, o.get("entry_type"))
     if wide > stop_max + 1e-9:

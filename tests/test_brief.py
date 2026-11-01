@@ -536,6 +536,25 @@ class TestEventJobContext(Base):
         s0 = bus.emit("scanner_signal", {"kind": "range_5m", "px": 3.0, "wake": True}, sym="ZZZ", root=self.root, now=NOW - 20)
         b = self.build("event", since=0, seqs=[s0], sym="ZZZ")
         self.assertEqual(b["struct_missing"][0], "ZZZ")
+        self.assertEqual((b["data"]["struct"], b["data"]["levels"], b["data"]["ready"]), (False, 0, False))      # полнота данных: входа нет
+        self.assertIn("struct", b["data"]["missing"])
+
+    def test_data_and_crowd_blocks_for_job_symbol(self):
+        """Монета события с структурой: data.ready, crowd из структуры (r24h, импульс свечи) и события; только числа и enum."""
+        self.structure(["XPL", "BTC"])
+        d = json.load(open(self.R("runtime", "structure.json"), encoding="utf-8"))
+        d["symbols"]["XPL"].update(r24h=-30.0, a5_pct=1.0, res=[{"px": 1.5, "d_pct": 1.0, "d_atr": 0.5, "t": "dh"}], sup=[{"px": 0.8, "d_pct": 1.0, "d_atr": 0.5, "t": "dl"}])      # уровни как в реальном файле
+        w(self.R("runtime", "structure.json"), d)
+        s0 = bus.emit("scanner_signal", {"kind": "range_5m", "px": 1.0, "ret_5m_pct": -2.5, "range_5m_pct": 3.0, "turn_surge_5m": 0.5, "wake": True}, sym="XPL", root=self.root, now=NOW - 20)
+        b = self.build("event", since=0, seqs=[s0], sym="XPL")
+        self.assertTrue(b["data"]["ready"])
+        self.assertEqual(b["data"]["struct"], True)
+        self.assertGreaterEqual(b["data"]["levels"], 2)
+        c = b["crowd"]
+        self.assertEqual((c["mood"], c["bias"]), ("panic", "short"))
+        self.assertIn("dump_24h", c["flags"])
+        self.assertIn("thin_dump", c["warn"])
+        self.assertNotIn("deriv", b)                                                              # facts.json в фикстуре нет: блока деривативов нет, досье не падает
 
     def test_session_block_carries_guard_thresholds(self):
         b = self.build("event", since=0)

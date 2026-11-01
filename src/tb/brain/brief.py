@@ -957,6 +957,48 @@ def _b_struct(c, wanted, limit=STRUCT_MAX_SYMS, budget=STRUCT_BUDGET, base_first
     return out if rows else None
 
 
+def _b_deriv(root, now, sym):
+    """Деривативы монеты события из runtime/intel/facts.json (intel_block: fund_pct, oi24_pct, ls, xfund_pct, basis_bps, bybit_vol_pct, lead) -> строка по монете | None."""
+    blk = intel_block(root, now, [sym]) or {}
+    row = (blk.get("deriv") or {}).get(sym) if isinstance(blk.get("deriv"), dict) else None
+    if isinstance(row, dict) and row:
+        return dict(row, stale_s=blk["stale_s"]) if blk.get("stale_s") is not None else row
+    # монеты вне списка facts.json (ушла из горячих): прямое чтение кеша intel (oi_<sym>, ls_<sym>), только числа
+    try:
+        from tb.intel import fetch as ifetch
+        oi = (ifetch.read_cache("oi_%s" % sym, root) or {}).get("data") or {}
+        ls = (ifetch.read_cache("ls_%s" % sym, root) or {}).get("data") or {}
+    except (ValueError, OSError):
+        return None
+    out = _drop_none({"oi24_pct": _r(oi.get("oi_chg_24h_pct"), 1), "ls": _r(ls.get("ls_ratio"), 2)})
+    return out or None
+
+
+def _b_crowd(root, now, b, sym, sd):
+    """Блок `crowd` (brain/crowd.py) из уже собранных блоков досье: структура монеты, событие сканера (sd), деривативы, ордерфлоу, индекс страха из intel."""
+    from tb.brain import crowd as crowd_mod
+    st = ((b.get("struct") or {}).get("s") or {}).get(sym) if isinstance(b.get("struct"), dict) else None
+    sent = (intel_block(root, now, []) or {}).get("sentiment") or {}
+    fng = (sent.get("fng") or {}).get("v") if isinstance(sent.get("fng"), dict) else None
+    return crowd_mod.build(st=st, ev=sd, der=b.get("deriv"), flow=b.get("flow"), fng=fng)
+
+
+def _b_data(b, sym):
+    """Полнота данных по монете события: struct (структура 5м/1ч), levels (число известных уровней), cands (кандидатов входа), flow, deriv, hot.
+    ready=false, когда нет структуры или уровней: entry_scout обязан ответить skip no_data, валидатор отклонит propose (NO_LEVELS / NO_DATA)."""
+    from tb.brain import validate as V
+    st = ((b.get("struct") or {}).get("s") or {}).get(sym) if isinstance(b.get("struct"), dict) else None
+    pool = V.level_pool(b, sym)
+    out = {"struct": isinstance(st, dict), "levels": len(pool), "cands": len([x for x in (b.get("cands") or []) if isinstance(x, dict) and x.get("ok")]),
+           "flow": isinstance(b.get("flow"), dict), "deriv": isinstance(b.get("deriv"), dict),
+           "hot": any(isinstance(e, dict) and e.get("sym") == sym and isinstance(e.get("d"), dict) for e in (b.get("recent") or []))}
+    out["ready"] = bool(out["struct"] and out["levels"] > 0)
+    miss = [k for k in ("struct", "flow", "deriv") if not out[k]] + (["levels"] if out["levels"] == 0 else [])
+    if miss:
+        out["missing"] = miss
+    return out
+
+
 def _struct_missing(c, syms, root, now):
     """Монеты события, по которым в структуре нет записи: явный флаг вместо молчания (модель отвечает skip no_levels, а не выдумывает уровни) + запрос потоку структуры подтянуть их."""
     d = _struct_doc(c)
@@ -1218,7 +1260,7 @@ def _trim_struct(b):
 
 
 TRIM_STEPS = (
-    ("lessons", _drop("lessons")), ("missing", _drop("missing")), ("memory", _drop("memory")), ("playbook", _drop("playbook")), ("flow", _drop("flow")), ("since_last", _drop("since_last")), ("paper_history", _drop("paper_history")), ("checklist_text", _checklist_ids), ("recent>5", _trim_recent(5)),
+    ("lessons", _drop("lessons")), ("missing", _drop("missing")), ("memory", _drop("memory")), ("playbook", _drop("playbook")), ("deriv", _drop("deriv")), ("flow", _drop("flow")), ("since_last", _drop("since_last")), ("paper_history", _drop("paper_history")), ("checklist_text", _checklist_ids), ("recent>5", _trim_recent(5)),
     ("hot>3", _trim_hot(3)), ("ideas>4", _trim_ideas(4)), ("struct>3", _trim_struct), ("levels", _trim_levels), ("recent>3", _trim_recent(3)), ("pending", _drop("pending")),
     ("hot", _drop("hot")), ("ideas", _drop("ideas")), ("experiments", _drop("experiments")), ("cands", _drop("cands")), ("struct", _drop("struct")), ("news_digest", _drop("news_digest")), ("intel", _drop("intel")), ("recent>1", _trim_recent(1)), ("checklist", _drop("checklist")), ("market", _drop("market")),
     ("recent", _drop("recent")),
@@ -1341,6 +1383,10 @@ def build(scope="start", since=None, budget_tokens=None, root=None, now=None, co
         b["market"] = mk or None
         b["playbook"] = _safe("playbook", lambda: _b_playbook(c, b, job_sym), missing) if (job_sym and not involved) else None      # только поиск входа: у событий планов карточки не нужны
         b["cands"] = _safe("cands", lambda: cands_mod.candidates(b, job_sym), missing) if (job_sym and not involved) else None      # предрасчёт входов (уровень, стоп, цели, RR, горизонт): модель выбирает, а не считает
+        if job_sym:
+            b["deriv"] = _safe("deriv", lambda: _b_deriv(root, now, job_sym), missing)          # деривативы монеты события: funding, OI за сутки, лонг/шорт, базис к другим биржам
+            b["crowd"] = _safe("crowd", lambda: _b_crowd(root, now, b, job_sym, sd), missing)   # настроение толпы: флаги, mood, сторона давления (crowd.py)
+            b["data"] = _safe("data", lambda: _b_data(b, job_sym), missing)                     # полнота данных по монете события: без структуры и уровней входа нет
     else:
         pid = scope_plan.group(1)
         full = _safe("plan", lambda: _b_plan_full(c, pid), missing)
@@ -1362,7 +1408,10 @@ def build(scope="start", since=None, budget_tokens=None, root=None, now=None, co
         budget_tokens += tokens(b["memory"])          # блок памяти имеет собственный лимит (<= 450) и не вытесняет остальное досье из бюджета по умолчанию
     if own_budget and b.get("struct"):
         budget_tokens += tokens(b["struct"])          # struct (структура рынка) тоже со своим лимитом (STRUCT_BUDGET / STRUCT_EVENT_BUDGET): не вытесняет остальное досье
-    return fit(b, budget_tokens)
+    b = fit(b, budget_tokens)
+    if isinstance(b.get("data"), dict) and any(x in (b.get("cut") or []) for x in ("struct", "cands")):
+        b["data"] = dict(b["data"], ready=False, missing=sorted(set(b["data"].get("missing") or []) | {"struct_cut"}))      # бюджет срезал структуру/кандидатов: модель данных не видит, входа нет
+    return b
 
 
 def save(brief, root=None, now=None):
