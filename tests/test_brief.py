@@ -158,6 +158,18 @@ class TestEconomics(Base):
         with mock.patch.object(risklevels, "limits_summary", return_value={"min_trades_day": 0}):
             self.assertNotIn("trades_left", self.build("event")["economics"])
 
+    def test_min_net_quota(self):
+        """Квота прибыли дня по уровню риска (min_net_day_usdt): сколько ещё нужно заработать чистыми в режиме дня; без квоты полей нет."""
+        from unittest import mock
+        from tb.core import risklevels
+        with mock.patch.object(risklevels, "limits_summary", return_value={"min_trades_day": 0, "min_net_day_usdt": 5.0}):
+            eco = self.build("event")["economics"]
+            self.assertEqual(eco["min_net_day_usdt"], 5.0)
+            net = eco.get("net_paper_day", eco.get("net_live_day", -eco["llm_usd_day"]))
+            self.assertAlmostEqual(eco["net_left_usdt"], max(0.0, 5.0 - net), places=3)
+        with mock.patch.object(risklevels, "limits_summary", return_value={"min_trades_day": 0}):
+            self.assertNotIn("net_left_usdt", self.build("event")["economics"])
+
     def test_no_hypotheses_no_block(self):
         self.assertNotIn("experiments", self.build())
 

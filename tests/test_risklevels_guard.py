@@ -82,8 +82,9 @@ class LevelBehaviourTest(W.Base):
         risks = [r[n]["risk_usdt"] for n in (1, 2, 3, 4, 5)]
         self.assertEqual(risks, sorted(risks))
         self.assertLessEqual(r[1]["risk_usdt"], 1.0 + 1e-6)          # 1% от 100
-        self.assertLessEqual(r[5]["risk_usdt"], 5.0 + 1e-6)          # потолок 5%
-        self.assertGreater(r[5]["risk_usdt"], 3.0)
+        self.assertLessEqual(r[5]["risk_usdt"], 8.0 + 1e-6)          # потолок 8% (поднят владельцем 2026-11-01; уровень 5 = 7.5%)
+        self.assertGreater(r[5]["risk_usdt"], 5.0)
+        self.assertGreater(r[5]["margin"], r[3]["margin"])            # маржа сделки растёт с уровнем (0.2 -> 0.3 капитала)
         self.assertEqual(r[4]["ctx"]["risk_level"]["level"], 4)
 
     def test_ceiling_holds_even_if_file_is_greedy(self):
@@ -91,7 +92,7 @@ class LevelBehaviourTest(W.Base):
         c["levels"]["5"]["risk_per_trade_frac"] = 0.5
         self.put_cfg(c)
         r = self.run_level(5)
-        self.assertLessEqual(r["risk_usdt"], 5.0 + 1e-6)
+        self.assertLessEqual(r["risk_usdt"], 8.0 + 1e-6)
 
     def test_drawdown_ladder_still_applies_after_level(self):
         a = self.run_level(5)
@@ -118,12 +119,12 @@ class LevelBehaviourTest(W.Base):
     def test_total_open_risk_cap_level4(self):
         from tb.core import journal
         T = "2026-10-28T01:00:00Z"
-        journal._append({"ev": "open", "id": "a", "sym": "AAA", "side": "long", "mode": "live", "risk_usdt": 9.5, "notional": 500, "entry": 1, "ts_open": T})
-        r = self.run_level(4, sym="CCC")       # открытый риск 9.5 >= 9% от 100
+        journal._append({"ev": "open", "id": "a", "sym": "AAA", "side": "long", "mode": "live", "risk_usdt": 12.5, "notional": 500, "entry": 1, "ts_open": T})
+        r = self.run_level(4, sym="CCC")       # открытый риск 12.5 >= 12% от 100 (уровень 4 после 2026-11-01)
         self.assertFalse(r["ok"])
         self.assertTrue(any("total_open_risk_cap" in x for x in r["reasons"]), r["reasons"])
         journal._append({"ev": "open", "id": "b", "sym": "BBB", "side": "long", "mode": "live", "risk_usdt": 8.0, "notional": 500, "entry": 1, "ts_open": T})
-        # 3 позиции не открыть, но и риск строго ограничен: 8.0 + новая сделка <= 9%
+        # 3 позиции не открыть, но и риск строго ограничен: 12.5 + 8.0 уже выше 12%
         j = guard.evaluate(gargs(sym="DDD"))
         self.assertFalse(j["ok"])
 
@@ -134,7 +135,7 @@ class LevelBehaviourTest(W.Base):
         set_port(eq=100.0, hwm=100.0)
         r = self.run_level(4, sym="CCC")
         self.assertTrue(r["ok"], r["reasons"])
-        self.assertLessEqual(r["risk_usdt"] + 8.0, 9.0 + 1e-6)
+        self.assertLessEqual(r["risk_usdt"] + 8.0, 12.0 + 1e-6)       # общий открытый риск уровня 4: 12%
 
     def test_agent_limits_only_narrow(self):
         a = self.run_level(5)

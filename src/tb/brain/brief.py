@@ -225,14 +225,22 @@ def _b_economics(c):
     out = {"llm_usd_day": _r(usd, 4)}
     for m, v in pnl.items():
         out["pnl_%s_day" % m], out["net_%s_day" % m] = _r(v, 4), _r(v - usd, 4)
-    try:                                         # минимум входов за сутки по уровню риска (risk_levels.json min_trades_day): без него мозг «умирает»
+    try:                                         # квоты выживания по уровню риска (risk_levels.json): минимум входов за сутки и минимум чистой прибыли за сутки
         from tb.core import risklevels
-        need = int(risklevels.limits_summary(c.root).get("min_trades_day") or 0)
+        eq = portfolio.total(c.port)
+        ls = risklevels.limits_summary(c.root, equity=eq if common.num(eq) and eq > 0 else None)
+        need = int(ls.get("min_trades_day") or 0)
+        need_usd = ls.get("min_net_day_usdt")
     except (KeyError, TypeError, ValueError, OSError):
-        need = 0
+        need, need_usd = 0, None
     if need:
         done = sum(1 for t in c.trades if t.get("mode") in ("paper", "live") and str(t.get("ts_open") or "").startswith(c.today))
         out.update(min_trades_day=need, trades_day=done, trades_left=max(0, need - done))
+    if common.num(need_usd) and need_usd > 0:   # квота прибыли дня по режиму дня (paper или live): сколько ещё нужно заработать чистыми
+        mode = "paper" if _is_paper(c) else "live"
+        net = out.get("net_%s_day" % mode)
+        net = (pnl.get(mode, 0.0) - usd) if net is None else net
+        out.update(min_net_day_usdt=_r(need_usd, 4), net_left_usdt=_r(max(0.0, need_usd - net), 4))
     return out
 
 
@@ -388,7 +396,7 @@ def _b_session(c):
     out = {"id": common.ident(v["id"]), "type": common.ident(v["type"]),
            "min_left": None if v["left_s"] is None else int(v["left_s"] // 60), "budget": _r(v["budget_usdt"]),
            "realized": _r(v["realized"]), "open_risk": _r(v["open_risk"]), "trades": v["trades"], "max_trades": v["max_trades"],
-           "cost_rt_pct": _cost_rt_pct(c)}
+           "cost_rt_pct": _cost_rt_pct(c), "cost_rt_maker_pct": _cost_rt_pct(c, maker=True)}
     if v["type"] == _DAY:
         # сессия-день: горизонт выбирает агент в каждом плане; пороги каждого горизонта (те же, что у guard) для выбора и смысловой проверки entry/1
         out["horizons"] = {t: _drop_none({"max_stop_pct": _r(common.num(cfg.get("max_stop_pct"))), "min_rr": _r(common.num(cfg.get("min_rr"))),
@@ -405,8 +413,9 @@ _DAY = "day"
 _HORIZONS = ("scalp", "intraday", "swing", "position")
 
 
-def _cost_rt_pct(c):
-    """Издержки круга (вход + выход по рынку) в % номинала по площадке активной сессии: 2 x (fee + slip) из risk_profile.costs, как guard.round_trip_cost_pct."""
+def _cost_rt_pct(c, maker=False):
+    """Издержки круга (вход + выход по рынку) в % номинала по площадке активной сессии: 2 x (fee + slip) из risk_profile.costs, как guard.round_trip_cost_pct.
+    maker=True: вход лимитом post-only (maker_fee площадки), выход по стопу рынком; нет maker_fee -> None (валидатор берёт обычные издержки)."""
     venue = (c.active or {}).get("venue") if isinstance(c.active, dict) else None
     costs = c.prof.get("costs") if isinstance(c.prof.get("costs"), dict) else {}
     cc = costs.get(venue) if isinstance(costs.get(venue), dict) else None
@@ -415,7 +424,11 @@ def _cost_rt_pct(c):
         cc = {"fee": fee, "slip": 0.0005} if fee is not None else None
     if cc is None or common.num(cc.get("fee")) is None:
         return None
-    return _r(2.0 * (cc["fee"] + (common.num(cc.get("slip")) or 0.0)) * 100.0)
+    slip = common.num(cc.get("slip")) or 0.0
+    if maker:
+        mf = common.num(cc.get("maker_fee"))
+        return None if mf is None else _r((mf + cc["fee"] + 2.0 * slip) * 100.0)
+    return _r(2.0 * (cc["fee"] + slip) * 100.0)
 
 
 def _is_paper(c):

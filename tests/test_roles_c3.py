@@ -39,7 +39,7 @@ class RolesAndPrompts(unittest.TestCase):
             self.assertEqual(r.version, ver, rid)
             self.assertTrue(r.prompt.startswith("# prompt v%d %s" % (ver, rid)), rid)
         self.assertEqual(self.reg.get("news_reader").version, 0)            # роль WP13b не тронута
-        self.assertTrue(roles_runtime.read_common(ROOT).startswith("# common v5"))
+        self.assertTrue(roles_runtime.read_common(ROOT).startswith("# common v6"))
 
     def test_prefix_stable_between_loads_and_calls(self):
         other = roles_runtime.load(ROOT)

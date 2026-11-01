@@ -968,12 +968,22 @@ class Runner(object):
         self._journal(job, role, agent_id, obj, "note" if ok is not False else "skip", code, why, meta, llm, meter, assign)
         return {"outcome": "decision" if ok is not False else "no_action", "code": code}
 
-    def _entry_block(self, agent_id, ctx):
-        """Жёсткие запреты entry_scout в коде (не зависят от ответа модели) -> код блокировки или None. NOT_PAPER: режим дня/платформы не paper, исполнитель не paper
-        или у агента команды есть право не только paper; PROTECT_ONLY: мозг в режиме только защита; KILL: активен KILL."""
+    def _entry_mode(self, agent_id, ctx):
+        """Режим входа entry_scout -> "paper"|"testnet"|"live" или None (вход запрещён). Режим задаёт день платформы (state/control/platform.json);
+        он должен быть торговым, входить в modes агента (agents.json) и совпадать с режимом исполнителя из досье. По умолчанию у агента api только paper:
+        live возможен лишь когда владелец добавил "live" в modes и включил торговый флаг дня (его проверяет шлюз: E_TRADING_*). Правила входа одинаковы."""
         ctx = ctx or {}
-        modes = (((self.agents.get(agent_id) or {}).get("limits") or {}).get("modes"))
-        if modes != ["paper"] or swap.day_mode(self.root) != "paper" or ctx.get("exec_mode") not in (None, "paper"):
+        modes = (((self.agents.get(agent_id) or {}).get("limits") or {}).get("modes")) or []
+        dm = swap.day_mode(self.root)
+        if dm not in entryplan.MODES or dm not in modes or ctx.get("exec_mode") not in (None, dm):
+            return None
+        return dm
+
+    def _entry_block(self, agent_id, ctx):
+        """Жёсткие запреты entry_scout в коде (не зависят от ответа модели) -> код блокировки или None. NOT_PAPER: режим дня не разрешён агенту (день не торговый,
+        режима нет в modes агента или исполнитель в другом режиме); PROTECT_ONLY: мозг в режиме только защита; KILL: активен KILL."""
+        ctx = ctx or {}
+        if self._entry_mode(agent_id, ctx) is None:
             return "NOT_PAPER"
         if self.health.protect_on or ctx.get("protect"):
             return "PROTECT_ONLY"
@@ -1016,14 +1026,17 @@ class Runner(object):
                     return None
             note = "%s | пропуск %s" % (why, obj.get("skip_code") or "other")
             rec = ideas.add_idea(sym, w["side"], note[:300], level=w["level"], stop=w["stop"], tp=w["tp"], tag=w.get("setup") if w.get("setup") != "none" else None,
-                                 status="watching", src="entry_scout", root=self.root, now=self.clock(), ttl_h=self.WATCH_TTL_H, mode="paper")
+                                 status="watching", src="entry_scout", root=self.root, now=self.clock(), ttl_h=self.WATCH_TTL_H, mode=ctx.get("mode") or "paper")
             return rec["id"]
         except Exception:
             return None
 
     def _execute_entry(self, role, obj, job, agent_id, meta, ctx, llm, meter, assign):
-        """entry/1: skip -> запись; propose -> план tb.plan/1 (режим paper жёстко) через submit_plan шлюза. Размер/плечо считает исполнитель (guard), Gate отклонит лишнее."""
+        """entry/1: skip -> запись; propose -> план tb.plan/1 (режим ставит код: день платформы в границах modes агента) через submit_plan шлюза.
+        Размер/плечо считает исполнитель (guard), Gate отклонит лишнее, live дополнительно требует торгового флага дня (шлюз)."""
         why = validate.redact(obj["why"], 200)
+        mode = self._entry_mode(agent_id, ctx)
+        ctx = dict(ctx, mode=mode or "paper")
         if obj["decision"] == "skip":
             iid = self._watch_idea(obj, job, ctx, why)
             self._journal(job, role, agent_id, obj, "note", "SKIP", why + (" | идея %s" % iid if iid else ""), meta, llm, meter, assign)

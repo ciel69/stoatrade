@@ -125,6 +125,42 @@ class EntrySchema(unittest.TestCase):
         self.assertIn("STOP_TIGHT", check(propose(stop=144.5, tp=[148.2, 150.5]))[1])          # 0.34% от уровня 145.0
         self.assertNotIn("STOP_TIGHT", check(propose(stop=144.2, tp=[148.2, 150.5]))[1])       # 0.55%
 
+    def test_stop_floor_is_two_round_trip_costs(self):
+        """Стоп не ближе двух издержек круга: при cost_rt_pct 0.24 пол 0.48% (разбор 2026-11-01: стопы 0.23-0.4% на BTC/ETH отдавали 0.6-1R комиссиям).
+        Без издержек в досье пол прежний (1.5 ATR). Кандидаты считают тот же пол."""
+        b = with_brief(session={"id": "S-1", "type": "intraday", "min_rr": 1.0, "max_stop_pct": 3.0, "cost_rt_pct": 0.24})
+        codes = check(propose(stop=144.4, tp=[148.2, 150.5]), brief=b)[1]                     # 0.41% от уровня 145.0: выше 1.5 ATR, ниже двух издержек
+        self.assertIn("STOP_TIGHT", codes)
+        self.assertTrue(any(x == "STOP_PCT:0.41_MIN:0.48" for x in codes), codes)
+        self.assertNotIn("STOP_TIGHT", check(propose(stop=144.3, tp=[148.2, 150.5]), brief=b)[1])   # 0.48%
+        self.assertNotIn("STOP_TIGHT", check(propose(stop=144.4, tp=[148.2, 150.5]))[1])             # без cost_rt_pct: пол 0.375%
+        ctx = validate.entry_context(b, EV)
+        self.assertAlmostEqual(validate.stop_floor_pct(ctx), 0.48)
+        self.assertAlmostEqual(validate.stop_floor_pct({"a5_pct": 0.25, "spread_bps": 2.0, "cost_rt_pct": None}), 0.375)
+        # лимитный вход (maker): издержки круга 0.18% -> пол 0.36%, scalp с узким стопом остаётся возможен лимитом
+        b["session"]["cost_rt_maker_pct"] = 0.18
+        self.assertIn("STOP_TIGHT", check(propose(stop=144.4, tp=[148.2, 150.5]), brief=b)[1])                       # 0.41% по рынку: мало
+        self.assertNotIn("STOP_TIGHT", check(propose(stop=144.4, tp=[148.2, 150.5], entry_type="limit"), brief=b)[1])   # 0.41% лимитом: проходит
+        self.assertAlmostEqual(validate.stop_floor_pct(validate.entry_context(b, EV), "limit"), 0.375)        # пол 1.5 ATR (0.375%) выше пола по maker-издержкам (0.36%)
+
+    def test_candidates_use_limit_entry_for_stop_between_cost_floors_and_skip_targets_under_1r(self):
+        """Кандидат со стопом между полом maker и полом taker получает entry_type limit; цели ближе 1R от худшей цены входа не берутся."""
+        b = copy.deepcopy(SCAN_BRIEF)
+        b["session"] = {"id": "S-1", "type": "day", "cost_rt_pct": 0.24, "cost_rt_maker_pct": 0.18,
+                        "horizons": {"intraday": {"max_stop_pct": 3.0, "min_rr": 1.5}, "swing": {"max_stop_pct": 15.0, "min_rr": 2.0}}}
+        b["struct"]["s"]["SOL"].update(res=[[145.5, 0.2, 0.1, "s5m"], [150.0, 3.3, 1.8, "wh"]], sup=[[144.4, -0.6, 0.3, "s1h"]])      # 145.5: 0.3R от входа, не цель
+        b["levels"]["SOL"]["swing_5m"] = [145.0]
+        b["recent"][0]["d"]["range_5m_pct"] = 0.3
+        out = cands.candidates(b, "SOL") or []
+        row = next(r for r in out if r["side"] == "long" and r["level"] == 145.0)
+        self.assertEqual(row.get("entry_type"), "limit", row)                                      # стоп 0.41% < 0.48% по рынку, >= 0.36% лимитом
+        self.assertTrue(all(t >= 145.2 + 1.0 * (145.2 - row["stop"]) - 1e-9 for t in row["tp"]), row)
+        self.assertNotIn(145.5, row["tp"])
+        o = propose(side="long", horizon=row["horizon"], level=row["level"], stop=row["stop"], tp=row["tp"], entry_type="limit")
+        self.assertEqual(check(o, brief=b)[1], [], row)
+        b["session"].pop("cost_rt_maker_pct")                                                       # без maker-издержек пол один: кандидата с таким стопом нет
+        self.assertFalse([r for r in cands.candidates(b, "SOL") or [] if r["side"] == "long" and r["level"] == 145.0 and r.get("ok")])
+
     def test_stop_wide_measured_like_executor(self):
         """Стоп мерится и от цены при решении (ref_price шлюза), не только от уровня: PENDLE 2026-10-31, 0.89% от цены при 0.8% scalp -> E_STOP_PCT у шлюза."""
         b = with_brief(session={"id": "S-1", "type": "scalp", "min_rr": 1.0, "max_stop_pct": 0.8, "cost_rt_pct": 0.24})
@@ -226,6 +262,14 @@ class EntryPlanBuild(unittest.TestCase):
         p2, errs, _w, ready = plan_cli.precheck(plan, time.time())
         if ready:
             self.assertEqual([e for e in errs if e.get("severity") == "error"], [], errs)
+
+    def test_full_size_score_at_aggressive_levels(self):
+        """Уровни 4-5: risk.score = 1.0 (guard берёт полный бюджет риска), на 1-3 score = conf модели (0.5 + 0.5*conf у guard)."""
+        self.assertEqual(entryplan.build(propose(conf=0.6), {"session_type": "intraday", "px": 145.2, "risk_level": 3})["risk"]["score"], 0.6)
+        self.assertEqual(entryplan.build(propose(conf=0.6), {"session_type": "intraday", "px": 145.2, "risk_level": 4})["risk"]["score"], 1.0)
+        self.assertEqual(entryplan.build(propose(conf=0.6), {"session_type": "intraday", "px": 145.2})["risk"]["score"], 0.6)
+        self.assertEqual(entryplan.build(propose(), {"session_type": "intraday", "px": 145.2, "mode": "live"})["mode"], "live")
+        self.assertEqual(entryplan.build(propose(), {"session_type": "intraday", "px": 145.2, "mode": "observe"})["mode"], "paper")   # неторговый режим -> paper
 
     def test_no_confirm_plan_has_waiver_and_zone(self):
         o = propose(confirm="none", zone={"low": 144.9, "high": 145.1}, size_mult=0.5, tags=["no-confirm"])
@@ -428,12 +472,32 @@ class Scout(BrainBase):
             self.assertEqual(self.gw.tool_calls("submit_plan"), [], mode)
             self.assertEqual(self.factory.calls(), 0, mode)                   # до модели не дошло
 
-    def test_agent_with_live_right_blocked(self):
+    def test_agent_with_live_right_trades_paper_day_as_paper(self):
+        """Право live у агента не запирает paper-день: план paper. Режим плана = режим дня в границах modes агента (указание владельца 2026-11-01)."""
         self.agents["api"]["limits"]["modes"] = ["paper", "live"]
         self.w("config/agents.json", {"agents": self.agents})
         r, j, s = self.run_job(propose(event_seq=1))
+        c = self.gw.tool_calls("submit_plan")
+        self.assertEqual(len(c), 1)
+        self.assertEqual(c[0]["args"]["plan"]["mode"], "paper")
+
+    def test_live_day_with_live_right_builds_live_plan(self):
+        """День live + право live у агента + исполнитель live: план mode=live уходит в шлюз (торговый флаг дня и лимиты проверяет шлюз). Без права: NOT_PAPER."""
+        self.set_platform(mode="live")
+        self.gw.brief["system"]["exec"]["mode"] = "live"
+        r, j, s = self.run_job(propose(event_seq=1), jid="J-l0")
         self.assertEqual(j["result"]["roles"][0]["code"], "NOT_PAPER")
-        self.assertEqual(self.gw.tool_calls("submit_plan"), [])
+        self.agents["api"]["limits"]["modes"] = ["paper", "live"]
+        self.w("config/agents.json", {"agents": self.agents})
+        self.gw.calls[:] = []
+        r, j, s = self.run_job(propose(event_seq=1), jid="J-l1")
+        c = self.gw.tool_calls("submit_plan")
+        self.assertEqual(len(c), 1, j["result"])
+        self.assertEqual(c[0]["args"]["plan"]["mode"], "live")
+        self.gw.brief["system"]["exec"]["mode"] = "paper"                      # исполнитель не в режиме дня: вход запрещён
+        self.gw.calls[:] = []
+        r, j, s = self.run_job(propose(event_seq=1), jid="J-l2")
+        self.assertEqual(j["result"]["roles"][0]["code"], "NOT_PAPER")
 
     def test_brief_exec_mode_live_blocks_execution(self):
         self.gw.brief["system"]["exec"]["mode"] = "live"
@@ -552,7 +616,7 @@ class RoleFiles(unittest.TestCase):
 
     def test_prompt_mentions_core_rules(self):
         p = roles_runtime.load(ROOT).get("entry_scout").system
-        for w in ("size_mult", "no-confirm", "blackout", "paper ONLY", "skip"):
+        for w in ("size_mult", "no-confirm", "blackout", "min_net_day_usdt", "skip"):
             self.assertIn(w, p)
 
 
@@ -665,7 +729,7 @@ class Candidates(unittest.TestCase):
         """Ближайший уровень дальше 1.5R: первая цель на 1.5R от худшей цены входа, уровень становится второй целью (если RR горизонта проходит)."""
         b = copy.deepcopy(SCAN_BRIEF)
         b.update(copy.deepcopy(self.B))
-        b["struct"]["s"]["SOL"].update(res=[[150.0, 3.3, 1.8, "wh"]], sup=[[144.4, -0.6, 0.3, "s1h"]])
+        b["struct"]["s"]["SOL"].update(res=[[150.0, 3.3, 1.8, "wh"]], sup=[[144.1, -0.8, 0.4, "s1h"]])      # стоп 0.65% от уровня: не ближе двух издержек 0.56%
         b["levels"]["SOL"]["swing_5m"] = [145.0]
         b["recent"][0]["d"]["range_5m_pct"] = 0.3
         out = cands.candidates(b, "SOL") or []

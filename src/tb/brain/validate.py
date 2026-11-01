@@ -35,6 +35,21 @@ ENTRY_PRECHECK_CODES = ("WIDE_RANGE", "DAY_NO_PLANS", "NO_SLOTS", "ROOM_CLOSED",
 ENTRY_SIZE_MULT_MAX = 0.5                           # потолок size_mult, который вообще может назвать модель (только уменьшение)
 ENTRY_MIN_STOP_PCT = 0.1                            # стоп не ближе 0.1% к уровню входа (и не ближе ENTRY_STOP_ATR_MULT*ATR(5м) и трёх спредов)
 ENTRY_STOP_ATR_MULT = 1.5                           # стоп не ближе 1.5 ATR(5м): стоп в одну свечу выбивало шумом за минуты (разбор paper 2026-10-29/30: LIT, USELESS, ERA, XPL)
+ENTRY_STOP_COST_MULT = 2.0                          # стоп не ближе двух издержек круга (session.cost_rt_pct): при стопе 0.23-0.4% комиссии = 0.6-1R, 8 таких сделок BTC/ETH/SOL
+                                                    # 2026-10-29..11-01 дали -3.2R в факте и во всех контрфактах (комиссии 1.96 USDT при PnL -1.64); Bybit taker 0.24% -> пол 0.48%,
+                                                    # лимитный вход (maker, session.cost_rt_maker_pct 0.18%) -> пол 0.35%: scalp остаётся возможен, но только лимитом
+
+
+def stop_floor_pct(ctx, entry_type=None):
+    """Пол ширины стопа от уровня в %: 0.1%, 1.5 ATR(5м), три спреда и две издержки круга (одна формула для validate и cands).
+    entry_type="limit": издержки круга с maker-входом (cost_rt_maker_pct), если досье их даёт."""
+    ctx = ctx or {}
+    cost = ctx.get("cost_rt_pct") or 0.0
+    if entry_type == "limit" and ctx.get("cost_rt_maker_pct"):
+        cost = min(cost, ctx["cost_rt_maker_pct"])
+    return max(ENTRY_MIN_STOP_PCT, ENTRY_STOP_ATR_MULT * (ctx.get("a5_pct") or 0.0), 3.0 * (ctx.get("spread_bps") or 0.0) / 100.0, ENTRY_STOP_COST_MULT * cost)
+
+
 FADE_SETUPS = ("range_fade", "level_reject")        # входы против движения события
 CHASE_SETUP = "momentum_chase"                      # вход по рынку ПО импульсу события (указание владельца 2026-10-31: на высоком риске можно «прокатиться»)
 CHASE_MIN_LEVEL = 4                                 # только уровни риска 4-5 (guard проверяет то же через risk_levels setup_aggr)
@@ -307,6 +322,7 @@ def entry_context(brief, event=None):
     # пороги типа сессии и издержки круга из досье (те же, что у guard): без них остаются константы ENTRY_MIN_RR / ENTRY_MAX_STOP_PCT;
     # сессия-день: пороги по горизонтам (session.horizons), горизонт называет модель в ответе
     ctx["min_rr"], ctx["max_stop_pct"], ctx["cost_rt_pct"] = _num(ses.get("min_rr")), _num(ses.get("max_stop_pct")), _num(ses.get("cost_rt_pct"))
+    ctx["cost_rt_maker_pct"] = _num(ses.get("cost_rt_maker_pct"))      # круг с maker-входом: пол стопа для лимитного входа (stop_floor_pct)
     hz = ses.get("horizons") if isinstance(ses.get("horizons"), dict) else None
     ctx["horizons"] = {k: {kk: _num(v.get(kk)) for kk in ("max_stop_pct", "min_rr")} for k, v in hz.items() if k in SESSION_ORDER and isinstance(v, dict)} if hz else None
     # рамка плана дня (brief.day из state/control/day_limits.json): допустимые сетапы, монеты избегать, число новых планов, потолок размера
@@ -608,9 +624,9 @@ def _entry(o, ctx):
             errs += ["RR_LOW", "RR_NET:%.2f_NEED:%.2f" % (net, min_rr)]
     elif rr < ENTRY_MIN_RR - 1e-9:
         errs += ["RR_LOW", "RR_GROSS:%.2f_NEED:%.2f" % (rr, ENTRY_MIN_RR)]
-    floor = max(ENTRY_MIN_STOP_PCT, ENTRY_STOP_ATR_MULT * (ctx.get("a5_pct") or 0.0), 3.0 * (ctx.get("spread_bps") or 0.0) / 100.0)
+    floor = stop_floor_pct(ctx, o.get("entry_type"))
     if dist < floor:
-        errs += ["STOP_TIGHT", "STOP_PCT:%.2f_MIN:%.2f" % (dist, floor)]      # стоп не вплотную: не ближе 1.5 ATR(5м), трёх спредов и 0.1%
+        errs += ["STOP_TIGHT", "STOP_PCT:%.2f_MIN:%.2f" % (dist, floor)]      # стоп не вплотную: не ближе 1.5 ATR(5м), трёх спредов, двух издержек круга и 0.1%
     surge, ret5 = ctx.get("surge_x"), ctx.get("ret_5m")
     if o.get("setup") == CHASE_SETUP:
         errs += chase_errors(o, ctx, sign)

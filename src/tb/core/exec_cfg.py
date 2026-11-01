@@ -20,7 +20,8 @@ DEFAULTS = {
     "watch_symbols": [],
     "pyramid": {"enabled": False, "min_r": 1.0, "max_adds": 1, "max_add_risk_frac": 1.0, "min_gap_s": 60},
     "stop_moves": {"min_interval_s": 5, "min_step_ticks": 2, "min_step_r": 0.1, "min_gap_bps_from_price": 8, "max_moves_per_hour": 30},      # min_step_r: ход стопа по правилу не меньше 0.1R
-    # автозащита прибыли: исполнитель сам подтягивает стоп у любой позиции (в том числе без правил manage в плане); только в сторону прибыли
+    # автозащита прибыли: исполнитель сам подтягивает стоп у любой позиции (в том числе без правил manage в плане); только в сторону прибыли.
+    # be_r 0.7 проверен контрфактом по минутным свечам (31 paper-сделка 29.10-01.11): 0.7R -0.79R, 1.0R -1.28R, без безубытка -2.99R, без защиты -6.11R.
     "auto_protect": {"enabled": True, "be_r": 0.7, "trail_activate_r": 1.0, "trail_lock_frac": 0.5, "min_profit_r": 0.2, "stop_slip_bps": 5},
     # сторож позиции (logic/watch.py): будит мозг (position_manager) по STALLED / FLOW_TURN. paper_only=true: пока только бумажные позиции.
     # TODO(live): если на paper сторож окажется жизнеспособным (число пробуждений и результат решений мозга, ./tb exp stats), включить для live: paper_only=false (решение владельца)

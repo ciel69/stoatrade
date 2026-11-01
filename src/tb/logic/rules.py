@@ -445,7 +445,9 @@ def _mode_of(do):
 
 def _auto_rules(limits):
     """Правила автозащиты прибыли (exec_limits.auto_protect), действуют у каждой позиции независимо от plan.manage: безубыток с комиссиями при be_r,
-    затем стоп удерживает trail_lock_frac максимальной прибыли после trail_activate_r. Без секции в limits (тесты, старые конфиги) пусто."""
+    затем стоп удерживает trail_lock_frac максимальной прибыли после trail_activate_r. Без секции в limits (тесты, старые конфиги) пусто.
+    Контрфакт 2026-11-01 по минутным свечам (31 paper-сделка): безубыток при 0.7R лучше, чем при 1.0R или после первой цели (ZAMA, LIT, SOPH после
+    безубытка вернулись к стопу); порог не поднимать без новой выборки."""
     ap = (limits or {}).get("auto_protect")
     if not isinstance(ap, dict) or not ap.get("enabled"):
         return []

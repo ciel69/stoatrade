@@ -47,7 +47,7 @@ class Cli(W.Base):
         self.assertIn("ПРЕДЛОЖЕНО", out)
         self.assertIn("подтвердить владельцу", out)
         self.assertIn("потолки", out)
-        self.assertEqual(out.count("ПРЕДЛОЖЕНО"), 5)      # заголовок + уровни 1, 2, 4, 5
+        self.assertEqual(out.count("ПРЕДЛОЖЕНО"), 3)      # заголовок + уровни 1, 2 (4-5 подтверждены владельцем 2026-11-01)
 
     def test_set_requires_phrase(self):
         code, out, err = self.run_cli("level", "set", "2")
@@ -66,9 +66,10 @@ class Cli(W.Base):
     def test_set_4_needs_every_warning_and_ack(self):
         code, out, _ = self.run_cli("level", "set", "5")
         self.assertEqual(code, 2)
-        for wid in ("W_TRADE_LOSS", "W_DAY_LOSS", "W_PYRAMID", "W_CARRY", "W_NO_CONFIRM", "W_UNCONFIRMED"):
+        for wid in ("W_TRADE_LOSS", "W_DAY_LOSS", "W_PYRAMID", "W_CARRY", "W_NO_CONFIRM"):
             self.assertIn(wid, out)
-        self.assertIn("5%", out)
+        self.assertNotIn("W_UNCONFIRMED", out)                  # уровень 5 подтверждён владельцем 2026-11-01
+        self.assertIn("8%", out)                                 # риск сделки уровня 5: 7.5%, в сообщении округление до целого
         self.assertIn("БЕЗ вашего подтверждения", out)
         code, out, err = self.run_cli("level", "set", "4", "--confirm", self.phrase(4))
         self.assertEqual(code, 2)

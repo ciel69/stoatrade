@@ -10,6 +10,7 @@ from tb.brain import validate as V
 CLUSTER_PCT = 0.15          # уровни ближе этого (% цены) считаются одним
 STOP_BUF_FRAC = 0.1         # стоп за уровнем на 0.1 ATR(5м) (не вплотную к уровню)
 TP1_MAX_R = 1.5             # первая цель не дальше 1.5R: ближайший уровень часто дальше хода цены (разбор 2026-11-01: ходы 1.4-2.1R возвращались в безубыток)
+TP1_MIN_R = 1.0             # первая цель не ближе 1R: уровень в 0.2-0.6R (SOL 95.13, SOPH 2026-11-01) отдавал половину позиции за комиссию
 SCALP_MIN_TP_COSTS = 3.0     # scalp только если первая цель дальше трёх издержек круга: иначе комиссии съедают сделку (BTC 2026-10-31: -0.655 USDT, из них ~0.56 комиссии)
 CHASE_ZONE_PCT = 0.3        # momentum_chase: зона входа ±0.3% у текущей цены (вход по рынку сейчас)
 CHASE_STOP_ATR = 0.25       # стоп за началом импульсной свечи: её диапазон плюс четверть ATR(5м)
@@ -96,7 +97,8 @@ def candidates(brief, sym, ctx=None):
             ch["n"] = 1
         return [ch] if ch else None
     a5 = ctx.get("a5_pct") or 0.0
-    floor = max(V.ENTRY_MIN_STOP_PCT, V.ENTRY_STOP_ATR_MULT * a5, 3.0 * (ctx.get("spread_bps") or 0.0) / 100.0)
+    floor_taker = V.stop_floor_pct(ctx)
+    floor = V.stop_floor_pct(ctx, "limit")                 # пол для лимитного входа (maker) не выше пола по рынку: стоп между ними требует лимитный вход
     max_dist = V.ENTRY_MAX_LEVEL_DIST_LOOSE_PCT if V._loose(ctx) else V.ENTRY_MAX_LEVEL_DIST_PCT
     buf = STOP_BUF_FRAC * a5 / 100.0
     dsm = ctx.get("day_size_mult")
@@ -114,12 +116,14 @@ def candidates(brief, sym, ctx=None):
             if (px - stop) * sign <= 0:
                 continue                                   # цена уже за стопом (validate: STOP_WRONG_SIDE)
             ref = max(L, px) if sign > 0 else min(L, px)
-            tps = sorted((t for t in lv if (t - ref) * sign > 0), key=lambda t: abs(t - ref))[:2]      # цели за худшей ценой входа: validate не даст TP_REACHED
+            risk = abs(ref - stop)
+            tps = sorted((t for t in lv if (t - ref) * sign >= TP1_MIN_R * risk), key=lambda t: abs(t - ref))[:2]      # цели за худшей ценой входа и не ближе 1R (комиссия съедает ближнюю цель)
             if not tps:
                 continue
             stop_pct = abs(L - stop) / L * 100.0
-            wide = V.exec_stop_pct(L, px, stop)
-            cap = ref + sign * TP1_MAX_R * abs(ref - stop)
+            entry_type = "limit" if stop_pct < floor_taker else None      # узкий стоп окупается только maker-входом (круг 0.18% вместо 0.24%)
+            wide = V.exec_stop_pct(L, px, stop, entry_type)
+            cap = ref + sign * TP1_MAX_R * risk
             variants = ([[_px(cap), tps[0]]] if (tps[0] - cap) * sign > 0 else []) + [tps]      # сначала первая цель на 1.5R (вторая: уровень), если она проходит порог RR горизонта
             pick = None
             for v in variants:
@@ -138,8 +142,8 @@ def candidates(brief, sym, ctx=None):
                    "rr_net": net, "horizon": h}
             if size_mult is not None:
                 row["size_mult"] = size_mult
-            if h == "scalp":
-                row["entry_type"] = "limit"                # maker у уровня после свечи: круг ~0.07% вместо 0.24%
+            if h == "scalp" or entry_type == "limit":
+                row["entry_type"] = "limit"                # maker у уровня после свечи: дешевле круг; обязателен для scalp и для стопа уже пола по рынку
             if ctx.get("range_5m_pct") is not None and ctx["range_5m_pct"] > stop_pct and not V._loose(ctx):
                 why = why or "range_gt_stop"
             if why:
@@ -171,7 +175,7 @@ def chase(ctx, lv):
     side = "long" if sign > 0 else "short"
     a5 = ctx.get("a5_pct") or 0.0
     r5 = ctx.get("range_5m_pct") or V.CHASE_RANGE_ATR * a5
-    floor = max(V.ENTRY_MIN_STOP_PCT, V.ENTRY_STOP_ATR_MULT * a5, 3.0 * (ctx.get("spread_bps") or 0.0) / 100.0)
+    floor = V.stop_floor_pct(ctx)
     stop_pct = max(r5 + CHASE_STOP_ATR * a5, floor)
     stop = _px(px * (1 - sign * stop_pct / 100.0))
     risk = abs(px - stop)
