@@ -1,7 +1,7 @@
 {
   "version": 1,
   "_comment": "Плоскость управления (WP12). Недостающие ключи берутся из tb.control.protocol.DEFAULTS. Ослаблять защиту можно только правкой этого файла владельцем; из дашборда он не меняется.",
-  "auth": {"mode": "open_local", "remember_days": 30},
+  "auth": {"mode": "open_local", "remember_days": 30, "dash2_full": true},
   "session_ttl_min": 60,
   "command_ttl_s": 120,
   "nonce_ttl_s": 60,
