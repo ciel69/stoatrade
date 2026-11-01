@@ -1,4 +1,4 @@
-import type { ProfileRow, ProviderRow, RoleModel, RolesSnapshot } from '../model/types'
+import type { ExchangeRow, ProfileRow, ProviderRow, RoleModel, RolesSnapshot } from '../model/types'
 
 /** Профили для отладки без сервера (?edit=mock): одно семейство локальных и облачных, один с выключенным провайдером, один без допуска к live. */
 export const MOCK_PROFILES: ProfileRow[] = [
@@ -30,6 +30,13 @@ export const MOCK_PROVIDERS: ProviderRow[] = [
   },
 ]
 
+/** Биржи для отладки, если сервер своих не прислал: основная в бумаге, разрешённая с ключом тестовой сети, заготовка. */
+export const MOCK_EXCHANGES: ExchangeRow[] = [
+  { id: 'bybit', name: 'Bybit', enabled: true, mode: 'paper', implemented: true, active: true, allowed: true, note: null, alive: true, creds: ['read', 'trade', 'testnet'], max_open_positions: 3 },
+  { id: 'bitget', name: 'Bitget', enabled: true, mode: 'paper', implemented: true, active: false, allowed: true, note: null, alive: null, creds: ['read'], max_open_positions: null },
+  { id: 'okx', name: 'OKX', enabled: false, mode: null, implemented: false, active: false, allowed: false, note: 'заготовка', alive: null, creds: [], max_open_positions: null },
+]
+
 export type RoleMock = 'edit' | 'live'
 
 const asModel = (p: ProfileRow, old?: RoleModel | null): RoleModel => ({
@@ -47,6 +54,7 @@ export function mockSnapshot(s: RolesSnapshot, kind: RoleMock): RolesSnapshot {
     ...s,
     profile_list: profiles,
     provider_list: s.provider_list?.length ? s.provider_list : MOCK_PROVIDERS,
+    exchange_list: MOCK_EXCHANGES,        // отладка: набор бирж всегда один и тот же, чтобы сценарии (основная, заготовка, без ключа) повторялись
     mode: kind === 'live' ? 'live' : s.mode,
     roles: s.roles.map((r) => ({ ...r, target: r.target ?? `${r.team ?? 'shared'}.${r.role}` })),
   }
@@ -64,6 +72,17 @@ export function mockProvider(s: RolesSnapshot, id: string, to: { enabled?: boole
         limits: to.limits ?? p.limits,
         cred: to.keyPresent === undefined ? p.cred : { ...p.cred, present: to.keyPresent },
       }
+    }),
+  }
+}
+
+/** Что сделал бы сервер после действия над биржей (отладка): сделать основной (остальные перестают быть основными) или сменить режим. */
+export function mockExchange(s: RolesSnapshot, id: string, to: { active?: true; mode?: string }): RolesSnapshot {
+  return {
+    ...s,
+    exchange_list: (s.exchange_list ?? []).map((e) => {
+      if (to.active) return { ...e, active: e.id === id }
+      return e.id === id && to.mode !== undefined ? { ...e, mode: to.mode } : e
     }),
   }
 }

@@ -173,11 +173,33 @@ export const useControlStore = defineStore('control', () => {
     }
   }
 
+  /** Отладка настроек (?edit=mock): платформа остановлена (running=false, режим paper) или идёт (режим testnet), уровень риска 3. Только в mocked-режиме. */
+  let platformMock: boolean | null = null
+  function mockPlatform(running: boolean): void {
+    if (platformMock === running) return        // повторный вызов (блок и панель) не сбрасывает уже «применённые» значения
+    platformMock = running
+    mock(running ? 'done' : 'pick')
+    if (ctl.value) ctl.value = { ...ctl.value, platform: { ...ctl.value.platform, mode: running ? 'testnet' : 'paper' } }
+  }
+
+  /** Отладка: «сервер» применяет смену уровня или режима через несколько секунд, как обновляется тема ctl. */
+  function mockApply(p: { level?: number; mode?: string }, delayMs = 2500): void {
+    if (!mocked) return
+    setTimeout(() => {
+      if (!ctl.value) return
+      ctl.value = {
+        ...ctl.value,
+        risk: p.level !== undefined ? { level: p.level, name: null } : ctl.value.risk,
+        platform: p.mode !== undefined ? { ...ctl.value.platform, mode: p.mode } : ctl.value.platform,
+      }
+    }, delayMs)
+  }
+
   /** Открыть окно: показывает текущее состояние, а не прошлый итог. */
   function openDialog(): void {
     if (phase.value === 'done' || phase.value === 'failed') reset()
     dialogOpen.value = true
   }
 
-  return { ctl, hello, dialogOpen, openDialog, phase, mode, challenge, accepted, error, final, pending, lastAction, button, start, check, toggleAccept, begin, stopDay, reset, mock, applyCtl, applyHello, applyResult, applyFinal }
+  return { ctl, hello, dialogOpen, openDialog, phase, mode, challenge, accepted, error, final, pending, lastAction, button, start, check, toggleAccept, begin, stopDay, reset, mock, mockPlatform, mockApply, applyCtl, applyHello, applyResult, applyFinal }
 })

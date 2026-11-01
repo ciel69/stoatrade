@@ -6,6 +6,8 @@ export interface ActionSpec {
   args: Record<string, unknown>
   title: string
   what?: string
+  /** Сколько ждать итог принятой команды (мс), если дольше обычных 60 с (запуск дня идёт до минуты и больше). */
+  timeoutMs?: number
   onDone?: () => void
 }
 

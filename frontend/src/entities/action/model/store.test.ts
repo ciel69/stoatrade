@@ -212,4 +212,61 @@ describe('action store', () => {
     handlers.get('ctl_result')!(msg({ id, kind: 'challenge', action: 'kill.set', ok: true, code: 'OK', msg: '', data: RISKY }))
     expect(s.phase).toBe('idle')
   })
+
+  const DAY = { action: 'day.start', args: { mode: 'paper', session: 'day' }, title: 'Старт торгового дня', timeoutMs: 180_000 }
+  const DAY_WARN: Challenge = { danger: false, nonce: 'D1', phrases: [], warnings: [{ id: 'W1', msg: 'мало истории' }], pre_amber: [{ id: 'P1', name: 'Мозг', msg: 'запасной' }], min_delay: 0, expires_in: 90 }
+
+  it('запуск дня: рискованный поток подставляет accepted и allow_amber из challenge, фразы не вводятся', () => {
+    const s = setup()
+    expect(s.run(DAY)).toBe(true)
+    answerChallenge(DAY_WARN)
+    expect(s.phase).toBe('confirm')
+    s.accept()
+    expect(last()).toMatchObject({ kind: 'command', action: 'day.start', nonce: 'D1', args: { mode: 'paper', session: 'day', accepted: ['W1'], allow_amber: true } })
+    expect(s.riskyRun).toBe(true)
+  })
+
+  it('запуск дня без предупреждений уходит сразу, без диалога', () => {
+    const s = setup()
+    s.run(DAY)
+    answerChallenge({ danger: false, nonce: 'D2', phrases: [], warnings: [], pre_amber: [] })
+    expect(s.phase).toBe('sending')
+    expect(last()).toMatchObject({ args: { mode: 'paper', session: 'day', accepted: [], allow_amber: false } })
+    expect(s.riskyRun).toBe(false)
+  })
+
+  it('запуск дня ждёт итог дольше обычных 60 секунд', () => {
+    const s = setup()
+    s.run(DAY)
+    answerChallenge({ danger: false, nonce: 'D3', warnings: [] })
+    answerCommand()
+    vi.advanceTimersByTime(FINAL_TIMEOUT_MS + 1000)
+    expect(s.phase).toBe('waiting')
+    vi.advanceTimersByTime(130_000)
+    expect(s.phase).toBe('failed')
+    expect(s.error).toMatch(/180 секунд/)
+  })
+
+  it('запуск дня доступен и без расширенного режима, а смена риска нет', () => {
+    const s = useActionStore()
+    s.start()
+    handlers.get('hello')!(msg({ ctl: { enabled: true, csrf: 'tok', full: false, modes: ['day.start', 'day.stop'] } }))
+    expect(s.can('day.start')).toBe(true)
+    expect(s.can('risk.set')).toBe(false)
+  })
+
+  it('смена риска вниз: безрисковый поток, вверх: диалог с accepted', () => {
+    const s = setup()
+    s.run({ action: 'risk.set', args: { level: 2 }, title: 'Уровень риска 2' })
+    answerChallenge({ danger: false, nonce: 'R1', phrases: [], warnings: [] })
+    expect(s.riskyRun).toBe(false)
+    expect(last()).toMatchObject({ args: { level: 2, accepted: [] } })
+    answerCommand()
+    final(last().id)
+    s.run({ action: 'risk.set', args: { level: 5 }, title: 'Уровень риска 5' })
+    answerChallenge({ danger: true, nonce: 'R2', phrases: [], warnings: [{ id: 'W_RISK_UP', msg: 'шире' }], min_delay: 0 })
+    expect(s.phase).toBe('confirm')
+    s.accept()
+    expect(last()).toMatchObject({ args: { level: 5, accepted: ['W_RISK_UP'] }, nonce: 'R2' })
+  })
 })

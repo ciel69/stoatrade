@@ -1,6 +1,30 @@
 import { describe, expect, it } from 'vitest'
 import type { ChallengeData, CtlSnapshot } from '../model/types'
-import { acceptList, buttonKind, canStart, launchFill, litNodes, regionProgress, startArgs, stepRows } from './flow'
+import { acceptList, buttonKind, canBegin, canStart, dayArgs, dayWhat, launchFill, litNodes, regionProgress, startArgs, stepRows, warnCount } from './flow'
+
+describe('запуск дня через общий диалог', () => {
+  it('начинать можно, пока условия не блокируют и нет необратимой опасности; предупреждения не мешают', () => {
+    expect(canBegin(null)).toBe(false)
+    expect(canBegin({ blocked: true })).toBe(false)
+    expect(canBegin({ danger: true })).toBe(false)
+    expect(canBegin({ gates: [], warnings: [{ id: 'W1' }] })).toBe(true)
+    expect(canBegin({})).toBe(true)
+  })
+  it('аргументы только режим и сессия, accepted добавляет движок', () => {
+    expect(dayArgs('paper')).toEqual({ mode: 'paper', session: 'day' })
+    expect(dayArgs('observe')).not.toHaveProperty('accepted')
+  })
+  it('число предупреждений для подсказки в окне запуска', () => {
+    expect(warnCount(null)).toBe(0)
+    expect(warnCount({ warnings: [{ id: 'W1' }], pre_amber: [{ id: 'P1', name: 'Мозг', msg: 'запасной' }] })).toBe(2)
+  })
+  it('описание запуска по режимам человеческое', () => {
+    expect(dayWhat('paper')).toMatch(/виртуальные/)
+    expect(dayWhat('testnet')).toMatch(/тестовой бирже/)
+    expect(dayWhat('observe')).toMatch(/не открывает/)
+    expect(dayWhat('что-то')).toBe('Начнётся торговый день.')
+  })
+})
 
 const s = (name: string, ok: boolean | null) => ({ name, phase: 'start', ok, code: null })
 const REGIONS = [[0, 1, 8, 9], [2, 3, 10, 11], [4, 6, 12, 14], [5, 7, 13, 15]]

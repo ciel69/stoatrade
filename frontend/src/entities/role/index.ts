@@ -11,6 +11,9 @@ export {
 } from './lib/connect'
 export type { ConnectIssue } from './lib/connect'
 export {
+  EXCHANGE_MODES, activateArgs, activateBlock, activateEffect, activateLine, activateTitle, canSetMode, exchangeBlock, exchangeModeArgs, exchangeModeEffect, exchangeModeLine, exchangeModeTitle, exchangeReflects, keyNote,
+} from './lib/exchange'
+export {
   LIMIT_FIELDS, REFLECT_WAIT_MS, enableBlock, limitChanges, limitErrors, limitInput, limitText, limitValue, limitsArgs, limitsEqual, limitsWhat, parseLimit, providerReflects, resolveLimits, withLimits,
 } from './lib/provider'
 export type { Expect, LimitChange, LimitField, LimitKey, Limits, LimitsDraft, ParsedLimit } from './lib/provider'

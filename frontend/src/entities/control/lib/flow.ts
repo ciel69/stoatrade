@@ -107,6 +107,31 @@ export function canStart(ch: ChallengeData | null | undefined, accepted: Readonl
   return acceptList(ch).every((a) => accepted.has(a.id))
 }
 
+/** Можно ли начинать: условия не блокируют и нет необратимой опасности. Предупреждения принимаются в общем окне «Принимаю риски», а не здесь. */
+export function canBegin(ch: ChallengeData | null | undefined): boolean {
+  return !!ch && !ch.blocked && !ch.danger
+}
+
+/** Аргументы запуска дня для общего движка действий: принятые предупреждения (accepted, allow_amber) добавляет сам движок из challenge. */
+export function dayArgs(mode: string): { mode: string; session: string } {
+  return { mode, session: 'day' }
+}
+
+/** Сколько предупреждений и жёлтых проверок увидит владелец в окне подтверждения (0: окна не будет, день стартует сразу). */
+export function warnCount(ch: ChallengeData | null | undefined): number {
+  return acceptList(ch).length
+}
+
+/** Что произойдёт при запуске, по режиму: одна фраза для окна подтверждения. */
+export function dayWhat(mode: string): string {
+  const m: Record<string, string> = {
+    paper: 'Начнётся торговый день на бумаге: сделки виртуальные, реальных денег нет.',
+    testnet: 'Начнётся торговый день на тестовой бирже: она настоящая, но деньги там не настоящие.',
+    observe: 'Начнётся торговый день наблюдения: платформа смотрит рынок, сделок не открывает.',
+  }
+  return m[mode] ?? 'Начнётся торговый день.'
+}
+
 /** Аргументы команды старта: принятые предупреждения и признак принятия жёлтых проверок (как у старого дашборда). */
 export function startArgs(mode: string, ch: ChallengeData | null | undefined): { mode: string; session: string; accepted: string[]; allow_amber: boolean } {
   return {

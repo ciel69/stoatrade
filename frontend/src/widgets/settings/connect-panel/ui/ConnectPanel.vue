@@ -2,8 +2,11 @@
 import { computed } from 'vue'
 import { credText, credsText, ctxText, exchangeStatus, limitsText, modeText, permsWarning, priceText, providerIssues, roleLabel, rolesUsing, useRoleStore } from '@/entities/role'
 import { useActionStore } from '@/entities/action'
+import { useControlStore } from '@/entities/control'
 import { UiChip, UiDetail } from '@/shared/ui'
+import { useExchangeEdit } from '../model/useExchangeEdit'
 import { useProviderEdit } from '../model/useProviderEdit'
+import ExchangeEdit from './ExchangeEdit.vue'
 import ProviderKey from './ProviderKey.vue'
 import ProviderLimits from './ProviderLimits.vue'
 import ProviderSwitch from './ProviderSwitch.vue'
@@ -26,6 +29,8 @@ if (dbg && dbg.startsWith('mock') && !store.mocked) {
   action.mockEdit(dbg === 'mock-calm')
 }
 const edit = useProviderEdit(() => props.id)
+const xedit = useExchangeEdit(() => props.id)
+if (dbg && dbg.startsWith('mock')) useControlStore().mockPlatform(dbg === 'mock-run')
 const roles = computed(() => store.snapshot?.roles ?? [])
 const p = computed(() => (props.kind === 'provider' ? (store.snapshot?.provider_list ?? []).find((x) => x.id === props.id) ?? null : null))
 const e = computed(() => (props.kind === 'exchange' ? (store.snapshot?.exchange_list ?? []).find((x) => x.id === props.id) ?? null : null))
@@ -101,6 +106,8 @@ const verified = (v: boolean | string | null | undefined) => (v === true ? 'пр
           <div><dt>Лимит открытых позиций</dt><dd>{{ e.max_open_positions ?? '–' }}</dd></div>
         </dl>
       </section>
+      <ExchangeEdit v-if="xedit.canEdit.value && e.implemented" :edit="xedit" />
+      <p v-else-if="e.implemented" class="locked">Изменение бирж выключено: включите расширенное управление (auth.dash2_full в config/control.json).</p>
       <section v-if="e.note" class="sec">
         <h4>Примечание</h4>
         <p class="meta">{{ e.note }}</p>

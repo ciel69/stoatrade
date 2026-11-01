@@ -17,15 +17,26 @@ export const ACCEPT_KEYS: Readonly<Record<string, { accepted: boolean; allowAmbe
 
 export const UNAVAILABLE_TEXT = 'Это действие здесь пока недоступно: владелец должен включить расширенное управление дашборда.'
 export const NO_CTL_TEXT = 'Управление из этого дашборда недоступно.'
-export const TIMEOUT_TEXT = 'Платформа не ответила за 60 секунд, поэтому неизвестно, выполнено ли действие. Проверьте состояние платформы и только потом повторяйте.'
+export const timeoutText = (ms: number): string => `Платформа не ответила за ${Math.round(ms / 1000)} секунд, поэтому неизвестно, выполнено ли действие. Проверьте состояние платформы и только потом повторяйте.`
+export const TIMEOUT_TEXT = timeoutText(60_000)
 /** Сколько ждём итог принятой команды. */
 export const FINAL_TIMEOUT_MS = 60_000
 
-/** Действие доступно: управление включено, расширенный режим включён и действие есть в списке hello.modes. */
+/** Действия безопасного набора: сервер даёт их и без расширенного режима (paper, testnet, observe; остановка дня мягкая). */
+export const BASE_ACTIONS: ReadonlySet<string> = new Set(['day.start', 'day.stop'])
+
+/** Действие доступно: управление включено и действие есть в списке hello.modes; кроме безопасного набора нужен ещё расширенный режим. */
 export function unavailableReason(hello: ActionHello, action: string): string | null {
   if (!hello.enabled || !hello.csrf) return NO_CTL_TEXT
-  if (hello.full !== true || !(hello.modes ?? []).includes(action)) return UNAVAILABLE_TEXT
+  if (!(hello.modes ?? []).includes(action)) return UNAVAILABLE_TEXT
+  if (hello.full !== true && !BASE_ACTIONS.has(action)) return UNAVAILABLE_TEXT
   return null
+}
+
+/** Диалог «Принимаю риски» сейчас на экране: подтверждение, блокировка или рискованный запуск в пути. Другие окна в это время не должны ловить Escape и Tab. */
+export function dialogUp(phase: string, riskyRun: boolean | null): boolean {
+  if (phase === 'confirm' || phase === 'blocked') return true
+  return riskyRun === true && phase !== 'idle'
 }
 
 const warnings = (ch: Challenge | null | undefined) => ch?.warnings ?? []

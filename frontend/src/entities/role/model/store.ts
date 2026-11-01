@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { useLive, type LiveMessage } from '@/shared/api'
-import { mockChain, mockProvider, mockSnapshot, type RoleMock } from '../lib/mock'
+import { mockChain, mockExchange, mockProvider, mockSnapshot, type RoleMock } from '../lib/mock'
 import type { RolesSnapshot } from './types'
 
 export const useRoleStore = defineStore('role', () => {
@@ -12,12 +12,14 @@ export const useRoleStore = defineStore('role', () => {
 
   /** Отладка: принятые «сервером» изменения провайдеров переживают обновление темы от настоящего сервера. */
   const provPatches = new Map<string, Parameters<typeof mockProvider>[2]>()
+  const exchPatches: Array<{ id: string; to: Parameters<typeof mockExchange>[2] }> = []
 
   function apply(m: LiveMessage): void {
     const s = m.data as RolesSnapshot
     if (!mocked.value) { snapshot.value = s; return }
     let out = mockSnapshot(s, mocked.value)
     for (const [id, to] of provPatches) out = mockProvider(out, id, to)
+    for (const p of exchPatches) out = mockExchange(out, p.id, p.to)
     snapshot.value = out
   }
 
@@ -47,5 +49,13 @@ export const useRoleStore = defineStore('role', () => {
     }, delayMs)
   }
 
-  return { snapshot, mocked, apply, start, mock, mockApply, mockProviderApply }
+  /** Отладка: «сервер» применяет смену основной биржи или режима биржи через несколько секунд. */
+  function mockExchangeApply(id: string, to: Parameters<typeof mockExchange>[2], delayMs = 2500): void {
+    setTimeout(() => {
+      exchPatches.push({ id, to })
+      if (snapshot.value) snapshot.value = mockExchange(snapshot.value, id, to)
+    }, delayMs)
+  }
+
+  return { snapshot, mocked, apply, start, mock, mockApply, mockProviderApply, mockExchangeApply }
 })

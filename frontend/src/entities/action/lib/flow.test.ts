@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Challenge } from '../model/types'
-import { ACCEPT_KEYS, acceptLabel, blockReasons, buildCommand, failedGates, isExpired, isRisky, passedGates, risksOf, secondsLeft, unavailableReason, UNAVAILABLE_TEXT } from './flow'
+import { ACCEPT_KEYS, acceptLabel, blockReasons, buildCommand, dialogUp, failedGates, timeoutText, isExpired, isRisky, passedGates, risksOf, secondsLeft, unavailableReason, UNAVAILABLE_TEXT } from './flow'
 
 const calm: Challenge = { gates: [{ id: 'G1', name: 'Связь', ok: true }], warnings: [], pre_amber: [], phrases: [], danger: false, blocked: false, nonce: 'n1' }
 const risky: Challenge = {
@@ -113,5 +113,48 @@ describe('unavailableReason', () => {
   })
   it('управление выключено: другой текст', () => {
     expect(unavailableReason({ enabled: false }, 'kill.set')).toMatch(/недоступно/)
+  })
+  it('запуск и остановка дня доступны и без расширенного режима, остальное нет', () => {
+    const base = { enabled: true, csrf: 'c', full: false, modes: ['day.start', 'day.stop'] }
+    expect(unavailableReason(base, 'day.start')).toBeNull()
+    expect(unavailableReason(base, 'day.stop')).toBeNull()
+    expect(unavailableReason({ ...base, modes: ['risk.set'] }, 'risk.set')).toBe(UNAVAILABLE_TEXT)
+    expect(unavailableReason({ ...base, modes: [] }, 'day.start')).toBe(UNAVAILABLE_TEXT)
+  })
+})
+
+describe('dialogUp', () => {
+  it('диалог виден при подтверждении, блокировке и рискованном запуске в пути', () => {
+    expect(dialogUp('confirm', true)).toBe(true)
+    expect(dialogUp('blocked', null)).toBe(true)
+    expect(dialogUp('sending', true)).toBe(true)
+    expect(dialogUp('done', true)).toBe(true)
+  })
+  it('безрисковое и пустое состояние диалога не показывают', () => {
+    expect(dialogUp('sending', false)).toBe(false)
+    expect(dialogUp('checking', null)).toBe(false)
+    expect(dialogUp('idle', true)).toBe(false)
+  })
+})
+
+describe('timeoutText', () => {
+  it('называет срок в секундах', () => {
+    expect(timeoutText(60_000)).toMatch(/60 секунд/)
+    expect(timeoutText(180_000)).toMatch(/180 секунд/)
+  })
+})
+
+describe('buildCommand для действий настроек', () => {
+  const ch: Challenge = { nonce: 'n9', phrases: ['ФРАЗА'], warnings: [{ id: 'W_RISK_UP' }], pre_amber: [] }
+  it('risk.set получает accepted из challenge, фразы и nonce подставляются сами', () => {
+    expect(buildCommand({ action: 'risk.set', args: { level: 5 } }, ch)).toEqual({ args: { level: 5, accepted: ['W_RISK_UP'] }, nonce: 'n9', phrases: ['ФРАЗА'] })
+  })
+  it('mode.set и exchange.set не получают лишних accepted и allow_amber', () => {
+    expect(buildCommand({ action: 'mode.set', args: { mode: 'paper' } }, ch).args).toEqual({ mode: 'paper' })
+    expect(buildCommand({ action: 'exchange.set', args: { op: 'mode', id: 'bybit', mode: 'live' } }, ch).args).toEqual({ op: 'mode', id: 'bybit', mode: 'live' })
+  })
+  it('day.start получает accepted и allow_amber', () => {
+    const d: Challenge = { warnings: [{ id: 'W1' }], pre_amber: [{ id: 'P1' }], nonce: 'n' }
+    expect(buildCommand({ action: 'day.start', args: { mode: 'paper', session: 'day' } }, d).args).toEqual({ mode: 'paper', session: 'day', accepted: ['W1'], allow_amber: true })
   })
 })

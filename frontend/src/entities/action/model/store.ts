@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { useLive, type LiveMessage } from '@/shared/api'
 import { failureText, plainify } from '@/shared/lib'
-import { FINAL_TIMEOUT_MS, TIMEOUT_TEXT, buildCommand, isExpired, isRisky, risksOf, secondsLeft, unavailableReason } from '../lib/flow'
+import { FINAL_TIMEOUT_MS, TIMEOUT_TEXT, buildCommand, timeoutText, isExpired, isRisky, risksOf, secondsLeft, unavailableReason } from '../lib/flow'
 import { createKeySender } from './key'
 import type { KeyOutcome } from '../lib/key'
 import type { ActionFinal, ActionHello, ActionPhase, ActionResult, ActionSpec, ActionToast, Challenge } from './types'
@@ -163,8 +163,8 @@ export const useActionStore = defineStore('action', () => {
     pendingId = cmdId = id
     clearTimer()
     timer = setTimeout(() => {
-      if (phase.value === 'sending' || phase.value === 'waiting') finish(false, TIMEOUT_TEXT)
-    }, FINAL_TIMEOUT_MS)
+      if (phase.value === 'sending' || phase.value === 'waiting') finish(false, s.timeoutMs ? timeoutText(s.timeoutMs) : TIMEOUT_TEXT)
+    }, s.timeoutMs ?? FINAL_TIMEOUT_MS)
   }
 
   function applyResult(m: LiveMessage): void {
@@ -244,6 +244,32 @@ export const useActionStore = defineStore('action', () => {
       if (!w) return { gates, warnings: [], pre_amber: [], danger: false, phrases: [], blocked: false, nonce: 'mock', min_delay: 0, expires_in: 60 }
       return { danger: false, blocked: false, gates, phrases: ['mock'], nonce: 'mock', min_delay: 2, expires_in: 90, pre_amber: [], warnings: [{ id: 'W_PROVIDER', code: 'W_PROVIDER', msg: w }] }
     }
+    const calm: Challenge = { gates, warnings: [], pre_amber: [], danger: false, phrases: [], blocked: false, nonce: 'mock', min_delay: 0, expires_in: 60 }
+    if (action === 'risk.set') {
+      // повышение: предупреждения и пауза; понижение: без рисков, безрисковый поток
+      if (Number(args.level) <= 3) return calm
+      return {
+        ...calm, danger: true, phrases: [], min_delay: 3, expires_in: 90,
+        warnings: [
+          { id: 'W_RISK_UP', code: 'W_RISK_UP', msg: `Уровень риска ${String(args.level)}: допустимый риск на сделку и дневной убыток вырастут.` },
+          { id: 'W_POSITIONS_UP', code: 'W_POSITIONS_UP', msg: 'Одновременно можно будет держать больше позиций.' },
+        ],
+      }
+    }
+    if (action === 'exchange.set') {
+      if (args.op === 'mode' && args.mode === 'live') {
+        return { ...calm, danger: true, phrases: ['mock'], min_delay: 3, expires_in: 90, warnings: [{ id: 'W_LIVE', code: 'W_LIVE', msg: 'Биржа начнёт торговать на реальные деньги: потери возможны.' }] }
+      }
+      return calm
+    }
+    if (action === 'mode.set') return calm
+    if (action === 'day.start') {
+      return {
+        ...calm, phrases: [], min_delay: 2, expires_in: 90,
+        warnings: [{ id: 'W1', code: 'W_PAPER_HISTORY', msg: 'Мало paper-истории: рекомендуется 30 сделок и 7 дней' }],
+        pre_amber: [{ id: 'P1', name: 'Мозг на запасной модели', msg: 'основная модель сейчас не отвечает' }],
+      }
+    }
     if (action === 'brain.role' || action === 'brain.use') {
       return {
         danger: false, blocked: false, gates, phrases: ['mock'], nonce: 'mock', min_delay: 2, expires_in: 90, pre_amber: [],
@@ -309,7 +335,7 @@ export const useActionStore = defineStore('action', () => {
   /** Отладка правки моделей и провайдеров (?edit=mock): расширенное управление включено для brain.role, brain.use, llm.provider и записи ключа, ответы изображает mockTransport. calm: без рисков (безрисковый поток), иначе рискованный. */
   function mockEdit(calm = false): void {
     mocked = true
-    hello.value = { enabled: true, csrf: 'mock', full: true, modes: ['brain.role', 'brain.use', 'llm.provider', 'llmkey'] }
+    hello.value = { enabled: true, csrf: 'mock', full: true, modes: ['brain.role', 'brain.use', 'llm.provider', 'llmkey', 'risk.set', 'mode.set', 'exchange.set', 'day.start', 'day.stop'] }
     transport = mockTransport(calm ? 'full' : 'confirm')
   }
 

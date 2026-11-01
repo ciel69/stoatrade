@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { CTL_STEP_LABEL, acceptList, canStart, launchFill, litNodes, regionProgress, stepRows, useControlStore, type DayMode } from '@/entities/control'
+import { dialogUp, unavailableReason, useActionStore } from '@/entities/action'
+import { CTL_STEP_LABEL, canBegin, dayArgs, dayWhat, launchFill, litNodes, regionProgress, stepRows, useControlStore, warnCount, type DayMode } from '@/entities/control'
 import { BRAIN_REGIONS, UiBrainIcon, UiMeter, UiSegment, type BrainIconState } from '@/shared/ui'
 import { dayLabel, failureText, humanize, modeName, plainify, useNow } from '@/shared/lib'
 
@@ -8,9 +9,12 @@ import { dayLabel, failureText, humanize, modeName, plainify, useNow } from '@/s
  * Старт торгового дня. Компактная карточка по центру: крупный мозг, под ним одно главное сообщение, одна тонкая шкала хода запуска и одна кнопка.
  * Детали (проверки готовности, шаги запуска) спрятаны под «Подробнее» и раскрываются сами, только если что-то не прошло. Области коры зажигаются по реальным шагам ctl,
  * на каждом новом шаге по сети идёт волна, в конце мозг оживает. Здесь paper, testnet и observe; live запускается в старом дашборде (токен и фразы).
+ * Режим выбирается здесь, а подтверждение рисков делает общее окно «Принимаю риски» (виджет action-dialog): предупреждения и жёлтые проверки там, без отдельных галочек.
+ * Если предупреждений нет, день стартует сразу. Жёсткие условия (ворота) проверяет ctl: пока они не выполнены, «Начать торговлю» недоступна.
  */
 const emit = defineEmits<{ close: [] }>()
 const control = useControlStore()
+const action = useActionStore()
 const now = useNow()
 const OLD_DASH = 'http://127.0.0.1:8766/#control'
 
@@ -33,9 +37,12 @@ let opener: HTMLElement | null = null
 
 const platform = computed(() => control.ctl?.platform ?? null)
 const running = computed(() => platform.value?.state === 'running')
-const launching = computed(() => control.phase === 'starting' || platform.value?.state === 'starting')
+/** Запуск дня идёт через общий движок действий: команда в пути (sending, waiting) считается запуском, не дожидаясь, пока тема ctl покажет «starting». */
+const sentByUs = computed(() => action.spec?.action === 'day.start' && (action.phase === 'sending' || action.phase === 'waiting'))
+const startedByUs = ref(false)
+const launching = computed(() => control.phase === 'starting' || platform.value?.state === 'starting' || sentByUs.value)
 const closing = computed(() => control.phase === 'stopping' || platform.value?.state === 'closing')
-const finished = computed(() => control.phase === 'done' && control.lastAction === 'day.start')
+const finished = computed(() => startedByUs.value || (control.phase === 'done' && control.lastAction === 'day.start'))
 const view = computed<'launch' | 'running' | 'closing' | 'done' | 'pick'>(() => (launching.value ? 'launch' : closing.value ? 'closing' : finished.value ? 'done' : running.value ? 'running' : 'pick'))
 
 onMounted(() => {
@@ -89,10 +96,21 @@ const elapsed = computed(() => Math.max(0, Math.round(now.value - launchedAt.val
 const current = computed(() => rows.value.find((r) => r.state === 'run'))
 const stepNo = computed(() => Math.min(rows.value.length, doneCount.value + 1))
 
-// ---- проверки и принятие
+// ---- проверки и запуск
 const ch = computed(() => control.challenge)
-const accept = computed(() => acceptList(ch.value))
-const ready = computed(() => control.phase === 'ready' && canStart(ch.value, control.accepted))
+const warns = computed(() => warnCount(ch.value))
+const unavailable = computed(() => unavailableReason(action.hello, 'day.start'))
+const ready = computed(() => control.phase === 'ready' && canBegin(ch.value) && !unavailable.value && !action.active)
+/** Подтверждение рисков делает общее окно: здесь только запуск действия. */
+function begin(): void {
+  if (!ready.value || pick.value === 'live') return
+  const mode = pick.value
+  action.run({
+    action: 'day.start', args: dayArgs(mode), title: `Старт торгового дня: ${modeName(mode)}`, what: dayWhat(mode),
+    timeoutMs: 180_000,                // запуск идёт до минуты и больше: дольше обычных 60 секунд
+    onDone: () => { startedByUs.value = true },
+  })
+}
 const gates = computed(() => ch.value?.gates ?? [])
 const gateRows = computed(() => gates.value.map((g) => {
   const h = humanize({ kind: 'gate', id: g.id, name: g.name, ok: !!g.ok, msg: g.msg }, { mode: pick.value })
@@ -112,6 +130,7 @@ const facts = computed(() => [modeName(platform.value?.mode ?? control.mode), tr
 
 let autoTimer: ReturnType<typeof setTimeout> | undefined
 const holding = ref(false)
+watch(closing, (v) => { if (v) startedByUs.value = false })        // день завершается: прежний «День запущен» уже неверен
 watch(finished, (v) => {
   clearTimeout(autoTimer)
   if (v) autoTimer = setTimeout(() => { if (!holding.value) emit('close') }, 6000)
@@ -135,6 +154,7 @@ function requestClose(): void {
   emit('close')
 }
 function onKey(ev: KeyboardEvent): void {
+  if (dialogUp(action.phase, action.riskyRun)) return        // поверх открыто общее окно «Принимаю риски»: Escape и Tab принадлежат ему
   if (ev.key === 'Escape') {
     ev.stopPropagation()
     if (confirmClose.value) confirmClose.value = false
@@ -178,7 +198,7 @@ function stopNow(): void {
         </template>
 
         <template v-else>
-          <p v-if="control.phase === 'checking'" class="note" role="status"><i class="spin" aria-hidden="true" />Проверяю условия запуска…</p>
+          <p v-if="control.phase === 'checking' || action.phase === 'checking'" class="note" role="status"><i class="spin" aria-hidden="true" />Проверяю условия запуска…</p>
 
           <button v-if="gates.length" type="button" class="more" :aria-expanded="details" aria-controls="sd-gates" @click="details = !details">
             <span class="dot" :class="gatesBad ? 'bad' : 'ok'" aria-hidden="true" />
@@ -191,17 +211,15 @@ function stopNow(): void {
             </ul>
           </div>
 
-          <div v-if="accept.length" class="accept">
-            <p class="note">Предупреждения: отметьте, что принимаете каждое.</p>
-            <label v-for="a in accept" :key="a.id" class="check"><input type="checkbox" :checked="control.accepted.has(a.id)" @change="control.toggleAccept(a.id)" /><span>{{ a.msg }}</span></label>
-          </div>
+          <p v-if="warns && ready" class="note warn" role="note">{{ warns === 1 ? 'Есть одно предупреждение' : `Есть предупреждений: ${warns}` }}. Перед запуском вы увидите последствия и подтвердите их в отдельном окне.</p>
+          <p v-if="unavailable" class="err" role="alert">{{ unavailable }}</p>
           <p v-if="control.error && (control.phase === 'blocked' || control.phase === 'failed')" class="err" role="alert">{{ control.error }}</p>
 
           <div class="foot">
             <button type="button" class="ghost" @click="requestClose">Отмена</button>
-            <button type="button" class="cta" :disabled="!ready" @click="control.begin()">Начать торговлю</button>
+            <button type="button" class="cta" :disabled="!ready" @click="begin">Начать торговлю</button>
           </div>
-          <p class="fine">Уровень риска меняет только владелец в терминале. Торговый день идёт до остановки.</p>
+          <p class="fine">Уровень риска: {{ risk?.level ?? '–' }}{{ risk?.name ? ' · ' + risk.name : '' }}. Менять его можно в «Система · Настройки». Торговый день идёт до остановки.</p>
         </template>
       </template>
 
@@ -292,9 +310,6 @@ function stopNow(): void {
 .list li.run .mark { background: var(--accent); animation: sd-pulse 1.2s var(--ease-in-out) infinite; }
 .list li.bad .mark { background: var(--neg); }
 @keyframes sd-pulse { 50% { opacity: 0.35; } }
-.accept { display: grid; gap: var(--space-2); text-align: left; }
-.check { display: flex; align-items: flex-start; gap: var(--space-2); font-size: 12px; line-height: 1.4; cursor: pointer; }
-.check input { margin-top: 2px; accent-color: var(--accent); }
 .err { margin: 0; padding: var(--space-2) var(--space-3); border: 1px solid var(--neg); border-radius: var(--radius-sm); color: var(--neg); font-size: 12px; text-align: left; }
 
 .foot { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
@@ -314,7 +329,7 @@ function stopNow(): void {
   .danger:not(.solid):hover { background: color-mix(in srgb, var(--neg) 10%, transparent); }
   .cta:not(:disabled):hover { filter: brightness(1.08); }
 }
-.cta:focus-visible, .ghost:focus-visible, .danger:focus-visible, .more:focus-visible, .check input:focus-visible, .x:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cta:focus-visible, .ghost:focus-visible, .danger:focus-visible, .more:focus-visible, .x:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) {
   .spin { animation: none; border-top-color: var(--accent); border-right-color: var(--accent); }
   .list li.run .mark { animation: none; }

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'   // ref: поле сети нейронов
+import { useActionStore } from '@/entities/action'
 import { useControlStore } from '@/entities/control'
 import { UiNeuralField, type NeuralPoint } from '@/shared/ui'
 import StartDayModal from './StartDayModal.vue'
@@ -7,6 +8,7 @@ import StartDayModal from './StartDayModal.vue'
 /**
  * Кнопка управления днём в шапке: «Старт торговли» когда день не идёт, «Запуск…» и «Торговля идёт» по состоянию платформы (тема ctl); недоступна, если ctl не отвечает
  * или управление выключено, и объясняет почему. Нажатие открывает модалку (запуск, ход запуска, остановка дня). Команды только paper, testnet, observe.
+ * Отладка без сервера: ?start=mock (ход запуска), ?start=mock-pick (выбор режима, запуск через общий диалог), ?start=mock-done.
  * Знак состояния: треугольник «старт» до запуска; во время запуска, завершения и пока день идёт это нейрон-маяк (точка и расходящийся сигнал), часть той же сети, что живёт на фоне.
  */
 /** compact: колонка свёрнута, остаётся значок состояния; название и причина в подсказке и для скринридера. */
@@ -23,7 +25,10 @@ onMounted(() => {
   const q = new URLSearchParams(location.search)
   if (q.has('start')) {            // ?start открывает окно сразу; ?start=mock|mock-pick|mock-done показывает запуск, проверки или итог без сервера (для скриншотов)
     const m = q.get('start')
-    if (m === 'mock' || m === 'mock-pick' || m === 'mock-done') control.mock(m === 'mock-pick' ? 'pick' : m === 'mock-done' ? 'done' : 'launch')
+    if (m === 'mock' || m === 'mock-pick' || m === 'mock-done') {
+      control.mock(m === 'mock-pick' ? 'pick' : m === 'mock-done' ? 'done' : 'launch')
+      useActionStore().mockEdit(false)        // запуск идёт через общий диалог «Принимаю риски»: ответы сервера изображает движок, на сервер ничего не уходит
+    }
     open.value = true
   }
 })
