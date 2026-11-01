@@ -29,7 +29,7 @@ export const router = createRouter({
     moved('/system', '/system/control'),
     moved('/settings', '/system/settings'),
     moved('/control', '/system/control'),
-    moved('/trading', '/trading/ideas'),
+    moved('/trading', '/trading/trades'),
     moved('/brain', '/brain/decisions'),
     moved('/ideas', '/trading/ideas'),
     moved('/plans', '/trading/plans'),

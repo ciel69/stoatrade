@@ -34,8 +34,8 @@ export const NAV_GROUPS: NavGroup[] = [
       { to: '/', label: 'Обзор', icon: 'M3 11l9-8 9 8M5 9.5V20h5v-6h4v6h5V9.5', zone: 'now' },
       { to: '/market', label: 'Рынок', icon: 'M3 17l5-6 4 4 8-9M15 6h5v5', zone: 'market', base: '/market', tabs: [{ to: '/market', label: 'Карта' }, { to: '/market/news', label: 'Новости' }] },
       {
-        to: '/trading/ideas', label: 'Торговля', icon: 'M5 4h14v16H5zM9 9h6M9 13h6M9 17h3', zone: 'trades', base: '/trading',
-        tabs: [{ to: '/trading/ideas', label: 'Идеи' }, { to: '/trading/plans', label: 'Планы' }, { to: '/trading/trades', label: 'Сделки' }],
+        to: '/trading/trades', label: 'Торговля', icon: 'M5 4h14v16H5zM9 9h6M9 13h6M9 17h3', zone: 'trades', base: '/trading',
+        tabs: [{ to: '/trading/trades', label: 'Сделки' }, { to: '/trading/plans', label: 'Планы' }, { to: '/trading/ideas', label: 'Идеи' }],
       },
       { to: '/brain/decisions', label: 'Мозг', icon: 'M4 6h16M4 12h10M4 18h6M17 14l2.5 2.5L23 12', zone: 'brain', base: '/brain', tabs: [{ to: '/brain/decisions', label: 'Решения' }, { to: '/brain/brief', label: 'Досье' }] },
       { to: '/system/control', label: 'Система', icon: 'M12 3v9m5.7-6.7a8 8 0 1 1-11.4 0', zone: 'system', base: '/system', tabs: [{ to: '/system/control', label: 'Управление' }, { to: '/system/settings', label: 'Настройки' }] },
