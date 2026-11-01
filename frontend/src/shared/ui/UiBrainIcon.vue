@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { BRAIN_DEPTH, BRAIN_NODES, nearestNode, waveOrder } from './brain-regions'
 import { BRAIN_PATH, FOLD_PATH } from './brain-shape'
-import { BrainNet, MAX_PULSES, NET_LINKS, TAIL, netNodeRadius } from './brain-net'
+import { BrainNet, LINGER, MAX_DEND, MAX_PULSES, NET_LINKS, TAIL, easeU, netNodeRadius } from './brain-net'
 /**
  * Нарисованный мозг (вид спереди): аккуратный контур из двух долей с мягкой заливкой, борозды линиями, 24 нейрона разной глубины и связи между ними.
  * Всё внутри контура: места нейронов подогнаны под форму с запасом (brain-shape.ts), отклонение ограничено, сверху ещё clipPath по контуру.
@@ -41,56 +41,79 @@ const hlLink = computed(() => links.map(([a, b]) => props.lit.includes(a) && pro
 const net = new BrainNet(7 + Math.floor(Math.random() * 90))
 net.setMode(props.state, true)
 type El = SVGElement
-let els: { wire: El[]; hl: El[]; g: El[]; body: El[]; hot: El[]; core: El[]; rip: El[]; imp: El[] } | null = null
+let els: { hl: El[]; pw: El[]; g: El[]; body: El[]; hot: El[]; core: El[]; rip: El[]; imp: El[]; dd: El[] } | null = null
 const prevRecv = new Array<number>(nodes.length).fill(-1)
+const dendOn = new Array<boolean>(nodes.length).fill(false)
+const dp = [0, 0, 0, 0]
 const pulseOn = new Array<boolean>(MAX_PULSES).fill(false)
+const cv = [0, 0, 0, 0]
 const num = (v: number): string => v.toFixed(2)
 
 function collect(): void {
   const q = (c: string): El[] => Array.from(svg.value!.querySelectorAll<SVGElement>(c))
-  els = { wire: q('.wire'), hl: q('.wire-hl'), g: q('.nd'), body: q('.nb'), hot: q('.nh'), core: q('.nc'), rip: q('.nr'), imp: q('.imp circle') }
+  els = { hl: q('.wire-hl'), pw: q('.pw'), g: q('.nd'), body: q('.nb'), hot: q('.nh'), core: q('.nc'), rip: q('.nr'), imp: q('.imp circle'), dd: q('.dd') }
 }
 function draw(): void {
   if (!els) return
   const e = els
-  const wireBase = net.wire
-  links.forEach(([a, b], i) => {
-    const dd = `M${num(net.x[a])} ${num(net.y[a])}C${num(net.c1x[i])} ${num(net.c1y[i])} ${num(net.c2x[i])} ${num(net.c2y[i])} ${num(net.x[b])} ${num(net.y[b])}`
-    e.wire[i].setAttribute('d', dd)
-    e.wire[i].style.opacity = String(Math.min(1, wireBase + 0.6 * net.glow[i]).toFixed(3))
-    if (hasLit.value) e.hl[i].setAttribute('d', dd)
-  })
+  if (hasLit.value) links.forEach(([a, b], i) => e.hl[i].setAttribute('d', `M${num(net.x[a])} ${num(net.y[a])}L${num(net.x[b])} ${num(net.y[b])}`))
   for (let i = 0; i < nodes.length; i++) {
     e.g[i].setAttribute('transform', `translate(${num(net.x[i])} ${num(net.y[i])})`)
-    const rv = net.recv[i] < 0.01 ? 0 : net.recv[i]
+    let rv = net.act[i] < 0.01 ? 0 : net.act[i]
+    if (isOn(i)) rv = Math.max(rv, 0.85)                                  // нейрон выбранной области виден сразу
+    const k = Math.min(1, rv)
+    const s = k * k * (3 - 2 * k)                                         // 0 в покое (нейрон полностью прозрачен), 1 в момент испускания или приёма сигнала
+    let glowing = false
+    for (let d = 0; d < MAX_DEND; d++) glowing = glowing || net.dglow[i][d] > 0.01
+    if (s > 0 || glowing || dendOn[i]) {
+      let any = false
+      for (let d = 0; d < MAX_DEND; d++) {
+        const el = e.dd[i * MAX_DEND + d]
+        const g = net.dglow[i][d]
+        const op = d < net.dcount[i] ? Math.min(1, 0.3 * s + 0.85 * g * g * (3 - 2 * g)) : 0
+        if (op < 0.004) { if (el.style.opacity !== '0') el.style.opacity = '0'; continue }
+        any = true
+        net.dendPoints(i, d, undefined, dp)
+        el.setAttribute('d', `M0 0Q${num(dp[2])} ${num(dp[3])} ${num(dp[0])} ${num(dp[1])}`)
+        el.style.opacity = op.toFixed(3)
+      }
+      dendOn[i] = any
+    }
     if (rv === prevRecv[i]) continue
     prevRecv[i] = rv
     const r0 = radii[i]
-    const k = Math.min(1, rv)
-    const s = k * k * (3 - 2 * k)                                         // 0 в покое, 1 при приёме или испускании импульса
-    e.body[i].setAttribute('r', num(r0 * (0.4 + 0.82 * s)))               // в покое нейрон крошечный, при сигнале крупнеет
-    e.body[i].style.opacity = String((0.4 + 0.6 * s).toFixed(3))
-    e.hot[i].setAttribute('r', num(r0 * (0.4 + 0.82 * s)))
-    e.hot[i].style.opacity = String(s.toFixed(3))
-    e.core[i].setAttribute('r', num(r0 * (0.14 + 0.22 * s)))
-    e.core[i].style.opacity = String((0.3 + 0.7 * s).toFixed(3))
+    const body = r0 * (0.55 + 0.5 * s)                                    // небольшое тело-ядро, отростки тонкие
+    e.body[i].setAttribute('r', num(body))
+    e.body[i].style.opacity = s.toFixed(3)
+    e.hot[i].setAttribute('r', num(body))
+    e.hot[i].style.opacity = s.toFixed(3)
+    e.core[i].setAttribute('r', num(body * 0.36))
+    e.core[i].style.opacity = s.toFixed(3)
     e.rip[i].setAttribute('r', num(r0 * (1.2 + 1.2 * (1 - rv))))
-    e.rip[i].style.opacity = String((0.5 * rv * rv).toFixed(3))
+    e.rip[i].style.opacity = (0.5 * rv * rv).toFixed(3)
   }
   const vis = net.vigor > 0.1 ? 1 : 0.8
   for (let p = 0; p < MAX_PULSES; p++) {
     const pl = net.pulses[p]
     const on = !!pl && pl.age > 0
     if (!on) {
-      if (pulseOn[p]) { for (let k = 0; k < TAIL; k++) e.imp[p * TAIL + k].style.opacity = '0'; pulseOn[p] = false }
+      if (pulseOn[p]) { for (let k = 0; k < TAIL; k++) e.imp[p * TAIL + k].style.opacity = '0'; e.pw[p].style.opacity = '0'; pulseOn[p] = false }
       continue
     }
     pulseOn[p] = true
-    const fade = 1 - 0.3 * Math.max(0, pl.age / pl.dur - 0.7) / 0.3                    // перед прибытием импульс чуть гаснет
+    net.ctrl(pl, cv)                                                      // кривая по текущим положениям концов: при дрейфе импульс идёт плавно
+    const w = e.pw[p]
+    const flying = pl.age < pl.dur
+    const head = easeU(Math.min(1, pl.age / pl.dur))
+    w.setAttribute('d', `M${num(net.x[pl.from])} ${num(net.y[pl.from])}C${num(cv[0])} ${num(cv[1])} ${num(cv[2])} ${num(cv[3])} ${num(net.x[pl.to])} ${num(net.y[pl.to])}`)
+    w.setAttribute('stroke-dasharray', `${head.toFixed(3)} 2`)            // линия проявляется вместе с головкой
+    const born = Math.min(1, pl.age / 0.12)
+    w.style.opacity = String((0.5 * pl.power * vis * (flying ? born : Math.max(0, 1 - (pl.age - pl.dur) / LINGER))).toFixed(3))      // после прибытия гаснет
     for (let k = 0; k < TAIL; k++) {
       const c = e.imp[p * TAIL + k]
-      const pt = net.tailPoint(pl, k)
-      if (!pt) { c.style.opacity = '0'; continue }
+      const pt = flying ? net.tailPoint(pl, k, cv) : null
+      if (!pt) { if (c.style.opacity !== '0') c.style.opacity = '0'; continue }
+      const fade = 1 - Math.max(0, pl.age / pl.dur - 0.7)                // перед прибытием импульс чуть гаснет
       c.setAttribute('cx', num(pt[0])); c.setAttribute('cy', num(pt[1]))
       c.setAttribute('r', num((1.5 - 0.2 * k) * (0.65 + 0.35 * pl.power) * (props.crisp ? 0.85 : 1)))
       c.style.opacity = String((Math.pow(1 - k / TAIL, 1.6) * pl.power * fade * vis).toFixed(3))
@@ -155,7 +178,7 @@ onMounted(() => {
   run()
 })
 watch(() => props.state, (s) => { net.setMode(s); run() })
-watch(hasLit, () => draw())
+watch([() => props.lit, fired], () => { prevRecv.fill(-1); draw() })
 onUnmounted(() => {
   timers.forEach(clearTimeout)
   cancelAnimationFrame(loop)
@@ -256,17 +279,18 @@ defineExpose({ fire })
           <path class="mid" d="M32 15C31.2 24 32.8 40 32 50" />
         </g>
         <g class="net">
-          <path v-for="(_l, i) in links" :key="`w${i}`" class="wire" stroke="currentColor" />
+          <path v-for="i in MAX_PULSES" :key="`w${i}`" class="pw" pathLength="1" stroke="currentColor" stroke-dasharray="0 2" style="opacity: 0" />
           <g class="imp" fill="currentColor" stroke="none"><circle v-for="i in pool" :key="i" r="1" /></g>
         </g>
         <path v-for="(_l, i) in links" :key="`h${i}`" class="wire-hl" :class="{ on: hlLink[i] }" />
         <g class="nodes">
           <g v-for="(n, i) in nodes" :key="`n${i}`" class="nd" :transform="`translate(${n[0]} ${n[1]})`" :style="{ opacity: 0.5 + 0.5 * BRAIN_DEPTH[i] }">
+            <path v-for="d in MAX_DEND" :key="`d${d}`" class="dd" stroke="currentColor" style="opacity: 0" />
             <circle class="nr" :r="radii[i] * 1.2" fill="none" stroke="currentColor" stroke-width="0.35" style="opacity: 0" />
             <circle class="lit-ring" :class="{ on: isOn(i) }" :r="radii[i] * 1.9" fill="none" />
-            <circle class="nb" :r="radii[i]" :fill="`url(#${id}b)`" stroke="currentColor" stroke-width="0.32" stroke-opacity="0.75" />
+            <circle class="nb" :r="radii[i]" :fill="`url(#${id}b)`" stroke="currentColor" stroke-width="0.32" stroke-opacity="0.75" style="opacity: 0" />
             <circle class="nh" :r="radii[i]" :fill="`url(#${id}h)`" stroke="none" style="opacity: 0" />
-            <circle class="nc" :r="radii[i] * 0.34" fill="#fff" stroke="none" />
+            <circle class="nc" :r="radii[i] * 0.2" fill="#fff" stroke="none" style="opacity: 0" />
           </g>
         </g>
       </g>
@@ -292,13 +316,15 @@ defineExpose({ fire })
 .outline { stroke-width: 1.7px; vector-effect: non-scaling-stroke; }
 .folds path { stroke-width: 1.1px; vector-effect: non-scaling-stroke; opacity: 0.32; }
 .folds .mid { opacity: 0.4; }
-.wire { stroke-width: 0.5; opacity: 0.17; pointer-events: none; }
+.pw { stroke-width: 0.6; fill: none; pointer-events: none; }
+.dd { stroke-width: 0.45; fill: none; pointer-events: none; }
+.crisp .dd { stroke-width: 0.38; }
 .imp circle { opacity: 0; pointer-events: none; }
 .nd { pointer-events: none; }
 .cut { stroke-width: 1.6px; vector-effect: non-scaling-stroke; opacity: 0.9; }
 .crisp .outline { stroke-width: 1.5px; }
 .crisp .folds path { stroke-width: 1px; }
-.crisp .wire { stroke-width: 0.4; }
+.crisp .pw { stroke-width: 0.5; }
 
 /* подсветка области (окно запуска, роли): акцентное кольцо вокруг нейронов области и акцентные связи между ними, остальной мозг приглушён */
 .net, .nb, .nc { transition: opacity var(--dur-enter) var(--ease-out); }
