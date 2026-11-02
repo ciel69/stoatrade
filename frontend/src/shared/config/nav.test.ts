@@ -36,7 +36,7 @@ describe('nav', () => {
     expect(sectionOf('/brain/brief')?.tabs?.length).toBe(2)
     expect(sectionOf('/system/control')?.label).toBe('Система')
     expect(sectionOf('/system/notify')?.tabs?.map((t) => t.label)).toEqual(['Управление', 'Настройки', 'Уведомления'])
-    expect(sectionOf('/trading/day')?.tabs?.map((t) => t.label)).toEqual(['Сделки', 'Планы', 'Идеи', 'День'])
+    expect(sectionOf('/trading/day')?.tabs?.map((t) => t.label)).toEqual(['Сделки', 'Планы', 'Идеи', 'День', 'Эксперименты'])
     expect(sectionOf('/')).toBeNull()
     expect(sectionOf('/unknown')).toBeNull()
   })

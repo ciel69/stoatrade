@@ -182,6 +182,8 @@ class Hub(object):
                     await self.usage_op(ws, m)
                 elif m.get("op") == "day_report":
                     await self.day_report_op(ws, m)
+                elif m.get("op") == "exp":
+                    await self.exp_op(ws, m)
         except ConnectionClosed:                 # клиент закрыл вкладку или оборвал связь: не ошибка сервера
             pass
         finally:
@@ -209,6 +211,19 @@ class Hub(object):
         res = await asyncio.to_thread(topics.day_report, self.root, m.get("id"), None)
         try:
             await ws.send(self._msg("day_report_detail", 0, res))
+        except Exception:
+            pass
+
+    async def exp_op(self, ws, m):
+        """Эксперименты и разрезы по запросу (чтение): ответ `exp_detail` только этому соединению; разрез и режим проверяются в topics.exp_detail (чужое значение заменяется умолчанием)."""
+        by = m.get("by") if isinstance(m.get("by"), str) else None
+        mode = m.get("mode") if isinstance(m.get("mode"), str) else None
+        try:
+            res = await asyncio.to_thread(topics.exp_detail, self.root, by, mode, None)
+        except Exception:                    # битый журнал не должен рвать соединение: клиент покажет «не удалось собрать»
+            res = {"ok": False, "by": by, "mode": mode, "error": "failed"}
+        try:
+            await ws.send(self._msg("exp_detail", 0, res))
         except Exception:
             pass
 

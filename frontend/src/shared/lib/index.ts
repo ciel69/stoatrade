@@ -10,7 +10,9 @@ export { humanBanner, humanText } from './human-free'
 export {
   DAY_STEP_NAMES, answerWord, autoCloseText, biasWord, checkCodeWord, closeFailReason, dayModeWord, dayStateWord, dayStepAmber, dayStepDoes, dayStepLabel, decidedByWord, decisionWord, failReason,
   isCloseStep, planSourceWord, regimeWord, ruleWord, stopSourceText, verdictWord,
-} from './human-day'
+  EXP_CUTS, EXP_CUT_IDS, cutInfo, expModeWord, expValueWord, isExpCut, pHint, pWord, plural,
+} from './human-pages'
+export type { CutInfo, ExpCut, PTone, PWord } from './human-pages'
 export { NODE_IDS, humanNode, nodeLabel, nodeStops, nodeValue } from './human-nodes'
 export { TONE_WORD, dayLabel, detailsOf, isPlain, plainify, modeName, modeOn, toneOfLevel, unknownHuman } from './human-text'
 export { ROLE_IDS, actionName, commandStatus, consumerName, contextName, feedState, holdText, planState, proper, roleAbout, roleTitle, sessionName, stopNote, thesisText } from './human-words'

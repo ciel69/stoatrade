@@ -1,5 +1,5 @@
-import { stepLabel } from '../human-codes'
-import { modeName } from '../human-text'
+import { stepLabel } from '../../human-codes'
+import { modeName } from '../../human-text'
 
 /**
  * Слова страницы «Торговля · День»: шаги запуска (S1–S9) и закрытия (C1–C8), причины отказа и незавершённого закрытия, правила чек-листа, состояния дня.

@@ -862,6 +862,91 @@ def day_report(root, day_id, now=None):
     return {"id": did, "ok": True, "data": model.scrub(data)}
 
 
+EXP_BY = ("exp", "variant", "hyp", "setup", "stype", "symbol", "side", "reason", "err", "venue")
+EXP_ROWS_OUT = 60
+EXP_TRADES_OUT = 25
+EXP_META_OUT = 40
+
+
+def _exp_keys(t, by, err):
+    """Значения группировки сделки в разрезе by (список: у сделки может быть несколько тегов ошибок). Нет значения -> [] (в группы не попадает)."""
+    if by == "variant":
+        e, v = t.get("exp"), t.get("var")
+        k = ("%s/%s" % (e, v)) if e and v else (v or e)
+    elif by == "err":
+        return [x for x in (err or []) if isinstance(x, str) and x][:6]
+    else:
+        k = {"exp": t.get("exp"), "hyp": t.get("hyp"), "setup": t.get("setup"), "stype": t.get("stype"), "symbol": t.get("sym"), "side": t.get("side"),
+             "reason": t.get("reason"), "venue": t.get("venue")}[by]
+    return [str(k)[:60]] if k not in (None, "") else []
+
+
+def _exp_confirmed(root):
+    """Подтверждённые гипотезы ровно по правилу brief.experiments.confirmed: на бумаге n >= 30, средний R > 0, p ниже alpha/K (Бонферрони). Не вердикт, а повод повторять приоритетно."""
+    from tb.core import expstats
+    by = {}
+    for r in expstats.group_stats(expstats.load_trades("all", root, with_rules=False), by="hyp"):
+        by.setdefault(r["key"], {})[r["mode"]] = r
+    out = []
+    for hyp, m in by.items():
+        p = m.get("paper")
+        if not p or hyp == "(нет)" or not p["below_alpha"] or (p["avg_r"] or 0) <= 0:
+            continue
+        row = {"hyp": str(hyp)[:40], "n": p["n"], "avg_r": _num(p["avg_r"]), "win_rate": _num(p["win_rate"]), "p": _num(p["p"])}
+        if m.get("live"):
+            row["live_n"], row["live_avg_r"] = m["live"]["n"], _num(m["live"]["avg_r"])
+        out.append(row)
+    out.sort(key=lambda x: -(x["avg_r"] or 0))
+    return out[:12]
+
+
+def exp_detail(root, by, mode, now=None):
+    """Эксперименты и разрезы по закрытым сделкам журнала по запросу клиента: те же группы и p-значения, что у `./tb exp stats` (tb.core.expstats), без вердиктов.
+    n меньше min_n помечается `small` и без p; K = число групп запроса, порог alpha_adj = alpha / K (Бонферрони). Режимы не смешиваются (группа делится по режиму).
+    Белый список полей, строки ограничены по длине, групп не больше EXP_ROWS_OUT, сделок в группе не больше EXP_TRADES_OUT. -> {"by","mode","ok":True,...}."""
+    from tb.core import expstats
+    from tb.dash import model
+    by = by if by in EXP_BY else "exp"
+    mode = mode if mode in MODES else default_mode(root)
+    base = expstats.load_trades(mode, root, with_rules=False)
+    extra = {t["id"]: t for t in model.load_trades(root)[0] if t.get("status") == "closed"}
+    view, members, unreviewed = [], {}, 0
+    for t in base:
+        x = extra.get(str(t["id"])) or {}
+        t["venue"] = x.get("venue") or "platform"
+        t["ts"] = _num(x.get("ts_close_epoch"))
+        keys = _exp_keys(t, by, x.get("err"))
+        if by == "err" and not keys:
+            unreviewed += 1
+        for k in keys:
+            v = dict(t)
+            v["setup"] = k                                  # group_stats группирует по полю setup: подставляем в него ключ выбранного разреза
+            view.append(v)
+            members.setdefault((k, t["mode"]), []).append(t)
+    rows = expstats.group_stats(view, by="setup", min_n=expstats.MIN_N) if view else []
+    k_total = len(rows)
+    adj = expstats.bonferroni(k_total)
+    conf = _exp_confirmed(root)
+    conf_set = {c["hyp"] for c in conf}
+    rows.sort(key=lambda r: (-r["n"], str(r["key"])))
+    meta_all = expstats.load_meta(root)
+    out, meta = [], {}
+    for r in rows[:EXP_ROWS_OUT]:
+        ms = sorted(members.get((r["key"], r["mode"]), []), key=lambda t: -(t.get("ts") or 0.0))
+        name = str(r["key"])
+        if by in ("exp", "variant") and name.split("/")[0] in meta_all and len(meta) < EXP_META_OUT:
+            m = meta_all[name.split("/")[0]]
+            meta[name.split("/")[0]] = {"hypothesis": _txt(m.get("hypothesis"), 200), "prereg": _txt(m.get("prereg"), 280), "started": _txt(m.get("started"), 12),
+                                        "min_n": _num(m.get("min_n"))}
+        out.append({"name": name[:60], "mode": r["mode"], "n": r["n"], "wins": r["wins"], "win_rate": _num(r["win_rate"]), "avg_r": _num(r["avg_r"]), "se_r": _num(r["se_r"]),
+                    "pf": _num(r["pf"]), "pf_inf": bool(r["pf_inf"]), "pnl": _num(r["pnl"]), "fees": _num(r["fees"]), "p": _num(r["p"]), "small": bool(r["small"]),
+                    "below_alpha": bool(r["below_alpha"]), "confirmed": bool(by == "hyp" and r["mode"] == "paper" and name in conf_set), "last_ts": _num(ms[0].get("ts")) if ms else None,
+                    "trades": [{"id": _txt(t.get("id"), 40), "sym": _txt(t.get("sym"), 20), "side": _txt(t.get("side"), 5), "mode": _txt(t.get("mode"), 8), "r": _num(t.get("r")),
+                                "pnl": _num(t.get("pnl")), "ts": _num(t.get("ts")), "reason": _txt(t.get("reason"), 16)} for t in ms[:EXP_TRADES_OUT]]})
+    return model.scrub({"ok": True, "by": by, "mode": mode, "min_n": expstats.MIN_N, "alpha": expstats.ALPHA, "k": k_total, "alpha_adj": adj if k_total else None,
+                        "rows": out, "rows_total": k_total, "total_closed": len(base), "unreviewed": unreviewed, "meta": meta, "confirmed": conf})
+
+
 TOPICS = {"brain": brain, "ctl": ctl, "day": day, "events": events, "market": market, "news": news, "notify": notify, "briefs": briefs, "system": system, "settings": settings}
 INTERVAL = {"decisions": 3.0, "models": 30.0, "ideas": 10.0, "market": 5.0, "news": 15.0, "notify": 5.0, "day": 5.0, "briefs": 10.0, "system": 5.0, "settings": 15.0}      # тема -> не чаще раза в N секунд (по умолчанию HEAVY_S сервера)
 MODE_TOPICS = {"home": home, "trades": trades, "decisions": decisions, "models": models, "plans": plans, "ideas": ideas}        # зависят от режима клиента: строятся для каждого режима, который сейчас смотрит хотя бы один клиент

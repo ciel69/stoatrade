@@ -2,6 +2,7 @@ import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import { BriefPage } from '@/pages/brief'
 import { DayPage } from '@/pages/day'
 import { DecisionsPage } from '@/pages/decisions'
+import { ExperimentsPage } from '@/pages/experiments'
 import { HomePage } from '@/pages/home'
 import { IdeasPage } from '@/pages/ideas'
 import { MarketPage } from '@/pages/market'
@@ -25,6 +26,7 @@ export const router = createRouter({
     { path: '/trading/plans', name: 'plans', component: PlansPage, meta: { title: 'Торговля: планы' } },
     { path: '/trading/trades', name: 'trades', component: TradesPage, meta: { title: 'Торговля: сделки' } },
     { path: '/trading/day', name: 'day', component: DayPage, meta: { title: 'Торговля: день' } },
+    { path: '/trading/experiments', name: 'experiments', component: ExperimentsPage, meta: { title: 'Торговля: эксперименты' } },
     { path: '/brain/decisions', name: 'decisions', component: DecisionsPage, meta: { title: 'Мозг: решения' } },
     { path: '/brain/brief', name: 'brief', component: BriefPage, meta: { title: 'Мозг: досье' } },
     { path: '/system/control', name: 'control', component: SystemPage, meta: { title: 'Система: управление' } },

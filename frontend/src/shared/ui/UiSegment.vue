@@ -13,7 +13,7 @@ const emit = defineEmits<{ 'update:modelValue': [value: T] }>()
 </template>
 
 <style scoped>
-.seg { display: inline-flex; background: var(--panel2); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 2px; gap: 2px; }
+.seg { display: inline-flex; flex-wrap: wrap; background: var(--panel2); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 2px; gap: 2px; }
 .opt {
   border: 0;
   background: transparent;
