@@ -109,7 +109,7 @@ onBeforeUnmount(() => ro?.disconnect())
         </g>
       </svg>
       <span v-if="sel != null" class="tip" :class="[`s-${tipSide}`, { below: tipBelow }]" :style="{ left: lay.xs[sel] + 'px', top: tipTop + 'px' }" aria-hidden="true">{{ tipText }}</span>
-      <table class="sr">
+      <div class="sr"><table>
         <caption>{{ label }}</caption>
         <thead>
           <tr><th>{{ xLabel }}</th><th>Значение{{ unit ? `, ${unit}` : '' }}</th><th>Интервал снизу</th><th>Интервал сверху</th><th>n</th></tr>
@@ -119,7 +119,7 @@ onBeforeUnmount(() => ro?.disconnect())
             <td>{{ p.i }}</td><td>{{ fmt(p.v) }}</td><td>{{ p.lo != null ? fmt(p.lo) : 'нет' }}</td><td>{{ p.hi != null ? fmt(p.hi) : 'нет' }}</td><td>{{ p.n ?? '' }}</td>
           </tr>
         </tbody>
-      </table>
+      </table></div>
     </div>
   </div>
 </template>
@@ -151,7 +151,7 @@ onBeforeUnmount(() => ro?.disconnect())
 .tip.below.s-l { transform: translate(-8px, 12px); }
 .tip.below.s-r { transform: translate(calc(-100% + 8px), 12px); }
 
-/* для читалок: таблица есть, но не занимает места */
+/* для читалок: таблица есть, но не занимает места; обрезает обёртка (overflow у самой table не действует и раздувал страницу) */
 .sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 
 /* появление: только opacity и сдвиг на 4 px, один раз после первой раскладки; данные при обновлении не едут */

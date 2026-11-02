@@ -33,10 +33,18 @@ store.start()                // до первого запроса: образе
 
 const mode = computed<LearningMode>(() => (isLearningMode(trading.mode) ? trading.mode : 'paper'))
 
+const live = () => link.value === 'open' || !!store.mocked
+// заход, смена режима, возвращение связи
 watch(
-  [mode, link, () => trading.trades?.total],
-  ([m, l]) => { if (l === 'open' || store.mocked) store.request(m) },
+  [mode, link],
+  ([m]) => { if (live()) store.request(m) },
   { immediate: true, flush: 'post' },
+)
+// закрытие новой сделки: только рост счётчика у уже известного значения; первое появление trades.total (undefined -> число) не запрос
+watch(
+  () => trading.trades?.total,
+  (n, o) => { if (typeof n === 'number' && typeof o === 'number' && n !== o && live()) store.request(mode.value) },
+  { flush: 'post' },
 )
 
 const d = computed(() => store.detail)

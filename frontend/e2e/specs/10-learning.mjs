@@ -241,6 +241,7 @@ scenario('Нет связи: страница называет это слова
   await page.getByText(/Нет связи с платформой/).first().waitFor({ timeout: T.reconnect })
   dash.blockConnections = false
   await page.getByRole('region', { name: 'Вердикт: учится ли мозг' }).waitFor({ timeout: T.reconnect })
+  for (let k = 0; k < 40 && dash.ops('learning').length < 2; k++) await page.waitForTimeout(100)     // запрос уходит после открытия сокета, чуть позже появления страницы
   assert.ok(dash.ops('learning').length >= 2, 'после переподключения отчёт запрошен снова')
 })
 
@@ -248,10 +249,7 @@ scenario('Нет связи: страница называет это слова
 
 for (const theme of ['dark', 'light']) {
   for (const sample of ['mock', 'mock-few', 'mock-confirmed', 'mock-computing']) {
-    // Известный дефект UI (задача 27 его только обнаружила): скрытая таблица-альтернатива графика (UiBandChart, table.sr) шире окна и даёт странице горизонтальную прокрутку 481 px при 390 px.
-    // Когда виджет починят (например, обернуть .sr в блок с overflow: hidden), сценарий станет зелёным и пометку todo надо снять.
-    const todo = 'UiBandChart: скрытая table.sr расширяет страницу до 481 px на ширине 390 px'
-    scenario(`Адаптив 390 px (${theme === 'dark' ? 'тёмная' : 'светлая'} тема, ${sample}): без горизонтальной прокрутки`, { viewport: { width: 390, height: 844 }, colorScheme: theme, todo }, async ({ page, open }) => {
+    scenario(`Адаптив 390 px (${theme === 'dark' ? 'тёмная' : 'светлая'} тема, ${sample}): без горизонтальной прокрутки`, { viewport: { width: 390, height: 844 }, colorScheme: theme }, async ({ page, open }) => {
       await open(`/brain/learning?learning=${sample}`)
       await ready(page)
       await settle(page)
