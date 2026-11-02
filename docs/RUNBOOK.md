@@ -15,7 +15,7 @@
 ./tb dispatch <check|once|queue ID [--ack N]|stats|log>
 ./tb up --print-launchd | --print-windows      напечатать файл автозапуска ОС (ничего не устанавливается)
 ```
-По умолчанию профиль `paper` и сервисы `exec, scan, feed, context, intel, sync, dispatch, ctl, dash, brain` (brain отсеивается, если нет условий). `up` печатает профиль и список сервисов. Ctrl+C в окне `up` останавливает всё так же, как `down`.
+По умолчанию профиль `paper` и сервисы `exec, scan, feed, context, intel, sync, dispatch, ctl, dash, labels, brain` (brain отсеивается, если нет условий). `up` печатает профиль и список сервисов. Ctrl+C в окне `up` останавливает всё так же, как `down`.
 Вторая копия на том же корне отказана блокировкой (`runtime/platform/supervisor.lock`, код 4). Корень можно задать `TB_ROOT` или `--root`.
 
 ## Запуск, статус, остановка
@@ -28,7 +28,7 @@
 - `paper`: исполнитель на бумажном порту, ключи не нужны.
 - `testnet`: ключ testnet грузит `tb.launcher` внутрь процесса исполнителя.
 - `trade` (МАЙНЕТ, реальные деньги): только `./tb up --profile trade --i-understand-live` и только когда `state/KILL` отсутствует. Иначе отказ с кодом 2. Перед стартом печатается профиль и состав сервисов.
-- Ключи Bybit и Anthropic есть ТОЛЬКО в процессе исполнителя (его launcher). Все остальные сервисы запускаются с окружением без `BYBIT_*`, `ANTHROPIC_*` и без прокси (тест `test_platform_supervisor`).
+- Ключи Bybit и Anthropic есть ТОЛЬКО в процессе исполнителя (его launcher). Все остальные сервисы запускаются с окружением без `BYBIT_*`, `ANTHROPIC_*` и без прокси (тест `test_platform_supervisor`); у `labels` чистка шире (`DEEPSEEK_*`, `OPENAI_*`, `*_API_KEY`, `*_SECRET`, `*_TOKEN`).
 - `--observe`: исполнитель только наблюдает, ордеров не отправляет.
 
 ## Автоперезапуск, heartbeat, деградации
@@ -106,8 +106,28 @@ Windows: `./tb up --print-windows` печатает PowerShell-скрипт с `
 
 ## Сканер как сервис
 `python -m tb.platform.scansvc run` (запускает супервизор) гоняет тот же `hotscan` (пороги из `config/platform.json`, раздел `scan`) и публикует в шину `scanner_signal` (kind: `range_5m`, `turnover_surge`, `hot_enter`,
-`idea_near`, `idea_level`, `idea_invalidated`, `idea_tp`, `idea_expired`) с белым списком полей и дедупликацией. Мост исполнителя при этом выключается (`TB_SCAN_BRIDGE=0`), иначе были бы дубли.
+`idea_near`, `idea_level`, `idea_invalidated`, `idea_tp`, `idea_expired`, `idea_stale`) с белым списком полей и дедупликацией (ревизия идей: пороги `config/idea_stale.json`, см. docs/BRAIN.md). Мост исполнителя при этом выключается (`TB_SCAN_BRIDGE=0`), иначе были бы дубли.
 Старый `./tb bybit read scan --watch` (Monitor) работает как прежде; одновременно со службой его запускать не нужно.
+
+## Фабрика меток: сервис `labels` (R1)
+`python -m tb.labels.service run` (запускает супервизор) входит в наборы `paper`, `testnet`, `trade` (`config/platform.json`). Читает хвост `runtime/hot_events.jsonl`, пишет сигналы, признаки, исходы и прогоны теневых политик в `state/knowledge.sqlite`, свечи берёт из публичного REST Bybit (ключи не нужны и не передаются; настройки `config/labels.json`, политики `config/shadow_policies.json`, геометрия `config/geometry.json`). Устройство: `docs/ARCHITECTURE.md`, раздел «Фабрика меток».
+- **Запуск и остановка.** Вместе с платформой: `./tb up` / `./tb start` и `./tb down` / `./tb stop`. Только этот сервис среди прочих: `./tb up --services exec,scan,labels`. Без платформы вручную: `python -m tb.labels.service run [--max-seconds N] [--root DIR]` (нужен `PYTHONPATH=src`). Отключить разметку, не убирая сервис: `"enabled": false` в `config/labels.json` (сервис живёт, heartbeat идёт, захвата и разметки нет). Лог: `./tb logs labels` (`runtime/logs/labels.log`). Останов по Ctrl+C/SIGTERM корректный, очередь и курсор лежат в базе и подхватываются при следующем старте.
+- **Статус.** Heartbeat `runtime/platform/labels.hb.json` (допустимая задержка 120 с): `captured_24h`, `labeled_24h`, `pending`, `due`, `failed_24h`, `no_data_24h`, `rate_limited_24h`, `req_per_min`, `bad_lines`, `last_error`, `db_mb`, `missing_share_24h`, `warnings`. `./tb status` красит сервис жёлтым, если `due` больше 500 (пороги `config/labels.json:warn`), если `failed_24h` больше 5% захваченных за 24 ч, при `DB_CORRUPT` и `W_LABELS_SYNC_DIR`; в шину сервис ничего не пишет, мозг его состоянием не будится.
+- **Команды `./tb labels`** (реализуются в `tb.labels.cli`, формат и коды по Requirement 12.5 и 13 спеки):
+  - `status`: heartbeat, очередь, размер базы, прогресс догрузки;
+  - `stats [--since D] [--by policy|type|...]`: статистика политик (n, заполнения, win, средний `r_net` +- se, PF, MFE/MAE в R, p и порог Бонферрони по числу включённых политик) и базовая частота исходов по типам сигналов; версии политик не смешиваются;
+  - `coverage [--since D]`: статусы сигналов и доля пустых признаков среди размеченных (порог 10%, `config/labels.json:coverage_fields`);
+  - `show KEY`: JSON сигнала с признаками, исходами и прогонами политик (код 0; нет ключа: 1);
+  - `backfill --since YYYY-MM-DD`: захват сигналов из `runtime/hot_events.jsonl` с даты и постановка созревших в очередь. Сама команда только ставит сигналы в очередь (`pending`), размечает работающий сервис с соблюдением `max_rps` (5 запросов/с), возобновляется без дублей; прогресс виден в `status`. Признаки, недоступные задним числом (`fng`, `risk_off`), пишутся `null`. Оценка: около 21 тыс. сигналов за 6 дней, около 3 запросов на сигнал, порядка 3,5 ч;
+  - `rerun --policy ID --since D`: заново прогнать политику (свечи грузятся заново, они в базе не хранятся) для сигналов с даты; строки пишутся для текущей `policy_ver`;
+  - `backup`: копия базы без остановки сервиса (см. ниже);
+  - `verify`: `PRAGMA integrity_check` и проверка, что у каждого сигнала `done` есть исходы трёх горизонтов и строки всех подходящих включённых политик текущих версий; печатает число нарушений, код 0 только при нуле.
+- **Резервная копия.** `./tb labels backup` делает копию через `sqlite3.Connection.backup` (согласованный снимок при работающем сервисе) в `state/backups/knowledge-YYYYMMDD.sqlite` (до трёх попыток при `PermissionError` на Windows). Файл `state/knowledge.sqlite` вместе с `-wal`/`-shm` не копировать руками при работающем сервисе. Базу нужно беречь: из свечей прошлое восстанавливается только за последние ~30 дней, поэтому метки старше этого срока без копии не воссоздать.
+- **Папка синхронизации (`W_LABELS_SYNC_DIR`).** SQLite в режиме WAL ломается в папках OneDrive, Dropbox, iCloud, Google Drive и на сетевых путях (`\\...`): файлы `-wal`/`-shm` синхронизируются отдельно и база портится. Если путь к `state/` содержит такой маркер, сервис пишет предупреждение в heartbeat (`warnings`) и `./tb status` показывает жёлтый. Действие: перенести проект (или `TB_ROOT`) вне синхронизируемой папки; копии (`state/backups/`) для синхронизации безопасны.
+- **`DB_CORRUPT`.** База не открылась как SQLite: файл переименовывается в `state/knowledge.corrupt-<unixtime>.sqlite`, создаётся пустая новая база, `last_error`/`warnings` несут `DB_CORRUPT`, статус жёлтый. Действие: остановить сервис, сохранить `knowledge.corrupt-*.sqlite`, восстановить последнюю копию из `state/backups/` (положить на место `state/knowledge.sqlite` при остановленном сервисе), затем `./tb labels backfill --since <дата копии>` для сигналов после неё.
+- **Коды выхода сервиса.** 2: вторая копия на том же корне (блокировка `runtime/platform/labels.lock`, живой pid), супервизор в первые 10 с её не перезапускает; 4: `SCHEMA_MIGRATION`, миграция схемы базы не применилась (транзакция откатана, схема прежняя; чаще всего база новее кода или файл занят), супервизор тоже не перезапускает (`fatal_codes` 2 и 4). При 4 смотреть `./tb logs labels`, не удалять базу.
+- **Ограничения биржи.** При HTTP 403/429 сервис ставит запросы на паузу 60 с, метки остаются `pending` без траты попытки (`rate_limited_24h` в heartbeat). Сбой сети: повтор 2/5/15 с, затем отсрочка метки на 30 мин, после 5 попыток `failed`.
+- **Окружение.** Сервис запускается без `BYBIT_*`, `ANTHROPIC_*`, `DEEPSEEK_*`, `OPENAI_*` и без переменных `*_API_KEY`, `*_SECRET`, `*_TOKEN` (и сам вычищает их при старте).
 
 ## MCP и мозг как сервисы
 `mcp serve` (WP11-A) по умолчанию stdio и запускается клиентом агента, поэтому в наборе по умолчанию его нет. Если появится режим демона, задать в `svc.mcp.args` и добавить `mcp` в `--services`.
@@ -122,7 +142,7 @@ heartbeat `runtime/platform/intel.hb.json`. Источник не отвечае
 Даты FOMC/CPI/NFP в `config/intel.json` по памяти (v:false): подтверждать в `config/macro_events.json`. Событие `macro_blackout_soon` (за 60 и 15 мин) приходит в шину; brief получает блок `intel` без текста новостей.
 
 ## Файлы
-`runtime/platform/` (`supervisor.lock`, `status.json`, `<сервис>.pid`, `<сервис>.hb.json`, `unread.json`, `stop.req`), `runtime/logs/<сервис>.log` (ротация 1 МБ x 3), `state/dispatch/`, `state/brain/jobs/`.
+`runtime/platform/` (`supervisor.lock`, `labels.lock`, `status.json`, `<сервис>.pid`, `<сервис>.hb.json`, `unread.json`, `stop.req`), `runtime/logs/<сервис>.log` (ротация 1 МБ x 3), `state/dispatch/`, `state/brain/jobs/`.
 Коды выхода `up`: 0 штатно, 2 использование/отказ, 4 вторая копия.
 
 ## Управление с дашборда (WP12)
