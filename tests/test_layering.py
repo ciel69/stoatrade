@@ -73,6 +73,74 @@ def labels_violations(source, module="tb.labels.x"):
     return sorted(n for n in imports_of(source, module) if under(n, LABELS_FORBIDDEN))
 
 
+LEARN_FORBIDDEN = ("tb.venues", "tb.executor", "tb.gateway", "tb.control", "tb.brain", "tb.intel.items", "tb.dash", "tb.dash2")
+LEARN_LLM_ALLOWED = ("tb.llm.usage",)               # из tb.llm страница читает только журнал вызовов (load.py)
+LEARN_BANNED_NET = ("subprocess", "socket", "ssl", "http", "urllib", "ftplib", "smtplib", "multiprocessing", "ctypes", "webbrowser", "requests")
+LEARN_WRITE_CALLS = ("remove", "unlink", "rmdir", "makedirs", "mkdir", "write_text", "write_bytes", "rmtree", "open_rw", "executescript")
+LEARN_WRITE_MODULES = ("shutil",)                 # любой вызов shutil.*; os.replace/rename/system/popen: ниже (str.replace и dict.copy не путать)
+LEARN_OS_WRITES = ("replace", "rename", "system", "popen", "truncate", "link", "symlink")
+
+
+def learn_import_violations(source, module="tb.learn.x"):
+    """Запрещённые импорты tb.learn: слои бирж/исполнителя/шлюза/управления/мозга/текстов новостей/дашбордов, любой tb.llm кроме usage, сеть и процессы."""
+    out = []
+    for n in imports_of(source, module):
+        if under(n, LEARN_FORBIDDEN) or under(n, LEARN_BANNED_NET):
+            out.append(n)
+        elif under(n, ("tb.llm",)) and n != "tb.llm" and not under(n, LEARN_LLM_ALLOWED):
+            out.append(n)
+    return sorted(out)
+
+
+def learn_write_violations(source):
+    """Запись на диск и открытие базы на запись в tb.learn: open с режимом w/a/x/+, удаление, переименование, open_rw (страница только читает)."""
+    out = []
+    for n in ast.walk(ast.parse(source)):
+        if not isinstance(n, ast.Call):
+            continue
+        f = n.func
+        nm = f.attr if isinstance(f, ast.Attribute) else (f.id if isinstance(f, ast.Name) else "")
+        if nm == "open":
+            mode = n.args[1] if len(n.args) > 1 else next((k.value for k in n.keywords if k.arg == "mode"), None)
+            if mode is not None and not (isinstance(mode, ast.Constant) and isinstance(mode.value, str) and not any(c in mode.value for c in "wax+")):
+                out.append("open:mode")           # режим не литерал только на чтение
+        elif nm in LEARN_WRITE_CALLS:
+            out.append("call:" + nm)
+        elif isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and (
+                f.value.id in LEARN_WRITE_MODULES or (f.value.id == "os" and f.attr in LEARN_OS_WRITES)):
+            out.append("call:%s.%s" % (f.value.id, f.attr))
+    return out
+
+
+def closure_hits(roots, hit, load_source):
+    """По внутренним импортам tb от roots (в том числе внутри функций): модуль -> то, что вернул hit(source, module). load_source(mod) -> текст или None."""
+    seen, stack, bad = set(), list(roots), {}
+    while stack:
+        m = stack.pop()
+        if m in seen:
+            continue
+        seen.add(m)
+        src = load_source(m)
+        if src is None:
+            continue
+        h = hit(src, m)
+        if h:
+            bad[m] = h
+        stack.extend(n for n in imports_of(src, m) if n.startswith("tb.") and n not in seen)
+    return bad
+
+
+def disk_source(mod):
+    path = os.path.join(os.path.dirname(SRC), *mod.split("."))
+    path = os.path.join(path, "__init__.py") if os.path.isdir(path) else path + ".py"
+    return read(path) if os.path.isfile(path) else None
+
+
+def learn_transitive_hit(source, module):
+    """Для замыкания: запрещённые слои и tb.llm.* вне usage. Дочерние модули llm.usage проверяются так же, чужие llm в замыкание не попадают."""
+    return sorted(n for n in imports_of(source, module) if under(n, LEARN_FORBIDDEN) or (under(n, ("tb.llm",)) and n != "tb.llm" and not under(n, LEARN_LLM_ALLOWED)))
+
+
 def logic_violations(source):
     """-> список нарушений чистоты logic: запрещённые импорты и вызовы."""
     bad = [("import", n) for n in imports_of(source) if under(n, LOGIC_FORBIDDEN_IMPORTS)]
@@ -464,8 +532,64 @@ class TestLayers(unittest.TestCase):
             stack.extend(i for i in imports_of(read(path), m) if i.startswith("tb.logic.") and i not in seen)
         self.assertEqual(bad, {})
 
+    # ---------------------------------------------------------------- R0.2: страница «Учится ли мозг»
+    def test_learn_layer_rules(self):
+        """R0.2 (14): tb.learn не импортирует venues/executor/gateway/control/brain/intel.items/dash/dash2, из tb.llm берёт только usage, не лезет в сеть и процессы."""
+        bad = {}
+        for path in py_files("learn"):
+            mod = module_name(path)
+            found = learn_import_violations(read(path), mod)
+            if found:
+                bad[mod] = found
+        self.assertEqual(bad, {})
+
+    def test_learn_transitive_closure_is_clean(self):
+        """Те же слои запрещены транзитивно (через tb.memory, tb.core, tb.labels, tb.llm.usage); tb.llm.* кроме usage в замыкание не попадает."""
+        mods = [module_name(p) for p in py_files("learn")]
+        self.assertTrue(mods)
+        self.assertEqual(closure_hits(mods, learn_transitive_hit, disk_source), {})
+
+    def test_learn_does_not_write_or_open_db_rw(self):
+        """Страница только читает: нет записи файлов, удаления, open_rw (базу меток открывает store.open_ro)."""
+        bad = {}
+        for path in py_files("learn"):
+            v = learn_write_violations(read(path))
+            if v:
+                bad[module_name(path)] = v
+        self.assertEqual(bad, {})
+        src = "\n".join(read(p) for p in py_files("learn"))
+        self.assertIn("open_ro", src)
+        self.assertNotIn("open_rw", src)
+        self.assertNotIn("PRAGMA query_only", src)       # режим только чтения задаёт store.open_ro, не tb.learn
+        self.assertFalse([x for x in string_literals(src) if ".config" in x or "API_SECRET" in x or "API_KEY" in x])
+
+    def test_learn_checker_catches_violations(self):
+        for src in ("import tb.venues.bybit", "from tb.executor import ports", "from tb import gateway", "from tb.control import client",
+                    "from tb.brain import brief", "from tb.intel.items import load", "from tb.dash import model", "from tb.dash2 import topics",
+                    "from tb.llm import keys", "from tb.llm.providers import x", "import socket", "import urllib.request", "import subprocess",
+                    "def f():\n    from tb.brain.validate import v", "def f():\n    import tb.dash2.server"):
+            self.assertTrue(learn_import_violations(src, "tb.learn.x"), src)
+        self.assertTrue(learn_import_violations("from ..venues import bybit", "tb.learn.x"))
+        self.assertFalse(learn_import_violations("from tb.llm import usage as u\nfrom tb.llm.usage import read_rows\nfrom tb.labels import store\n"
+                                                 "from tb.memory import backtest\nfrom tb.core import expstats\nfrom tb import paths\nfrom . import conf", "tb.learn.x"))
+        for src in ("open('f', 'w')", "open('f', mode='a')", "open('f', 'r+')", "open('f', m)", "import os\nos.remove('f')", "import os\nos.replace('a', 'b')",
+                    "store.open_rw(root)", "import shutil\nshutil.rmtree('d')", "from pathlib import Path\nPath('f').write_text('x')", "os.makedirs('d')"):
+            self.assertTrue(learn_write_violations(src), src)
+        for src in ("open('f')", "open('f', 'r')", "open('f', encoding='utf-8')", "open('f', 'rb')", "store.open_ro(root)", "s.replace('a', 'b')", "d.copy()", "import copy\ncopy.deepcopy(x)"):
+            self.assertEqual(learn_write_violations(src), [], src)
+
+    def test_learn_closure_checker_catches_transitive_and_nested(self):
+        mods = {"tb.learn.a": "from tb.mid import f", "tb.mid": "def g():\n    from tb.deep import h", "tb.deep": "import tb.venues.bybit",
+                "tb.learn.b": "from tb.llm import usage", "tb.llm.usage": "from tb.llm import providers", "tb.llm": "", "tb.llm.providers": "x = 1",
+                "tb.learn.c": "import tb.ok", "tb.ok": "import json"}
+        got = closure_hits(["tb.learn.a"], learn_transitive_hit, mods.get)
+        self.assertEqual(got, {"tb.deep": ["tb.venues.bybit"]})
+        got = closure_hits(["tb.learn.b"], learn_transitive_hit, mods.get)
+        self.assertEqual(got, {"tb.llm.usage": ["tb.llm.providers"]})                # usage, тянущий другой llm, ловится
+        self.assertEqual(closure_hits(["tb.learn.c"], learn_transitive_hit, mods.get), {})
+
     def test_layer_dirs_exist(self):
-        for layer in ("brain", "logic", "core", "dash", "executor", "venues", "gateway", "mcp", "llm", "control", "labels"):
+        for layer in ("brain", "logic", "core", "dash", "executor", "venues", "gateway", "mcp", "llm", "control", "labels", "learn"):
             self.assertTrue(os.path.isfile(os.path.join(SRC, layer, "__init__.py")), layer)
 
 

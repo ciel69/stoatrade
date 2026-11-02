@@ -4,6 +4,7 @@
 Нечисловые и бесконечные значения заменяются на None. MIN_N и ALPHA не настраиваются: берутся из expstats.
 """
 import datetime
+import functools
 import math
 import random
 from statistics import NormalDist
@@ -36,6 +37,12 @@ def est(v, lo=None, hi=None, n=0, lvl=0.95):
     return {"v": _fin(v), "lo": lo, "hi": hi, "n": n, "lvl": _p_ok(lvl)}
 
 
+@functools.lru_cache(maxsize=4096)
+def _tq(p, df):
+    """Квантиль Стьюдента с кешем: бисекция expstats стоит ~100 вычислений бета-функции, а пар (p, df) в отчёте единицы-сотни (требование 13.4)."""
+    return X.t_quantile(p, df)
+
+
 def mean_est(xs, lvl=0.95):
     """Среднее с t-интервалом: m ± t(1-(1-lvl)/2, n-1) * s/sqrt(n). Нечисловые значения отбрасываются; n < 2 -> без интервала."""
     xs = [x for x in (_fin(v) for v in (xs or [])) if x is not None]
@@ -46,7 +53,7 @@ def mean_est(xs, lvl=0.95):
     if sd is None:
         return est(m, n=n, lvl=lvl)
     lvl = _p_ok(lvl)
-    h = X.t_quantile(1.0 - (1.0 - lvl) / 2.0, n - 1) * sd / math.sqrt(n)
+    h = _tq(1.0 - (1.0 - lvl) / 2.0, n - 1) * sd / math.sqrt(n)
     return est(m, m - h, m + h, n, lvl)
 
 
