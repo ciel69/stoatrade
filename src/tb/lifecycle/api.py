@@ -282,20 +282,76 @@ def _pid():
     return os.getpid()
 
 
+RECHECK_RETRY_S = 60.0      # застрявшее закрытие: повтор команды close не чаще раза в минуту на позицию
+RECHECK_MAX_TRIES = 3       # и не больше трёх повторов
+CLOSING_MAX_S = 1800.0      # paper: день не висит в closing дольше 30 минут; после исчерпания повторов или срока он завершается принудительно (позиции остаются
+                            # под исполнителем и биржевыми стопами), чтобы автостарт следующего дня состоялся; live: только владелец (report.ack с пометкой)
+
+
 def _recheck_failed(ctx, d):
-    """Закрытие было провалено (исполнитель не подтвердил): если позиции уже исчезли, день можно закрыть без ручной пометки."""
+    """Закрытие было провалено (исполнитель не подтвердил): если позиции уже исчезли, день можно закрыть без ручной пометки; пока позиции с планом
+    ещё открыты и исполнитель жив, закрытие повторяется (TRX 2026-11-01: первая команда ушла с владельцем "plan:PL-..." и получила E_ID, день висел 8 часов)."""
     inp = audit.collect_input(ctx, d)
-    left = (d.get("closing", {}).get("failed") or {}).get("items") or []
+    cc = d.setdefault("closing", {})
+    left = (cc.get("failed") or {}).get("items") or []
     pos_left = [p for p in inp["positions"] if p.get("owner") and any(it.endswith(p["owner"]) for it in left)]
-    plans_left = [pid for pid in (d["closing"].get("cancel_cmds") or {}) if pid in inp["plans"] and inp["plans"][pid].get("status") == "armed"]
-    if not pos_left and not plans_left and not (d["closing"].get("manual")):
-        d["closing"]["failed"] = None
+    plans_left = [pid for pid in (cc.get("cancel_cmds") or {}) if pid in inp["plans"] and inp["plans"][pid].get("status") == "armed"]
+    if not pos_left and not plans_left and not (cc.get("manual")):
+        cc["failed"] = None
         c6 = days.get_step(d, "C6", "stop")
         c6["ok"], c6["code"] = True, "recovered"
         days.save(ctx.root, d)
         days.set_state(ctx.root, d, "stopped", ctx.now(), code="recovered")
         days.set_trading(ctx.root, False, d)
         days.clear_banner(ctx.root)
+        return
+    now = ctx.now()
+    rc = cc.setdefault("recheck_cmds", {})
+    sent, exhausted = False, True
+    if inp["health"].get("alive"):
+        for p in pos_left:
+            pid = p["owner"]
+            if pid not in inp["plans"]:
+                continue                                                        # позиция без известного плана: только вручную
+            st = rc.setdefault(pid, {"tries": 0, "ts": -1e18})
+            if st["tries"] >= RECHECK_MAX_TRIES:
+                continue
+            exhausted = False
+            if now - st["ts"] < RECHECK_RETRY_S:
+                continue
+            st["cmd"] = ctx.execp.send("close", pid, "eod: повтор закрытия после провала (%s)" % d["day_id"], {"frac": 1.0}, now=now, tag="recheck.%d" % (st["tries"] + 1))
+            st["tries"], st["ts"] = st["tries"] + 1, round(now, 1)
+            sent = True
+        for pid in plans_left:
+            st = rc.setdefault("cancel:" + pid, {"tries": 0, "ts": -1e18})
+            if st["tries"] >= RECHECK_MAX_TRIES:
+                continue
+            exhausted = False
+            if now - st["ts"] < RECHECK_RETRY_S:
+                continue
+            st["cmd"] = ctx.execp.send("cancel", pid, "eod: повтор отмены после провала (%s)" % d["day_id"], now=now, tag="recheck.%d" % (st["tries"] + 1))
+            st["tries"], st["ts"] = st["tries"] + 1, round(now, 1)
+            sent = True
+    else:
+        exhausted = False                                                       # исполнитель не жив: ждём его, повторы начнутся после восстановления
+    too_long = now - float(cc.get("started") or now) >= CLOSING_MAX_S
+    if d.get("mode") == "paper" and (exhausted or too_long) and (pos_left or plans_left or cc.get("manual")):
+        # paper: день не держим в closing вечно (2026-11-01: 8 часов и ни одного автостарта). Позиции остаются под исполнителем и стопами, день завершается с пометкой,
+        # владелец видит баннер alarm, ctl стартует следующий день. Live так не делаем: там решает владелец (report.ack с пометкой).
+        cc["forced"] = {"ts": round(now, 1), "why": "closing_timeout" if too_long and not exhausted else "retries_exhausted",
+                        "left": [p["owner"] for p in pos_left] + plans_left}
+        cc["manual"] = sorted(set((cc.get("manual") or []) + ["pos:%s" % p["owner"] for p in pos_left]))
+        c6 = days.get_step(d, "C6", "stop")
+        if c6:
+            c6["code"] = "forced_paper"
+        days.save(ctx.root, d)
+        days.set_state(ctx.root, d, "stopped", now, code="forced_paper")
+        days.set_trading(ctx.root, False, d)
+        days.set_banner(ctx.root, "alarm", "День %s завершён принудительно: не закрыты %s (исполнитель ведёт их по стопам); следующий день стартует сам" % (
+            d["day_id"], ", ".join(cc["forced"]["left"])[:120]), d["day_id"], report=True)
+        return
+    if sent:
+        days.save(ctx.root, d)
 
 
 def banner(root):

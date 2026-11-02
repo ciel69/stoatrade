@@ -123,6 +123,8 @@ def candidates(brief, sym, ctx=None):
             if pick is None:
                 continue
             tps, h, net, why = pick
+            if h not in V.SESSION_ORDER:
+                continue                                   # горизонт не определён (нет сессии/порогов): такого кандидата модели не показываем (BAD_ENUM horizon у es_take)
             row = {"side": side, "level": _px(L), "stop": stop, "tp": [_px(t) for t in tps], "dist_pct": round(dist, 2), "stop_pct": round(wide, 2),
                    "rr_net": net, "horizon": h}
             if size_mult is not None:
@@ -169,6 +171,8 @@ def chase(ctx, lv):
     if not rr or rr <= 0:
         return None
     h, net, why = _horizon(ctx, stop_pct, rr, stop_pct, abs(tps[0] - px) / px * 100.0)
+    if h not in V.SESSION_ORDER:
+        return None
     caps = [V.ENTRY_SIZE_MULT_MAX] + [x for x in (ctx.get("no_confirm_max"), ctx.get("day_size_mult")) if x]
     z = CHASE_ZONE_PCT / 100.0
     row = {"setup": V.CHASE_SETUP, "side": side, "level": _px(px), "stop": stop, "tp": [_px(t) for t in tps], "dist_pct": 0.0, "stop_pct": round(stop_pct, 2),

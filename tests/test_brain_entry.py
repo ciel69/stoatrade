@@ -423,6 +423,11 @@ class Scout(BrainBase):
         self.assertNotIn("CROWD_AGAINST", check(propose(setup="trend_pullback"), e)[1])
         nd = with_brief(data={"struct": True, "levels": 0, "ready": False})
         self.assertEqual(validate.entry_precheck(validate.entry_context(nd, EV)), "NO_DATA")
+        ns = copy.deepcopy(SCAN_BRIEF)
+        ns.pop("session")                                                                             # день закрывается, сессии нет: модель не зовём (BEAM 2026-11-02)
+        self.assertEqual(validate.entry_precheck(validate.entry_context(ns, EV)), "NO_SESSION")
+        ns["struct"]["s"]["SOL"].update(res=[[146.5, 0.9, 0.5, "dh"]], sup=[[144.0, -0.8, 0.4, "s1h"]])
+        self.assertTrue(all(r["horizon"] in validate.SESSION_ORDER for r in cands.candidates(ns, "SOL") or []))   # кандидат без горизонта модели не показывается
 
     def test_model_mode_never_used(self):
         r, j, s = self.run_job(propose(event_seq=1))

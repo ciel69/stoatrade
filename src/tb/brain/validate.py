@@ -31,7 +31,7 @@ ENTRY_TAGS = ("no-confirm", "blackout")
 ENTRY_PROPOSE_KEYS = ("sym", "side", "horizon", "level", "stop", "tp", "setup", "hypothesis", "ttl_min", "confirm", "thesis")
 ENTRY_OPTIONAL_KEYS = ("zone", "size_mult", "tags", "entry_type")
 ENTRY_MIN_RR = 2.0                                  # риск/прибыль брутто не ниже 2, когда в досье нет порога сессии (по средней цене целей при равных долях)
-ENTRY_PRECHECK_CODES = ("WIDE_RANGE", "DAY_NO_PLANS", "NO_SLOTS", "ROOM_CLOSED", "SYM_BUSY", "PAUSE_SYM", "PAUSE_ALL", "MIN_SIZE_SYM", "NO_DATA")   # отказы по данным досье без вызова модели
+ENTRY_PRECHECK_CODES = ("WIDE_RANGE", "DAY_NO_PLANS", "NO_SLOTS", "ROOM_CLOSED", "SYM_BUSY", "PAUSE_SYM", "PAUSE_ALL", "MIN_SIZE_SYM", "NO_DATA", "NO_SESSION")   # отказы по данным досье без вызова модели
 FADE_IMPULSE_ATR = 2.0                              # свеча события от 2 ATR(5м) против входа = импульс (кит, каскад): вход против него без реакции запрещён любому сетапу,
                                                     # кроме sweep_reject и level_reclaim (они по определению после реакции). UAI 2026-11-01: trend_pullback long в свечу -2.85%
 REACTION_SETUPS = ("sweep_reject", "level_reclaim")  # сетапы «после реакции цены»: единственные, которым можно входить против импульса и против паники/эйфории
@@ -432,6 +432,8 @@ def entry_precheck(ctx):
     ctx = ctx or {}
     if not ctx.get("has_brief"):
         return None
+    if not ctx.get("session_type"):
+        return "NO_SESSION"                                  # сессии нет (день закрывается или не начат): входа не будет, модель не зовём (BEAM 2026-11-02: BAD_ENUM horizon)
     if ctx.get("struct_missing") or ctx.get("data_ready") is False:
         return "NO_DATA"                                     # нет структуры/уровней по монете события: без полного набора данных модель не зовём (UAI 2026-11-01)
     if ctx.get("day_max_new_plans") == 0 and not ctx.get("off_plan_ok"):
