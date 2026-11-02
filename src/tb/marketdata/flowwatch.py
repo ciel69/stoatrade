@@ -304,7 +304,7 @@ def make_event(kind, sym, score, f, px, now, wake):
     reasons = {"cvd_divergence": "цена %s%% за 5м, агрессия %s%% (CVD): расхождение" % (f.get("ret_5m_pct"), f.get("cvd_pct")),
                "book_wall": "устойчивая стена %s %d USD на расстоянии %s%%" % (f.get("wall_side"), f.get("wall_usd", 0), f.get("wall_dist_pct")),
                "xex_gap": "середина Bybit отличается от Binance на %s б.п." % f.get("xex_bps")}[kind]
-    ev = {"id": "%s-%s-%s" % (time.strftime("%d%H%M%S", time.gmtime(now)), sym, kind[:3]), "wake": wake, "type": kind, "sym": sym, "price": px, "score": round(score, 2),
+    ev = {"id": "%s-%s-%s" % (time.strftime("%Y%m%d%H%M%S", time.gmtime(now)), sym, kind[:3]), "wake": wake, "type": kind, "sym": sym, "price": px, "score": round(score, 2),
           "reasons": [reasons], "direction": direction, "ret_5m_pct": f.pop("ret_5m_pct", None), "range_5m_pct": None,
           "note": "информационно: не сигнал входа; расхождение или стена сами по себе не повод входить"}
     ev.update({k: v for k, v in f.items() if k in ("cvd_pct", "wall_usd", "wall_dist_pct", "wall_side", "xex_bps")})

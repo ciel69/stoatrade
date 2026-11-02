@@ -307,7 +307,7 @@ class EventGate:
 
 def make_event(kind, r, now=0.0, wake=True):
     ret = r.get("ret_5m_pct")
-    ev = {"id": "%s-%s" % (time.strftime("%d%H%M%S", time.gmtime(now)), r["sym"]), "wake": wake, "type": kind, "sym": r["sym"], "price": r["price"], "score": r["score"], "reasons": r["reasons"],
+    ev = {"id": "%s-%s" % (time.strftime("%Y%m%d%H%M%S", time.gmtime(now)), r["sym"]), "wake": wake, "type": kind, "sym": r["sym"], "price": r["price"], "score": r["score"], "reasons": r["reasons"],
           "range_5m_pct": r["range_5m_pct"], "ret_5m_pct": ret, "direction": None if not ret else ("up" if ret > 0 else "down"),
           "chg_24h_pct": r["chg_24h_pct"], "turn_24h_musd": r["turn_24h_musd"], "turn_surge_5m": r["turn_surge_5m"],
           "spread_bps": r["spread_bps"], "funding_pct": r["funding_pct"], "corr_group": r["corr_group"], "tradable": r["tradable"],
@@ -369,7 +369,7 @@ def make_deriv_event(kind, r, score, now=0.0, wake=True):
     d = None
     if kind in ("oi_spike", "oi_flush") and ret is not None and abs(ret) >= 0.3:
         d = "up" if ret > 0 else "down"                      # направление уже случившегося движения цены, не прогноз
-    return {"id": "%s-%s-%s" % (time.strftime("%d%H%M%S", time.gmtime(now)), r["sym"], kind[:3]), "wake": wake, "type": kind, "sym": r["sym"], "price": r["price"], "score": round(score, 2),
+    return {"id": "%s-%s-%s" % (time.strftime("%Y%m%d%H%M%S", time.gmtime(now)), r["sym"], kind[:3]), "wake": wake, "type": kind, "sym": r["sym"], "price": r["price"], "score": round(score, 2),
             "reasons": reasons, "range_5m_pct": r.get("range_5m_pct"), "ret_5m_pct": r.get("ret_5m_pct"), "direction": d, "oi_chg_15m_pct": oi, "oi_chg_1h_pct": r.get("oi_chg_1h_pct"),
             "chg_24h_pct": r.get("chg_24h_pct"), "turn_24h_musd": r.get("turn_24h_musd"), "funding_pct": r.get("funding_pct"), "spread_bps": r.get("spread_bps"),
             "corr_group": r.get("corr_group"), "tradable": r.get("tradable"), "note": "информационно: не сигнал входа; проверь guard и тезис"}
