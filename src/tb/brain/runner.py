@@ -504,6 +504,9 @@ class Runner(object):
             llm = self._llm(role, text, meta, assign, team, meter, ctx)
             if llm["obj"] is None:
                 out.update(outcome="no_action", code=llm["code"], profile=llm.get("profile"))
+                if llm["code"] == "NO_PLAN":          # без события error: ждать нечего, но запись понятная
+                    self._journal(job, role, agent_id, None, "skip", "NO_PLAN", "NO_PLAN: у события нет плана, открытых позиций несколько или нет; модель не вызывалась", meta, llm, meter, assign)
+                    return out
                 if llm["code"] in ("BAD_FORMAT", "JOB_BUDGET", "LOOP", "TRUNCATED", "EMPTY", "MAX_ROUNDS", "TIMEOUT"):
                     self._no_action(role, job, agent_id, meta, llm, meter, assign)
                 return out
@@ -570,10 +573,17 @@ class Runner(object):
         evs = [e for e in (ev.get("events") or [] if isinstance(ev, dict) else []) if e.get("seq") in set(seqs)] if seqs else []
         if role.output_schema == "pm/1" and not job.get("plan") and not (b.get("positions") or b.get("plans")):
             raise DossierError("NO_PLAN: событие без плана, управлять нечем")        # связь/сверка без планов и позиций: модель не может назвать план, вызов не нужен
+        if role.output_schema == "pm/1" and not job.get("plan"):
+            # событие без плана (connectivity и т.п.), а открыта ровно одна позиция/план: управляем ею. Несколько - не угадываем (JSON-путь назовёт план сам, инструментальный получит NO_PLAN)
+            ids = sorted(set(x["plan"] for x in (b.get("positions") or []) if isinstance(x, dict) and isinstance(x.get("plan"), str)))
+            if not ids:
+                ids = sorted(set(x["id"] for x in (b.get("plans") or []) if isinstance(x, dict) and isinstance(x.get("id"), str)))
+            if len(ids) == 1:
+                ctx["plan"] = info["plan"] = ids[0]
         ctx["brief_id"] = b.get("brief_id")
-        ctx["brief_rev"] = self._plan_rev(b, job.get("plan"))
+        ctx["brief_rev"] = self._plan_rev(b, ctx.get("plan"))
         if role.output_schema == "pm/1":
-            ctx.update({k: v for k, v in validate.pm_context(b, job.get("plan"), info).items() if k != "plan"})
+            ctx.update({k: v for k, v in validate.pm_context(b, ctx.get("plan"), info).items() if k != "plan"})
         elif role.output_schema == "entry/1":
             ctx.update(validate.entry_context(b, info))
             ctx["max_data_age_s"] = (getattr(self.conf, "runtime", None) or {}).get("max_data_age_s")      # порог STALE_DATA (config/brain.json runtime; нет -> validate.MAX_DATA_AGE_S)
@@ -879,6 +889,8 @@ class Runner(object):
         state = {"done": None, "tool": None, "rej": []}
         llm_info = {"profile": meta.get("profile"), "fallback_from": meta.get("fallback_from")}
         protect = self.health.protect_on or bool(ctx.get("protect"))
+        if not plan:          # плана нет (событие без плана, позиций несколько): инструментам нечего назвать, модель не зовём (раньше: BAD_TYPE:$.plan -> MAX_ROUNDS)
+            return {"obj": None, "code": "NO_PLAN", "errors": [], "rounds": 0}
 
         def run_tool(name, a):
             d = PM_TOOL_DECISION.get(name)

@@ -220,6 +220,41 @@ class ToolFirst(BrainBase):
         self.assertEqual(len(self.gw.tool_calls("stop_plan")), 1)
 
 
+class PmWithoutPlan(BrainBase):
+    """Событие без плана (connectivity) будило position_manager: BAD_TYPE:$.plan -> MAX_ROUNDS (2026-11-01..02). Теперь: единственная позиция берётся как план,
+    при неоднозначности модель не вызывается, код NO_PLAN."""
+
+    def _conn_job(self, jid):
+        s = self.emit("connectivity", {"channel": "public", "state": "up"}, plan=None, sym=None)
+        self.job(jid, seqs=[s], types=("connectivity",), plan=None, key="type:connectivity")
+
+    def test_single_position_is_adopted(self):
+        from fakes.fake_llm import Tool
+        r = self.runner({"ds-pro": [Tool("pm_move_stop", {"to": "be", "reason": "RISK", "why": "связь вернулась | r +1.0 | риск"})]})
+        self._conn_job("J-c1")
+        r.step()
+        c = self.gw.tool_calls("stop_plan")
+        self.assertEqual(len(c), 1)
+        self.assertEqual(c[0]["args"]["id"], PLAN)
+        self.assertEqual(len(self.factory.clients["ds-pro"].calls), 1)
+
+    def test_ambiguous_plan_skips_without_model(self):
+        import copy
+        b = copy.deepcopy(self.gw.brief)
+        b["plans"].append({"id": "PL-1028-ETH-01", "rev": 1, "status": "managing", "sym": "ETH", "side": "short"})
+        b["positions"].append({"plan": "PL-1028-ETH-01", "sym": "ETH", "side": "short", "avg": 10.0, "px": 9.9, "sl": 10.5, "r": 0.2})
+        self.gw.brief = b
+        r = self.runner({"ds-pro": [{}]})
+        self._conn_job("J-c2")
+        r.step()
+        self.assertEqual(self.get_job("J-c2")["result"]["roles"][0]["code"], "NO_PLAN")
+        self.assertEqual(self.factory.calls(), 0)
+        self.assertEqual(self.bus_events("error"), [])
+        d = [x for x in self.decisions() if x["what"] == "brain_decision"]
+        self.assertEqual(d[-1]["res"]["code"], "NO_PLAN")
+        self.assertEqual(self.gw.tool_calls("stop_plan") + self.gw.tool_calls("close_plan"), [])
+
+
 class FormatHandling(BrainBase):
     def test_junk_around_json_accepted(self):
         r = self.runner({"ds-pro": ["вот ответ:\n```json\n" + json.dumps(pm("hold")) + "\n```"]})
