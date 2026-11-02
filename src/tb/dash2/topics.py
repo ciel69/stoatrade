@@ -984,6 +984,14 @@ def exp_detail(root, by, mode, now=None):
                         "rows": out, "rows_total": k_total, "total_closed": len(base), "unreviewed": unreviewed, "meta": meta, "confirmed": conf})
 
 
+def learning_detail(root, mode, now=None):
+    """Отчёт «Учится ли мозг» по запросу клиента (R0.2): tb.learn.dashapi.detail (отчёт или {"ok": False, "mode", "error": "failed"}), на выходе model.scrub. Режим проверяется в report.normalize_mode.
+    Тема в TOPICS не входит: отчёт собирается только по запросу."""
+    from tb.dash import model
+    from tb.learn import dashapi
+    return model.scrub(dashapi.detail(root, mode, now))
+
+
 TOPICS = {"brain": brain, "ctl": ctl, "day": day, "events": events, "market": market, "news": news, "notify": notify, "briefs": briefs, "system": system, "settings": settings}
 INTERVAL = {"decisions": 3.0, "models": 30.0, "ideas": 10.0, "market": 5.0, "news": 15.0, "notify": 5.0, "day": 5.0, "briefs": 10.0, "system": 5.0, "settings": 15.0}      # тема -> не чаще раза в N секунд (по умолчанию HEAVY_S сервера)
 MODE_TOPICS = {"home": home, "trades": trades, "decisions": decisions, "models": models, "plans": plans, "ideas": ideas}        # зависят от режима клиента: строятся для каждого режима, который сейчас смотрит хотя бы один клиент

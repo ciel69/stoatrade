@@ -71,7 +71,7 @@
   - тесты `tests/test_learn_report.py`: свойства 1, 9, 10, 11, 13, 14; размер ответа не больше 64 КБ; пустая установка; запрещённые поля
   - _Requirements: 1.4, 1.5, 1.7, 1.8, 1.9, 2.1, 12.4, 12.5, 12.6, 13.7, 14.1, 14.5, 14.6, 17.1_
 
-- [ ] 13. Подключение к дашборду `dash/server.py`, `dash2/topics.py`, `dash2/server.py`
+- [x] 13. Подключение к дашборду `dash/server.py`, `dash2/topics.py`, `dash2/server.py`
   - `EXT_API += "tb.learn.dashapi"`; `topics.learning_detail`; `server.learning_op` и `_learning_follow` для блока `computing`; тема в `TOPICS` не добавляется; `scrub` на выходе
   - тесты `tests/test_dash2_learning.py` по образцу `test_dash2_exp.py`: ответ только своему соединению, недопустимый режим, `ok:false` без разрыва, повторное сообщение, `api_payload`
   - _Requirements: 1.1, 1.2, 1.3, 1.10, 13.5, 13.6, 14.4_
