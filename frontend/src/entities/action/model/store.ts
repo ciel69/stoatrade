@@ -350,5 +350,12 @@ export const useActionStore = defineStore('action', () => {
     transport = mockTransport('full')
   }
 
-  return { hello, phase, spec, challenge, receivedAt, error, errorDetails, resultText, riskyRun, toasts, active, risks, start, can, run, sendKey, accept, recheck, cancel, reset, dismissToast, mock, mockEdit, mockNotify, applyHello, applyResult, applyFinal }
+  /** Отладка страницы «День» (?daymock=...): доступны day.resume, carry.decide, report.ack, безрисковый поток; на сервер ничего не уходит. */
+  function mockDay(): void {
+    mocked = true
+    hello.value = { enabled: true, csrf: 'mock', full: true, modes: ['day.resume', 'carry.decide', 'report.ack'] }
+    transport = mockTransport('full')
+  }
+
+  return { hello, phase, spec, challenge, receivedAt, error, errorDetails, resultText, riskyRun, toasts, active, risks, start, can, run, sendKey, accept, recheck, cancel, reset, dismissToast, mock, mockEdit, mockNotify, mockDay, applyHello, applyResult, applyFinal }
 })

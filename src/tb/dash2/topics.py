@@ -739,8 +739,131 @@ def notify(root=None, now=None):
             "stats": {k: int(_num(st.get(k)) or 0) for k in ("sent", "merged", "limited", "failed")}, "hint": _txt(v.get("hint"), 300)}
 
 
-TOPICS = {"brain": brain, "ctl": ctl, "events": events, "market": market, "news": news, "notify": notify, "briefs": briefs, "system": system, "settings": settings}
-INTERVAL = {"decisions": 3.0, "models": 30.0, "ideas": 10.0, "market": 5.0, "news": 15.0, "notify": 5.0, "briefs": 10.0, "system": 5.0, "settings": 15.0}      # тема -> не чаще раза в N секунд (по умолчанию HEAVY_S сервера)
+# ---------------------------------------------------------------- day: страница «Торговля · День» (состояние текущего дня, список дней, отчёт по запросу)
+DAYS_OUT = 30
+DAY_STEPS_OUT = 24
+DAY_ROWS_OUT = 40
+
+
+def _int(x):
+    v = _num(x)
+    return int(v) if v is not None else 0
+
+
+def _strs(xs, n, m):
+    """Список коротких строк (до n штук, каждая до m символов); не список или не строки: пусто."""
+    return [x[:m] for x in xs if isinstance(x, str) and x][:n] if isinstance(xs, (list, tuple)) else []
+
+
+def _blocking(detail):
+    """Что именно не прошло при старте (проверки перед запуском): [{id, msg, fix}]; тексты наши (preflight), но обрезаются."""
+    rows = detail.get("blocking") if isinstance(detail, dict) else None
+    return [{"id": _txt(c.get("id"), 40), "msg": _txt(c.get("msg"), 160), "fix": _txt(c.get("action"), 160)} for c in rows[:4] if isinstance(c, dict)] if isinstance(rows, list) else []
+
+
+def _day_abort(a):
+    if not isinstance(a, dict):
+        return None
+    det = a.get("detail")
+    why = _txt(det, 200) if isinstance(det, str) else (_txt(det.get("why"), 200) if isinstance(det, dict) else None)
+    return {"step": _txt(a.get("step"), 4), "code": _txt(a.get("code"), 24), "why": why, "blocking": _blocking(det)}
+
+
+def _day_step(s):
+    det = s.get("detail")
+    d = det if isinstance(det, dict) else {}
+    return {"name": _txt(s.get("name"), 4), "phase": s.get("phase") if s.get("phase") in ("start", "stop") else None, "ok": s.get("ok") if isinstance(s.get("ok"), bool) else None,
+            "dur_s": _num(s.get("dur_s")), "code": _txt(s.get("code"), 24), "amber": bool(d.get("amber")), "why": _txt(det, 160) if isinstance(det, str) else _txt(d.get("why"), 160),
+            "blocking": _blocking(d), "gone": _strs(d.get("gone"), 6, 40), "waiting": _strs(d.get("not_closed") or d.get("waiting"), 6, 60), "llm": _txt(d.get("llm"), 20)}
+
+
+def _day_brief(b):
+    if not isinstance(b, dict):
+        return None
+    return {"day_id": _txt(b.get("day_id"), 24), "state": _txt(b.get("state"), 12), "mode": _txt(b.get("mode"), 10), "agent": _txt(b.get("agent"), 40), "started": _txt(b.get("started"), 24),
+            "stopped": _txt(b.get("stopped"), 24), "stop_source": _txt(b.get("stop_source"), 16), "verdict": _txt(b.get("verdict"), 12), "net": _num(b.get("net")),
+            "carried_n": _int(b.get("carried_n")), "questions_n": _int(b.get("questions_n")), "acked": bool(b.get("acked")), "report_ready": bool(b.get("report_ready")),
+            "needs_resume": bool(b.get("needs_resume")), "abort": _day_abort(b.get("abort"))}
+
+
+def _day_carry(c):
+    return {"plan": _txt(c.get("plan"), 40), "sym": _txt(c.get("sym"), 20), "side": _txt(c.get("side"), 5), "stop": _num(c.get("stop")), "risk_usdt": _num(c.get("risk_usdt")),
+            "why": _txt(c.get("why"), 240), "decided_by": _txt(c.get("decided_by"), 12), "alive": c.get("alive") if isinstance(c.get("alive"), bool) else None}
+
+
+def _day_current(c, carry_in):
+    out = _day_brief(c)
+    cl = c.get("closing") if isinstance(c.get("closing"), dict) else {}
+    fl = cl.get("failed") if isinstance(cl.get("failed"), dict) else None
+    dp = c.get("dayplan") if isinstance(c.get("dayplan"), dict) else None
+    sess = dp.get("session") if dp else None
+    pf = c.get("preflight") if isinstance(c.get("preflight"), dict) else None
+    out.update({
+        "steps": [_day_step(s) for s in (c.get("steps") or []) if isinstance(s, dict)][:DAY_STEPS_OUT],
+        "questions": [{"id": _txt(q.get("id"), 8), "plan": _txt(q.get("plan"), 40), "text": _txt(q.get("text"), 300), "options": _strs(q.get("options"), 4, 24),
+                       "answer": _txt(q.get("answer"), 8), "answered_by": _txt(q.get("answered_by"), 12)} for q in (c.get("questions") or []) if isinstance(q, dict)][:12],
+        "deadline_ts": _num(c.get("deadline_ts")),
+        "closing": {"source": _txt(cl.get("source"), 16), "auto_reason": _txt(cl.get("auto_reason"), 40), "emergency": bool(cl.get("emergency")), "manual": _strs(cl.get("manual"), 6, 60),
+                    "failed": {"items": _strs(fl.get("items"), 10, 60), "manual": _strs(fl.get("manual"), 6, 60), "reason": _txt(fl.get("reason"), 24)} if fl else None},
+        "dayplan": {"source": _txt(dp.get("source"), 10), "regime": _txt(dp.get("regime"), 10), "bias": _txt(dp.get("bias"), 10), "max_new_plans": _num(dp.get("max_new_plans")),
+                    "session": _txt(sess.get("type") if isinstance(sess, dict) else sess, 12)} if dp else None,
+        "preflight": {"red": _strs(pf.get("red"), 8, 40), "amber": _strs(pf.get("amber"), 8, 40)} if pf else None,
+        "checklist": [{"item": _txt(r.get("item"), 60), "kind": _txt(r.get("kind"), 8), "plan": _txt(r.get("plan"), 40), "sym": _txt(r.get("sym"), 20), "side": _txt(r.get("side"), 5),
+                       "stype": _txt(r.get("stype"), 12), "rule": _txt(r.get("rule"), 4), "decision": _txt(r.get("decision"), 8), "codes": _strs(r.get("codes"), 6, 40)}
+                      for r in (c.get("checklist") or []) if isinstance(r, dict)][:DAY_ROWS_OUT],
+        "carry": [_day_carry(x) for x in (c.get("carry") or []) if isinstance(x, dict)][:12],
+        "carry_in": [_day_carry(x) for x in (carry_in or []) if isinstance(x, dict)][:12]})
+    return out
+
+
+def day(root=None, now=None):
+    """Страница «Торговля · День»: те же данные, что `/api/day/status|list` старого дашборда (tb.lifecycle.dashapi), по белому списку полей: без путей, ключей, фактуры дня и сырых деталей.
+    Только чтение (кнопки идут действиями day.resume, carry.decide, report.ack). Без «сейчас» и возрастов: тема меняется только вместе с состоянием дня. -> {banner, current, last, days}."""
+    from tb.lifecycle import dashapi, days
+    st = dashapi.status(root, now)
+    cur = st.get("current") if isinstance(st.get("current"), dict) else None
+    b = st.get("banner") if isinstance(st.get("banner"), dict) else None
+    carry_in = None
+    if cur and cur.get("day_id"):
+        full = days.load(root, cur["day_id"])
+        carry_in = full.get("carry_in") if isinstance(full, dict) else None
+    return {"banner": {"level": b.get("level") if b.get("level") in ("info", "warn", "alarm") else "info", "text": _txt(b.get("text"), 200), "day_report": _txt(b.get("day_report"), 24),
+                       "day_id": _txt(b.get("day_id"), 24)} if b else None,
+            "current": _day_current(cur, carry_in) if cur else None, "last": _day_brief(st.get("last")),
+            "days": [x for x in (_day_brief(d) for d in dashapi.listing(root).get("days", [])[:DAYS_OUT]) if x]}
+
+
+def day_report(root, day_id, now=None):
+    """Итог одного дня по запросу клиента (чтение state/days/<id>/report.json и report.md, id проверяется days.valid_id): -> {"id","ok","data"|"error"}.
+    Белый список полей отчёта; текст отчёта (markdown) уходит как текст, клиент выводит его без HTML."""
+    from tb.dash import model
+    from tb.lifecycle import dashapi, days
+    did = day_id if isinstance(day_id, str) and days.valid_id(day_id) else None
+    if did is None:
+        return {"id": day_id[:40] if isinstance(day_id, str) else None, "ok": False, "error": "bad id"}
+    r = dashapi.report(root, did)
+    if not r:
+        return {"id": did, "ok": False, "error": "no report"}
+    rep = r.get("report") if isinstance(r.get("report"), dict) else {}
+    p = rep.get("pnl") if isinstance(rep.get("pnl"), dict) else {}
+    cost = rep.get("cost") if isinstance(rep.get("cost"), dict) else {}
+    cf = rep.get("close_failed") if isinstance(rep.get("close_failed"), dict) else None
+    data = {"day_id": did, "kind": _txt(rep.get("kind"), 12), "mode": _txt(rep.get("mode"), 10), "agent": _txt(rep.get("agent"), 40), "started": _txt(rep.get("started"), 24),
+            "stopped": _txt(rep.get("stopped"), 24), "stop_source": _txt(rep.get("stop_source"), 16), "verdict": _txt(rep.get("verdict"), 12),
+            "pnl": {k: _num(p.get(k)) for k in ("net", "fees", "funding", "realized_gross", "r_sum")}, "trades_n": _int(rep.get("trades_n")), "open_trades_n": _int(rep.get("open_trades_n")),
+            "cost": {"usd": _num(cost.get("usd")), "calls": _int(cost.get("calls"))},
+            "sessions": [{"id": _txt(s.get("id"), 40), "type": _txt(s.get("type"), 12), "pnl": _num(s.get("pnl")), "trades": _int(s.get("trades")), "budget_used": _num(s.get("budget_used"))}
+                         for s in (rep.get("session") or []) if isinstance(s, dict)][:6],
+            "carried": [_day_carry(x) for x in (rep.get("carried") or []) if isinstance(x, dict)][:12],
+            "closed_eod": len(rep.get("closed_eod") or []) if isinstance(rep.get("closed_eod"), list) else 0,
+            "open_questions": [{"id": _txt(q.get("id"), 8), "text": _txt(q.get("text"), 300)} for q in (rep.get("open_questions") or []) if isinstance(q, dict)][:12],
+            "narrative": _txt(rep.get("narrative"), 600), "close_failed": {"items": _strs(cf.get("items"), 10, 60), "reason": _txt(cf.get("reason"), 24)} if cf else None,
+            "md": (r.get("md") or "")[:40000] if isinstance(r.get("md"), str) else ""}
+    return {"id": did, "ok": True, "data": model.scrub(data)}
+
+
+TOPICS = {"brain": brain, "ctl": ctl, "day": day, "events": events, "market": market, "news": news, "notify": notify, "briefs": briefs, "system": system, "settings": settings}
+INTERVAL = {"decisions": 3.0, "models": 30.0, "ideas": 10.0, "market": 5.0, "news": 15.0, "notify": 5.0, "day": 5.0, "briefs": 10.0, "system": 5.0, "settings": 15.0}      # тема -> не чаще раза в N секунд (по умолчанию HEAVY_S сервера)
 MODE_TOPICS = {"home": home, "trades": trades, "decisions": decisions, "models": models, "plans": plans, "ideas": ideas}        # зависят от режима клиента: строятся для каждого режима, который сейчас смотрит хотя бы один клиент
 
 

@@ -4,6 +4,11 @@ import { NAV_GROUPS, isActive, sectionOf } from './nav'
 const items = NAV_GROUPS.flatMap((g) => g.items)
 
 describe('nav', () => {
+  it('счётчик «ждёт ответа» стоит на пункте «Торговля» и на вкладке «День», больше нигде', () => {
+    const withBadge = items.filter((i) => i.badge)
+    expect(withBadge.map((i) => i.label)).toEqual(['Торговля'])
+    expect(items.flatMap((i) => i.tabs ?? []).filter((t) => t.badge).map((t) => t.to)).toEqual(['/trading/day'])
+  })
   it('пути и названия пунктов не повторяются, у каждого есть значок и путь с косой чертой', () => {
     expect(new Set(items.map((i) => i.to)).size).toBe(items.length)
     expect(new Set(items.map((i) => i.label)).size).toBe(items.length)
@@ -31,6 +36,7 @@ describe('nav', () => {
     expect(sectionOf('/brain/brief')?.tabs?.length).toBe(2)
     expect(sectionOf('/system/control')?.label).toBe('Система')
     expect(sectionOf('/system/notify')?.tabs?.map((t) => t.label)).toEqual(['Управление', 'Настройки', 'Уведомления'])
+    expect(sectionOf('/trading/day')?.tabs?.map((t) => t.label)).toEqual(['Сделки', 'Планы', 'Идеи', 'День'])
     expect(sectionOf('/')).toBeNull()
     expect(sectionOf('/unknown')).toBeNull()
   })

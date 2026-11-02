@@ -180,6 +180,8 @@ class Hub(object):
                     await self.brief_op(ws, m)
                 elif m.get("op") == "usage":
                     await self.usage_op(ws, m)
+                elif m.get("op") == "day_report":
+                    await self.day_report_op(ws, m)
         except ConnectionClosed:                 # клиент закрыл вкладку или оборвал связь: не ошибка сервера
             pass
         finally:
@@ -199,6 +201,14 @@ class Hub(object):
         res = await asyncio.to_thread(topics.brief_detail, self.root, m.get("id"), None)
         try:
             await ws.send(self._msg("brief_detail", 0, res))
+        except Exception:
+            pass
+
+    async def day_report_op(self, ws, m):
+        """Итог дня по запросу (чтение): ответ `day_report_detail` только этому соединению; идентификатор дня проверяется в topics.day_report."""
+        res = await asyncio.to_thread(topics.day_report, self.root, m.get("id"), None)
+        try:
+            await ws.send(self._msg("day_report_detail", 0, res))
         except Exception:
             pass
 

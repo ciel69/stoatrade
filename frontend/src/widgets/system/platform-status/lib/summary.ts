@@ -64,7 +64,8 @@ export function summarize(rows: StatusRow[], meta: SummaryMeta = {}): StatusSumm
     if (r && !key.includes(r)) key.push(r)
   }
 
-  const base = { groups, key, problems: problemRows.length, notes, details }
+  const link = top?.href ? { to: top.href, label: 'Открыть страницу «День»' } : null
+  const base = { groups, key, problems: problemRows.length, notes, details, link }
   if (top) {
     const brief = top.brief ?? top.label
     if (top.level === 'bad') {
@@ -73,7 +74,7 @@ export function summarize(rows: StatusRow[], meta: SummaryMeta = {}): StatusSumm
       return { ...base, level: 'bad', text, extra: problemRows.length - 1, headline: { tone: 'bad', title: text, detail: top.note ?? '' } }
     }
     if (!many) {
-      const text = `Торговля идёт: ${lowerFirst(brief)}`
+      const text = top.id === 'day-wait' ? brief : `Торговля идёт: ${lowerFirst(brief)}`
       return { ...base, level: 'warn', text, extra: 0, headline: { tone: 'warn', title: text, detail: top.note ?? '' } }
     }
     return {

@@ -1,4 +1,5 @@
 import { ageText, countdown, duration, gateName, humanize, isPlain, modeOn, nodeLabel, nodeStops, nodeValue, type Human, type Tone } from '@/shared/lib'
+import { dayNeeds, dayWaitText } from '@/entities/day'
 import { roleLabel } from '@/entities/role'
 import type { SysNode } from '@/entities/system'
 import { freshLevel, THRESHOLDS } from './thresholds'
@@ -123,6 +124,9 @@ export function buildRows(inp: StatusInput): StatusRow[] {
       rows.push(fromHuman('platform', 'banner', h, { value: '', brief: h.title }))
     }
   }
+  // торговый день ждёт вашего решения: только факт и ссылка на страницу «День»
+  const wait = dayWaitText(dayNeeds(inp.day))
+  if (wait) rows.push({ id: 'day-wait', group: 'platform', label: 'Ждёт вашего ответа', level: 'warn', value: '', note: `Нужно ваше участие: ${wait}.`, brief: 'Ждёт вашего ответа', stops: false, raw: null, human: null, href: '/trading/day' })
   const allowed = system?.room.allowed ?? home?.allowed ?? null
   if (allowed !== null) {
     if (allowed) rows.push(okRow('platform', 'entries', 'Новые сделки', 'разрешены'))

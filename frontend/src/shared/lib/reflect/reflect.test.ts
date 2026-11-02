@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { effectScope, nextTick, ref } from 'vue'
 import { reflectText, useReflect } from './index'
-import { useRefocus } from '../refocus'
+import { useRefocus } from '../hooks/refocus'
 
 describe('useReflect', () => {
   beforeEach(() => { vi.useFakeTimers() })

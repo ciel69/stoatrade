@@ -92,6 +92,7 @@ onUnmounted(unbind)
           <section class="verdict" aria-live="polite">
             <p class="big" :class="`lv-${summary.headline.tone === 'idle' ? 'idle' : summary.level}`">{{ summary.headline.title }}</p>
             <p class="det">{{ summary.headline.detail }}</p>
+            <RouterLink v-if="summary.link" :to="summary.link.to" class="go" @click="close(false)">{{ summary.link.label }}</RouterLink>
           </section>
 
           <ul v-if="summary.key.length" class="rows" aria-label="Самое важное">
@@ -100,6 +101,7 @@ onUnmounted(unbind)
               <span class="name">{{ r.label }}<span class="sr">, {{ WORD[r.level] }}</span></span>
               <span v-if="r.value" class="val">{{ r.value }}</span>
               <span v-if="r.note" class="why">{{ r.note }}</span>
+              <RouterLink v-if="r.href" :to="r.href" class="why go" @click="close(false)">Открыть страницу «День»</RouterLink>
             </li>
           </ul>
           <p v-else class="empty">Данные платформы ещё не пришли.</p>
@@ -118,6 +120,7 @@ onUnmounted(unbind)
                     <span class="name">{{ r.label }}<span class="sr">, {{ WORD[r.level] }}</span></span>
                     <span v-if="r.value" class="val">{{ r.value }}</span>
                     <span v-if="r.note" class="why">{{ r.note }}</span>
+                    <RouterLink v-if="r.href" :to="r.href" class="why go" @click="close(false)">Открыть страницу «День»</RouterLink>
                   </li>
                 </ul>
               </section>
@@ -184,6 +187,8 @@ onUnmounted(unbind)
   .val { grid-column: 2; max-width: none; text-align: left; text-wrap: pretty; }
 }
 .why { grid-column: 2 / -1; margin-top: 2px; font-size: 12px; line-height: 1.5; color: var(--muted); overflow-wrap: anywhere; text-wrap: pretty; }
+.go { display: inline-block; margin-top: var(--space-1); font-size: 13px; color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.go:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
 .empty { margin: var(--space-4) 0 0; font-size: 13px; color: var(--muted); }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
+import { useDayStore } from '@/entities/day'
 import { UiLogo, UiWordmark } from '@/shared/ui'
 import { NAV_GROUPS, isActive } from '@/shared/config'
 
@@ -17,6 +18,10 @@ const collapsed = ref(new URLSearchParams(location.search).get('nav') === 'min' 
 const drawer = ref(false)               // узкий экран: колонка выдвинута
 const route = useRoute()
 const closeBtn = ref<HTMLButtonElement | null>(null)
+// счётчик «ждёт вашего ответа» (вопросы о переносе, возобновление дня, итог дня): виден на любой странице, не только на «Дне»
+const day = useDayStore()
+const count = (key: string | undefined): number => (key === 'day' ? day.needs.count : 0)
+const countWord = (n: number): string => `, ждёт вашего ответа: ${n}`
 
 function toggle(): void {
   collapsed.value = !collapsed.value
@@ -27,7 +32,10 @@ watch(drawer, (v) => { if (v) queueMicrotask(() => closeBtn.value?.focus()) })
 function onKey(ev: KeyboardEvent): void {
   if (ev.key === 'Escape' && drawer.value) drawer.value = false
 }
-onMounted(() => window.addEventListener('keydown', onKey))
+onMounted(() => {
+  window.addEventListener('keydown', onKey)
+  day.start()
+})
 onUnmounted(() => window.removeEventListener('keydown', onKey))
 </script>
 
@@ -55,6 +63,9 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
         <RouterLink v-for="it in g.items" :key="it.to" :to="it.to" class="item" :class="{ active: isActive(it, route.path) }" :aria-current="isActive(it, route.path) ? 'page' : undefined" :style="{ '--zc': `var(--zone-${it.zone})` }" :title="collapsed ? it.label : undefined" :aria-label="collapsed ? it.label : undefined">
           <span class="tile"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="it.icon" /></svg></span>
           <span class="label">{{ it.label }}</span>
+          <Transition name="badge">
+            <span v-if="count(it.badge)" class="badge">{{ count(it.badge) }}<span class="sr">{{ countWord(count(it.badge)) }}</span></span>
+          </Transition>
         </RouterLink>
       </div>
     </nav>
@@ -83,9 +94,16 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
 .groups { display: grid; gap: var(--space-4); flex: 1 1 auto; align-content: start; overflow-y: auto; overflow-x: hidden; padding: 3px; margin: -3px; }        /* поле под обводку фокуса: иначе её режет overflow */
 .group { display: grid; gap: 4px; }
 .cap { margin: 0 0 var(--space-1); padding: 0 var(--space-3); font-size: 11px; color: var(--muted); white-space: nowrap; height: 14px; transition: opacity var(--dur-enter) var(--ease-out); }
-.item { --zc: var(--muted); display: flex; align-items: center; gap: 12px; padding: 8px; border-radius: 12px; color: var(--muted); font-size: 14px; font-weight: 600; text-decoration: none; white-space: nowrap; transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease; }
+.item { --zc: var(--muted); position: relative; display: flex; align-items: center; gap: 12px; padding: 8px; border-radius: 12px; color: var(--muted); font-size: 14px; font-weight: 600; text-decoration: none; white-space: nowrap; transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease; }
 .tile { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 9px; color: var(--zc); background: color-mix(in srgb, var(--zc) 16%, transparent); transition: background-color var(--dur-enter) var(--ease-out), color var(--dur-enter) var(--ease-out); }
 .label { transition: opacity var(--dur-enter) var(--ease-out); }
+.badge { margin-left: auto; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 99px; background: var(--warn); color: var(--bg); font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; }
+.nav.collapsed .badge { position: absolute; top: 0; right: 0; margin: 0; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.badge-enter-active { transition: opacity var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out); }
+.badge-leave-active { transition: opacity 120ms var(--ease-out); }
+.badge-enter-from { opacity: 0; transform: scale(0.8); }
+.badge-leave-to { opacity: 0; }
 .item.active { color: var(--text); background: color-mix(in srgb, var(--zc) 13%, var(--panel)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--zc) 30%, transparent); }
 .item.active .tile { background: var(--zc); color: var(--bg); }
 .item:focus-visible, .icon-btn:focus-visible, .burger:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -119,5 +137,6 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
 }
 @media (prefers-reduced-motion: reduce) {
   .nav, .name, .cap, .label, .chev, .tile { transition: none; }
+  .badge-enter-from { transform: none; }
 }
 </style>

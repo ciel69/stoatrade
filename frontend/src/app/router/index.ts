@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import { BriefPage } from '@/pages/brief'
+import { DayPage } from '@/pages/day'
 import { DecisionsPage } from '@/pages/decisions'
 import { HomePage } from '@/pages/home'
 import { IdeasPage } from '@/pages/ideas'
@@ -23,6 +24,7 @@ export const router = createRouter({
     { path: '/trading/ideas', name: 'ideas', component: IdeasPage, meta: { title: 'Торговля: идеи' } },
     { path: '/trading/plans', name: 'plans', component: PlansPage, meta: { title: 'Торговля: планы' } },
     { path: '/trading/trades', name: 'trades', component: TradesPage, meta: { title: 'Торговля: сделки' } },
+    { path: '/trading/day', name: 'day', component: DayPage, meta: { title: 'Торговля: день' } },
     { path: '/brain/decisions', name: 'decisions', component: DecisionsPage, meta: { title: 'Мозг: решения' } },
     { path: '/brain/brief', name: 'brief', component: BriefPage, meta: { title: 'Мозг: досье' } },
     { path: '/system/control', name: 'control', component: SystemPage, meta: { title: 'Система: управление' } },
@@ -37,6 +39,7 @@ export const router = createRouter({
     moved('/ideas', '/trading/ideas'),
     moved('/plans', '/trading/plans'),
     moved('/trades', '/trading/trades'),
+    moved('/day', '/trading/day'),
     moved('/decisions', '/brain/decisions'),
     moved('/brief', '/brain/brief'),
   ],
