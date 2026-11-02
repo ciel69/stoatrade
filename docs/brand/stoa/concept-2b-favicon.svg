@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <rect width="32" height="32" rx="9" fill="#0b121a"/>
+  <g transform="translate(16 16) scale(0.84) translate(-16 -16)" fill="none" stroke="#4db3ff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Вариант 2b «Полукольца с хвостами»: те же полукольца с короткими горизонтальными концами, ближе к обычной букве -->
+  <path d="M18 5H13A6 6 0 0 0 13 17"/>
+  <path d="M19 15A6 6 0 0 1 19 27H14"/>
+  </g>
+</svg>

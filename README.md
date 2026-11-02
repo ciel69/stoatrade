@@ -1,4 +1,6 @@
-# open-trader
+# Stoa
+
+Stoa is an open-source platform for agentic trading.
 
 [Русская версия](README.ru.md) | License: MIT
 
@@ -84,8 +86,8 @@ Details: `docs/ARCHITECTURE.md`, `docs/DESIGN_V2.md`, `docs/SPEC_V2.md`.
 **1. Get the code**
 
 ```bash
-git clone https://github.com/ciel69/open-trader.git
-cd open-trader
+git clone https://github.com/ciel69/stoatrade.git
+cd stoatrade
 ```
 
 From a zip archive the executable bit may be lost: run `chmod +x tb` (macOS/Linux).

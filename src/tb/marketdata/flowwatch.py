@@ -364,7 +364,7 @@ def read_symbols(root, cfg, now=None):
 
 def fetch_binance(timeout=5.0):
     """bookTicker Binance USDT-M по всем символам -> {SYM без USDT: mid}. Исключение при сбое (вызывающий гасит)."""
-    req = urllib.request.Request(BINANCE_URL, headers={"User-Agent": "open-trader/flowwatch"})
+    req = urllib.request.Request(BINANCE_URL, headers={"User-Agent": "stoa/flowwatch"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         rows = json.loads(r.read().decode("utf-8"))
     out = {}

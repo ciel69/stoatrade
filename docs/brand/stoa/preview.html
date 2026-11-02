@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Знак Stoa</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%230b121a'/%3E%3Cg transform='translate(16 16) scale(0.84) translate(-16 -16)' fill='none' stroke='%234db3ff' stroke-width='3.5' stroke-linecap='round'%3E%3Cpath d='M5.5 5.5H26.5M5.5 26.5H26.5M9.5 26.5V19M16 26.5V15.5M22.5 26.5V12'/%3E%3C/g%3E%3C/svg%3E">
+<style>
+  :root {
+    --d-bg: #0b121a; --d-panel: #121c28; --d-line: #223142; --d-line2: #31445a; --d-text: #e8eef4; --d-muted: #93a4b8; --d-accent: #4db3ff;
+    --l-bg: #eef2f6; --l-panel: #ffffff; --l-line: #d6dee7; --l-text: #0f1a26; --l-muted: #4a5b6f; --l-accent: #0b63b5;
+    --font: "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--d-bg); color: var(--d-text); font: 14px/1.5 var(--font); }
+  ::selection { background: #14304a; color: var(--d-text); }
+  main { max-width: 1120px; margin: 0 auto; padding: 40px 16px 64px; }
+  h1 { font-size: 26px; letter-spacing: -0.02em; margin: 0 0 6px; }
+  .lead { color: var(--d-muted); margin: 0 0 28px; max-width: 70ch; }
+  section { margin-bottom: 56px; }
+  h2 { font-size: 18px; letter-spacing: -0.01em; margin: 0 0 4px; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+  h2 .tag { font-size: 12px; font-weight: 600; color: var(--d-accent); border: 1px solid var(--d-line2); border-radius: 999px; padding: 1px 9px; }
+  .about { color: var(--d-muted); margin: 0 0 16px; max-width: 72ch; }
+  .pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+  .board { border-radius: 14px; padding: 20px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 22px; }
+  .dark  { background: var(--d-panel); border: 1px solid var(--d-line); color: var(--d-accent); --tx: var(--d-text); --mt: var(--d-muted); --bg: var(--d-bg); }
+  .light { background: var(--l-panel); border: 1px solid var(--l-line); color: var(--l-accent); --tx: var(--l-text); --mt: var(--l-muted); --bg: var(--l-bg); }
+  .sizes { display: flex; align-items: flex-end; gap: 22px; flex-wrap: wrap; }
+  .sizes figure { margin: 0; display: grid; justify-items: center; gap: 6px; }
+  figcaption { font-size: 11px; color: var(--mt); font-variant-numeric: tabular-nums; }
+  svg { display: block; }
+  .row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .row > svg { max-width: 100%; height: auto; }
+  .mono { color: var(--tx); }
+  .word { color: var(--tx); }
+  .chrome { display: flex; gap: 2px; align-items: flex-end; padding: 6px 6px 0; border-radius: 8px 8px 0 0; background: color-mix(in srgb, var(--tx) 6%, transparent); }
+  .tab { display: flex; align-items: center; gap: 7px; background: var(--bg); border-radius: 7px 7px 0 0; padding: 6px 12px 6px 9px; font-size: 12px; color: var(--tx); }
+  .tab.idle { background: transparent; color: var(--mt); }
+  .nav { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; background: color-mix(in srgb, var(--tx) 5%, transparent); }
+  .nav span { font-size: 15px; font-weight: 650; letter-spacing: -0.01em; color: var(--tx); }
+  .strip { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; margin-bottom: 48px; }
+  .strip .board { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; padding: 16px 20px; }
+  .cell { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .cell span { font-size: 12px; color: var(--mt); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .loader { height: 240px; display: grid; place-content: center; justify-items: center; gap: 14px; background: var(--bg); }
+  .loader-word { color: var(--tx); animation: st-word calc(240ms*var(--k,1)) cubic-bezier(0.23,1,0.32,1) calc(380ms*var(--k,1)) both; }
+  @keyframes st-word { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  .controls { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin: 0 0 14px; color: var(--d-muted); }
+  button { font: inherit; font-weight: 600; color: var(--d-text); background: var(--d-panel); border: 1px solid var(--d-line2); border-radius: 8px; padding: 6px 14px; cursor: pointer; transition: background-color 150ms ease, border-color 150ms ease; }
+  button:active { transform: scale(0.97); }
+  @media (hover: hover) and (pointer: fine) { button:hover { background: #1a2634; border-color: var(--d-accent); } }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--d-accent); outline-offset: 2px; }
+  label { display: inline-flex; gap: 8px; align-items: center; cursor: pointer; }
+  input[type=checkbox] { accent-color: var(--d-accent); width: 16px; height: 16px; margin: 0; }
+  code { font-size: 12.5px; color: var(--d-text); background: var(--d-panel); border: 1px solid var(--d-line); border-radius: 5px; padding: 0 5px; }
+  .st-l{transform-box:fill-box;transform-origin:center;animation:st-lintel calc(280ms*var(--k,1)) cubic-bezier(0.23,1,0.32,1) both}
+.st-c{stroke-dasharray:1;animation:st-rise calc(360ms*var(--k,1)) cubic-bezier(0.23,1,0.32,1) both}
+.st-c1{animation-delay:calc(140ms*var(--k,1))}.st-c2{animation-delay:calc(200ms*var(--k,1))}.st-c3{animation-delay:calc(260ms*var(--k,1))}
+@keyframes st-lintel{from{opacity:0;transform:scaleX(.55)}}
+@keyframes st-rise{from{opacity:0;stroke-dashoffset:1}}
+@keyframes st-fade{from{opacity:0}}
+@media (prefers-reduced-motion:reduce){.st-l,.st-c{animation:st-fade 200ms ease both}}
+  @media (prefers-reduced-motion: reduce) { .loader-word { animation: st-fade 200ms ease both; } button:active { transform: none; } }
+  @media (max-width: 760px) { .pair, .strip, .strip .board { grid-template-columns: minmax(0, 1fr); } }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="c1" viewBox="0 0 32 32"><g fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 5.5H26.5"/><path d="M5.5 26.5H26.5"/><path d="M9.5 26.5V19"/><path d="M16 26.5V15.5"/><path d="M22.5 26.5V12"/></g></symbol>
+    <symbol id="c2" viewBox="0 0 32 32"><g fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19.75 6H12.75A5 5 0 0 0 12.75 16"/><path d="M19.25 16A5 5 0 0 1 19.25 26H12.25"/></g></symbol>
+    <symbol id="c3" viewBox="0 0 32 32"><g fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M24 6H8L16.5 16L8 26H24"/></g></symbol>
+    <symbol id="word" viewBox="0 0 56 34"><g transform="translate(0 2)" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9.697 8.25A4.5 4.5 0 1 0 5.8 15A4.5 4.5 0 1 1 1.903 21.75"/><path d="M16.8 7V20.5A3.5 3.5 0 0 0 20.3 24M13.8 13H21.3"/><circle cx="31.6" cy="18.5" r="5.5"/><circle cx="48.4" cy="18.5" r="5.5"/><path d="M53.9 13V24"/></g></symbol>
+  </defs>
+</svg>
+
+<main>
+  <h1>Знак Stoa</h1>
+  <p class="lead">Три концепции знака для Stoa (репозиторий stoatrade). Цвет знака берётся из акцента дашборда: #4db3ff на тёмной теме, #0b63b5 на светлой. Сам знак монохромный и рисуется через currentColor, монолиния толщиной 3.5 в поле 32×32. Надпись в локапе нарисована контурами, шрифт для неё не нужен.</p>
+
+  <h2>Рядом на 16 и 24 px</h2>
+  <p class="about">Самый жёсткий размер: вкладка браузера и свёрнутая боковая колонка.</p>
+  <div class="strip">
+    <div class="board dark"><div class="cell"><svg width="16" height="16" aria-hidden="true"><use href="#c1"/></svg><svg width="24" height="24" aria-hidden="true"><use href="#c1"/></svg><span>1. Портик</span></div><div class="cell"><svg width="16" height="16" aria-hidden="true"><use href="#c2"/></svg><svg width="24" height="24" aria-hidden="true"><use href="#c2"/></svg><span>2. Две половины</span></div><div class="cell"><svg width="16" height="16" aria-hidden="true"><use href="#c3"/></svg><svg width="24" height="24" aria-hidden="true"><use href="#c3"/></svg><span>3. Сигма</span></div></div>
+    <div class="board light"><div class="cell"><svg width="16" height="16" aria-hidden="true"><use href="#c1"/></svg><svg width="24" height="24" aria-hidden="true"><use href="#c1"/></svg><span>1. Портик</span></div><div class="cell"><svg width="16" height="16" aria-hidden="true"><use href="#c2"/></svg><svg width="24" height="24" aria-hidden="true"><use href="#c2"/></svg><span>2. Две половины</span></div><div class="cell"><svg width="16" height="16" aria-hidden="true"><use href="#c3"/></svg><svg width="24" height="24" aria-hidden="true"><use href="#c3"/></svg><span>3. Сигма</span></div></div>
+  </div>
+
+  <section id="c1-s">
+    <h2>1. Портик <span class="tag">рекомендую</span></h2>
+    <p class="about">Фасад портика: архитрав сверху, стилобат снизу и три колонны разной высоты между ними. Колонны — агенты с разными ролями, архитрав и стилобат — общие правила и лимиты (тейк и стоп), внутри которых они работают. Высоты растут слева направо, как бары графика, и ни одна колонна не касается архитрава: у каждой остаётся запас до лимита. Стены нет, фасад открыт. Стоя (stoa) и есть портик: открытая колоннада, где стоики учили всех желающих.</p>
+    <div class="pair">
+      <div class="board dark" aria-label="тёмная тема">
+        <div class="sizes"><figure><svg width="16" height="16" aria-hidden="true"><use href="#c1"/></svg><figcaption>16</figcaption></figure><figure><svg width="28" height="28" aria-hidden="true"><use href="#c1"/></svg><figcaption>28</figcaption></figure><figure><svg width="64" height="64" aria-hidden="true"><use href="#c1"/></svg><figcaption>64</figcaption></figure><figure><svg width="128" height="128" aria-hidden="true"><use href="#c1"/></svg><figcaption>128</figcaption></figure><figure class="mono"><svg width="28" height="28" aria-hidden="true"><use href="#c1"/></svg><figcaption>цвет текста</figcaption></figure></div>
+        <div class="row">
+          <div class="chrome"><div class="tab"><svg width="16" height="16" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#0b121a"/><g transform="translate(16 16) scale(0.84) translate(-16 -16)" color="#4db3ff"><use href="#c1"/></g></svg><span>Stoa · дашборд</span></div><div class="tab idle"><span>Bybit</span></div></div>
+          <div class="nav"><svg width="30" height="30" aria-hidden="true"><use href="#c1"/></svg><span>Stoa</span></div>
+          <div class="nav rail"><svg width="30" height="30" aria-hidden="true"><use href="#c1"/></svg></div>
+        </div>
+        <div class="row"><svg width="98" height="34" viewBox="0 0 98 34" role="img" aria-label="Stoa"><use href="#c1" x="0" y="1" width="32" height="32"/><use class="word" href="#word" x="42" y="0" width="56" height="34"/></svg></div>
+        <div class="row"><svg width="196" height="68" viewBox="0 0 98 34" role="img" aria-label="Stoa"><use href="#c1" x="0" y="1" width="32" height="32"/><use href="#word" x="42" y="0" width="56" height="34"/></svg></div>
+      </div>
+      <div class="board light" aria-label="светлая тема">
+        <div class="sizes"><figure><svg width="16" height="16" aria-hidden="true"><use href="#c1"/></svg><figcaption>16</figcaption></figure><figure><svg width="28" height="28" aria-hidden="true"><use href="#c1"/></svg><figcaption>28</figcaption></figure><figure><svg width="64" height="64" aria-hidden="true"><use href="#c1"/></svg><figcaption>64</figcaption></figure><figure><svg width="128" height="128" aria-hidden="true"><use href="#c1"/></svg><figcaption>128</figcaption></figure><figure class="mono"><svg width="28" height="28" aria-hidden="true"><use href="#c1"/></svg><figcaption>цвет текста</figcaption></figure></div>
+        <div class="row">
+          <div class="chrome"><div class="tab"><svg width="16" height="16" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#0b121a"/><g transform="translate(16 16) scale(0.84) translate(-16 -16)" color="#4db3ff"><use href="#c1"/></g></svg><span>Stoa · дашборд</span></div><div class="tab idle"><span>Bybit</span></div></div>
+          <div class="nav"><svg width="30" height="30" aria-hidden="true"><use href="#c1"/></svg><span>Stoa</span></div>
+          <div class="nav rail"><svg width="30" height="30" aria-hidden="true"><use href="#c1"/></svg></div>
+        </div>
+        <div class="row"><svg width="98" height="34" viewBox="0 0 98 34" role="img" aria-label="Stoa"><use href="#c1" x="0" y="1" width="32" height="32"/><use class="word" href="#word" x="42" y="0" width="56" height="34"/></svg></div>
+        <div class="row"><svg width="196" height="68" viewBox="0 0 98 34" role="img" aria-label="Stoa"><use href="#c1" x="0" y="1" width="32" height="32"/><use href="#word" x="42" y="0" width="56" height="34"/></svg></div>
+      </div>
+    </div>
+  </section>
+  <section id="c2-s">
+    <h2>2. Две половины</h2>
+    <p class="about">Буква S из двух одинаковых крюков, один повёрнут относительно другого на 180°. Верхний — мозг, который пишет планы, нижний — исполнитель, который их выполняет и один держит ключ. Зазор между ними разделяет роли и оставляет знак открытым. Грамматика та же, что у прежнего «Проёма»: две толстые дуги с круглыми концами.</p>
+    <div class="pair">
+      <div class="board dark" aria-label="тёмная тема">
+        <div class="sizes"><figure><svg width="16" height="16" aria-hidden="true"><use href="#c2"/></svg><figcaption>16</figcaption></figure><figure><svg width="28" height="28" aria-hidden="true"><use href="#c2"/></svg><figcaption>28</figcaption></figure><figure><svg width="64" height="64" aria-hidden="true"><use href="#c2"/></svg><figcaption>64</figcaption></figure><figure><svg width="128" height="128" aria-hidden="true"><use href="#c2"/></svg><figcaption>128</figcaption></figure><figure class="mono"><svg width="28" height="28" aria-hidden="true"><use href="#c2"/></svg><figcaption>цвет текста</figcaption></figure></div>
+        <div class="row">
+          <div class="chrome"><div class="tab"><svg width="16" height="16" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#0b121a"/><g transform="translate(16 16) scale(0.84) translate(-16 -16)" color="#4db3ff"><use href="#c2"/></g></svg><span>Stoa · дашборд</span></div><div class="tab idle"><span>Bybit</span></div></div>
+          <div class="nav"><svg width="30" height="30" aria-hidden="true"><use href="#c2"/></svg><span>Stoa</span></div>
+          <div class="nav rail"><svg width="30" height="30" aria-hidden="true"><use href="#c2"/></svg></div>
+        </div>
+        <div class="row"><svg width="98" height="34" viewBox="0 0 98 34" role="img" aria-label="Stoa"><use href="#c2" x="0" y="1" width="32" height="32"/><use class="word" href="#word" x="42" y="0" width="56" height="34"/></svg></div>
+        <div class="row"><svg width="196" height="68" viewBox="0 0 98 34" role="img" aria-label="Stoa"><use href="#c2" x="0" y="1" width="32" height="32"/><use href="#word" x="42" y="0" width="56" height="34"/></svg></div>
+      </div>
+      <div class="board light" aria-label="светлая тема">
+        <div class="sizes"><figure><svg width="16" height="16" aria-hidden="true"><use href="#c2"/></svg><figcaption>16</figcaption></figure><figure><svg width="28" height="28" aria-hidden="true"><use href="#c2"/></svg><figcaption>28</figcaption></figure><figure><svg width="64" height="64" aria-hidden="true"><use href="#c2"/></svg><figcaption>64</figcaption></figure><figure><svg width="128" height="128" aria-hidden="true"><use href="#c2"/></svg><figcaption>128</figcaption></figure><figure class="mono"><svg width="28" height="28" aria-hidden="true"><use href="#c2"/></svg><figcaption>цвет текста</figcaption></figure></div>
+        <div class="row">
+          <div class="chrome"><div class="tab"><svg width="16" height="16" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#0b121a"/><g transform="translate(16 16) scale(0.84) translate(-16 -16)" color="#4db3ff"><use href="#c2"/></g></svg><span>Stoa · дашборд</span></div><div class="tab idle"><span>Bybit</span></div></div>
+          <div class="nav"><svg width="30" height="30" aria-hidden="true"><use href="#c2"/></svg><span>Stoa</span></div>
+          <div class="nav rail"><svg width="30" height="30" aria-hidden="true"><use href="#c2"/></svg></div>
+        </div>
+        <div class="row"><svg width="98" height="34" viewBox="0 0 98 34" role="img" aria-label="Stoa"><use href="#c2" x="0" y="1" width="32" height="32"/><use class="word" href="#word" x="42" y="0" width="56" height="34"/></svg></div>
+        <div class="row"><svg width="196" height="68" viewBox="0 0 98 34" role="img" aria-label="Stoa"><use href="#c2" x="0" y="1" width="32" height="32"/><use href="#word" x="42" y="0" width="56" height="34"/></svg></div>
+      </div>
+    </div>
+  </section>
+  <section id="c3-s">
+    <h2>3. Сигма</h2>
+    <p class="about">Греческая Σ, первая буква ΣΤΟΑ. Верхняя черта — тейк, нижняя — стоп, ломаная между ними — путь цены от уровня к уровню. Σ ещё и знак суммы: решение складывается из голосов нескольких агентов, а результат меряется честной статистикой.</p>
+    <div class="pair">
+      <div class="board dark" aria-label="тёмная тема">
+        <div class="sizes"><figure><svg width="16" height="16" aria-hidden="true"><use href="#c3"/></svg><figcaption>16</figcaption></figure><figure><svg width="28" height="28" aria-hidden="true"><use href="#c3"/></svg><figcaption>28</figcaption></figure><figure><svg width="64" height="64" aria-hidden="true"><use href="#c3"/></svg><figcaption>64</figcaption></figure><figure><svg width="128" height="128" aria-hidden="true"><use href="#c3"/></svg><figcaption>128</figcaption></figure><figure class="mono"><svg width="28" height="28" aria-hidden="true"><use href="#c3"/></svg><figcaption>цвет текста</figcaption></figure></div>
+        <div class="row">
+          <div class="chrome"><div class="tab"><svg width="16" height="16" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#0b121a"/><g transform="translate(16 16) scale(0.84) translate(-16 -16)" color="#4db3ff"><use href="#c3"/></g></svg><span>Stoa · дашборд</span></div><div class="tab idle"><span>Bybit</span></div></div>
+          <div class="nav"><svg width="30" height="30" aria-hidden="true"><use href="#c3"/></svg><span>Stoa</span></div>
+          <div class="nav rail"><svg width="30" height="30" aria-hidden="true"><use href="#c3"/></svg></div>
+        </div>
+        <div class="row"><svg width="98" height="34" viewBox="0 0 98 34" role="img" aria-label="Stoa"><use href="#c3" x="0" y="1" width="32" height="32"/><use class="word" href="#word" x="42" y="0" width="56" height="34"/></svg></div>
+        <div class="row"><svg width="196" height="68" viewBox="0 0 98 34" role="img" aria-label="Stoa"><use href="#c3" x="0" y="1" width="32" height="32"/><use href="#word" x="42" y="0" width="56" height="34"/></svg></div>
+      </div>
+      <div class="board light" aria-label="светлая тема">
+        <div class="sizes"><figure><svg width="16" height="16" aria-hidden="true"><use href="#c3"/></svg><figcaption>16</figcaption></figure><figure><svg width="28" height="28" aria-hidden="true"><use href="#c3"/></svg><figcaption>28</figcaption></figure><figure><svg width="64" height="64" aria-hidden="true"><use href="#c3"/></svg><figcaption>64</figcaption></figure><figure><svg width="128" height="128" aria-hidden="true"><use href="#c3"/></svg><figcaption>128</figcaption></figure><figure class="mono"><svg width="28" height="28" aria-hidden="true"><use href="#c3"/></svg><figcaption>цвет текста</figcaption></figure></div>
+        <div class="row">
+          <div class="chrome"><div class="tab"><svg width="16" height="16" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#0b121a"/><g transform="translate(16 16) scale(0.84) translate(-16 -16)" color="#4db3ff"><use href="#c3"/></g></svg><span>Stoa · дашборд</span></div><div class="tab idle"><span>Bybit</span></div></div>
+          <div class="nav"><svg width="30" height="30" aria-hidden="true"><use href="#c3"/></svg><span>Stoa</span></div>
+          <div class="nav rail"><svg width="30" height="30" aria-hidden="true"><use href="#c3"/></svg></div>
+        </div>
+        <div class="row"><svg width="98" height="34" viewBox="0 0 98 34" role="img" aria-label="Stoa"><use href="#c3" x="0" y="1" width="32" height="32"/><use class="word" href="#word" x="42" y="0" width="56" height="34"/></svg></div>
+        <div class="row"><svg width="196" height="68" viewBox="0 0 98 34" role="img" aria-label="Stoa"><use href="#c3" x="0" y="1" width="32" height="32"/><use href="#word" x="42" y="0" width="56" height="34"/></svg></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="anim">
+    <h2>Появление на экране загрузки <span class="tag">концепция 1</span></h2>
+    <p class="about">Сначала раскрываются архитрав и стилобат (правила уже действуют), затем снизу по очереди вырастают колонны. Всё укладывается в 620 мс, проигрывается один раз, кривая ease-out (0.23, 1, 0.32, 1). При «уменьшении движения» в системе знак просто проявляется за 200 мс. Отдельный файл: <code>concept-1-animated.svg</code>.</p>
+    <div class="controls">
+      <button type="button" id="replay">Повторить</button>
+      <label><input type="checkbox" id="slow"> Замедлить в 4 раза</label>
+    </div>
+    <div class="pair" id="loaders">
+      <div class="board dark loader"><svg class="st-anim" width="72" height="72" viewBox="0 0 32 32" role="img" aria-label="Stoa" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path class="st-l" d="M5.5 5.5H26.5"/><path class="st-l" d="M5.5 26.5H26.5"/><path class="st-c st-c1" pathLength="1" d="M9.5 26.5V19"/><path class="st-c st-c2" pathLength="1" d="M16 26.5V15.5"/><path class="st-c st-c3" pathLength="1" d="M22.5 26.5V12"/></svg><svg class="loader-word" width="56" height="34" viewBox="0 0 56 34" aria-hidden="true"><use href="#word"/></svg></div>
+      <div class="board light loader"><svg class="st-anim" width="72" height="72" viewBox="0 0 32 32" role="img" aria-label="Stoa" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path class="st-l" d="M5.5 5.5H26.5"/><path class="st-l" d="M5.5 26.5H26.5"/><path class="st-c st-c1" pathLength="1" d="M9.5 26.5V19"/><path class="st-c st-c2" pathLength="1" d="M16 26.5V15.5"/><path class="st-c st-c3" pathLength="1" d="M22.5 26.5V12"/></svg><svg class="loader-word" width="56" height="34" viewBox="0 0 56 34" aria-hidden="true"><use href="#word"/></svg></div>
+    </div>
+  </section>
+</main>
+<script>
+  (function () {
+    var box = document.getElementById('loaders');
+    var slow = document.getElementById('slow');
+    function replay() {
+      box.style.setProperty('--k', slow.checked ? '4' : '1');
+      box.querySelectorAll('.loader').forEach(function (el) {
+        var fresh = el.cloneNode(true);
+        el.replaceWith(fresh);
+      });
+    }
+    document.getElementById('replay').addEventListener('click', replay);
+    slow.addEventListener('change', replay);
+  })();
+</script>
+</body>
+</html>

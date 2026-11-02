@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 98 34" role="img" aria-label="Stoa">
+  <g transform="translate(0 1)" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Вариант 2c «Цельная»: S одной линией из трёх горизонталей и двух полуколец; средняя горизонталь — общий уровень -->
+  <path d="M22 6H13A5 5 0 0 0 13 16H19A5 5 0 0 1 19 26H10"/>
+  </g>
+  <g transform="translate(42 2)" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Надпись «Stoa»: собственная геометрическая монолиния, контуры SVG, шрифт не нужен -->
+    <path d="M9.697 8.25A4.5 4.5 0 1 0 5.8 15A4.5 4.5 0 1 1 1.903 21.75"/>
+    <path d="M16.8 7V20.5A3.5 3.5 0 0 0 20.3 24M13.8 13H21.3"/>
+    <circle cx="31.6" cy="18.5" r="5.5"/>
+    <circle cx="48.4" cy="18.5" r="5.5"/>
+    <path d="M53.9 13V24"/>
+  </g>
+</svg>

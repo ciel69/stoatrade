@@ -28,7 +28,7 @@ HEAVY_S = 2.0           # home собирается около секунды: �
 DEV_ORIGINS = ("http://127.0.0.1:5173", "http://localhost:5173")      # Vite dev server (npm run dev)
 CTYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml",
           ".json": "application/json; charset=utf-8", ".woff2": "font/woff2", ".png": "image/png", ".ico": "image/x-icon", ".map": "application/json"}
-PLACEHOLDER = """<!doctype html><meta charset="utf-8"><title>open-trader: новый дашборд</title>
+PLACEHOLDER = """<!doctype html><meta charset="utf-8"><title>Stoa: новый дашборд</title>
 <body style="font:16px system-ui;background:#0b121a;color:#e8eef4;padding:32px;max-width:640px">
 <h1>Фронт ещё не собран</h1><p>Сервер и сокет работают. Соберите интерфейс:</p>
 <pre style="background:#121c28;padding:12px;border-radius:8px">cd frontend\nnpm ci\nnpm run build</pre>

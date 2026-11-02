@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <rect width="32" height="32" rx="9" fill="#0b121a"/>
+  <g transform="translate(16 16) scale(0.84) translate(-16 -16)" fill="none" stroke="#4db3ff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Вариант 2c «Цельная»: S одной линией из трёх горизонталей и двух полуколец; средняя горизонталь — общий уровень -->
+  <path d="M22 6H13A5 5 0 0 0 13 16H19A5 5 0 0 1 19 26H10"/>
+  </g>
+</svg>

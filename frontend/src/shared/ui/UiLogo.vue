@@ -1,13 +1,14 @@
 <script setup lang="ts">
-/** Логотип проекта, концепция «Проём» (docs/brand/logo): буква O разрезана пополам, правая половина сдвинута вверх-вправо — открытость (Open) и пробой уровня (Trader).
+/** Знак Stoa, вариант 2b «Полукольца с хвостами» (docs/brand/stoa): две полудуги S с короткими горизонтальными концами.
+ * Половины — мозг и исполнитель: роли переходят одна в другую, но не слиты; горизонтали намекают на уровни.
  * Тот же знак, что и favicon (public/favicon.svg), цвет берёт у родителя (акцент). */
 withDefaults(defineProps<{ size?: number }>(), { size: 28 })
 </script>
 
 <template>
-  <svg class="logo" viewBox="0 0 32 32" :width="size" :height="size" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round">
-    <path d="M13.5 10A8.5 8.5 0 0 0 13.5 27" />
-    <path d="M18.5 5A8.5 8.5 0 0 1 18.5 22" />
+  <svg class="logo" viewBox="0 0 32 32" :width="size" :height="size" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M18 5H13A6 6 0 0 0 13 17" />
+    <path d="M19 15A6 6 0 0 1 19 27H14" />
   </svg>
 </template>
 

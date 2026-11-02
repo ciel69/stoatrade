@@ -1,9 +1,9 @@
 {
-  "name": "open-trader-dashboard",
+  "name": "stoa-dashboard",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Новый дашборд open-trader: Vue 3 + Pinia + TypeScript, архитектура FSD, только WebSocket. План: docs/FRONTEND_PLAN.md",
+  "description": "Новый дашборд Stoa: Vue 3 + Pinia + TypeScript, архитектура FSD, только WebSocket. План: docs/FRONTEND_PLAN.md",
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",

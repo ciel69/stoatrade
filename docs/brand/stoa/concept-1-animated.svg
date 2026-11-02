@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Stoa" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Появление знака «Портик» для экрана загрузки: архитрав и стилобат раскрываются от центра (280 мс),
+       колонны вырастают снизу с шагом 60 мс (360 мс), всё заканчивается за 620 мс; кривая ease-out (0.23,1,0.32,1).
+       При prefers-reduced-motion остаётся только проявление прозрачностью за 200 мс. Играет один раз. -->
+  <style>
+.st-l{transform-box:fill-box;transform-origin:center;animation:st-lintel 280ms cubic-bezier(0.23,1,0.32,1) both}
+.st-c{stroke-dasharray:1;animation:st-rise 360ms cubic-bezier(0.23,1,0.32,1) both}
+.st-c1{animation-delay:140ms}.st-c2{animation-delay:200ms}.st-c3{animation-delay:260ms}
+@keyframes st-lintel{from{opacity:0;transform:scaleX(.55)}}
+@keyframes st-rise{from{opacity:0;stroke-dashoffset:1}}
+@keyframes st-fade{from{opacity:0}}
+@media (prefers-reduced-motion:reduce){.st-l,.st-c{animation:st-fade 200ms ease both}}
+  </style>
+  <path class="st-l" d="M5.5 5.5H26.5"/>
+  <path class="st-l" d="M5.5 26.5H26.5"/>
+  <path class="st-c st-c1" pathLength="1" d="M9.5 26.5V19"/>
+  <path class="st-c st-c2" pathLength="1" d="M16 26.5V15.5"/>
+  <path class="st-c st-c3" pathLength="1" d="M22.5 26.5V12"/>
+</svg>

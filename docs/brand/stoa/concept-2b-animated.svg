@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Stoa" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Появление знака 2b «Полукольца с хвостами» для экрана загрузки: верхняя половина с хвостом приходит сверху-слева, нижняя снизу-справа
+       (сдвиг 3 единицы и прозрачность, 380 мс, вторая с задержкой 70 мс), всё заканчивается за 450 мс; кривая ease-out (0.23,1,0.32,1).
+       При prefers-reduced-motion остаётся только проявление прозрачностью за 200 мс. Играет один раз.
+       Классы sb-* уникальны: при вставке SVG прямо в HTML стиль становится общим для страницы и не должен задевать sa-* (2a) и классы дашборда. -->
+  <style>
+.sb-h{animation:sb-in 380ms cubic-bezier(0.23,1,0.32,1) both}
+.sb-t{--sb-dx:-3px;--sb-dy:-3px}
+.sb-b{--sb-dx:3px;--sb-dy:3px;animation-delay:70ms}
+@keyframes sb-in{from{opacity:0;transform:translate(var(--sb-dx),var(--sb-dy))}}
+@keyframes sb-fade{from{opacity:0}}
+@media (prefers-reduced-motion:reduce){.sb-h{animation:sb-fade 200ms ease both}}
+  </style>
+  <path class="sb-h sb-t" d="M18 5H13A6 6 0 0 0 13 17"/>
+  <path class="sb-h sb-b" d="M19 15A6 6 0 0 1 19 27H14"/>
+</svg>

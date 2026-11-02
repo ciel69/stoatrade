@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Stoa" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Появление знака «Полукольца» для экрана загрузки: верхняя половина приходит сверху-слева, нижняя снизу-справа
+       (сдвиг 3 единицы и прозрачность, 380 мс, вторая с задержкой 70 мс), всё заканчивается за 450 мс; кривая ease-out (0.23,1,0.32,1).
+       При prefers-reduced-motion остаётся только проявление прозрачностью за 200 мс. Играет один раз. -->
+  <style>
+.sa-h{animation:sa-in 380ms cubic-bezier(0.23,1,0.32,1) both}
+.sa-t{--dx:-3px;--dy:-3px}
+.sa-b{--dx:3px;--dy:3px;animation-delay:70ms}
+@keyframes sa-in{from{opacity:0;transform:translate(var(--dx),var(--dy))}}
+@keyframes sa-fade{from{opacity:0}}
+@media (prefers-reduced-motion:reduce){.sa-h{animation:sa-fade 200ms ease both}}
+  </style>
+  <path class="sa-h sa-t" d="M13 5A6 6 0 0 0 13 17"/>
+  <path class="sa-h sa-b" d="M19 15A6 6 0 0 1 19 27"/>
+</svg>

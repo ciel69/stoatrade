@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Stoa" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Вариант 2a «Полукольца»: S из двух полуколец, которые заходят друг за друга по высоте и не касаются; передача от мозга к исполнителю -->
+  <path d="M13 5A6 6 0 0 0 13 17"/>
+  <path d="M19 15A6 6 0 0 1 19 27"/>
+</svg>

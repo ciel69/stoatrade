@@ -50,7 +50,7 @@ function showTab() {
   var subs = groupTabs(g), host = $("subtabs");
   host.hidden = subs.length < 2;
   if (subs.length > 1) segment(host, subs.map(function (id) { return [id, tabTitle(id), subCount[id] || ""]; }), ui.tab, goTab, true);
-  document.title = tabTitle(ui.tab) + " · open-trader";
+  document.title = tabTitle(ui.tab) + " · Stoa";
 }
 function renderActiveTab() {
   if (EXT[ui.tab]) { EXT[ui.tab].render(); tickAll(); return; }
