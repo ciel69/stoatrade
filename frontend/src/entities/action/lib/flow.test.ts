@@ -98,6 +98,11 @@ describe('buildCommand', () => {
     expect(c.args).not.toHaveProperty('allow_amber')
     expect(buildCommand({ action: 'brain.role', args: { op: 'chain', role: 'A.x' } }, calm).args).toMatchObject({ accepted: [] })
   })
+  it('llm.provider: accepted уходит (иначе add/update с предупреждением даёт E_WARN), allow_amber нет', () => {
+    expect(ACCEPT_KEYS['llm.provider']).toEqual({ accepted: true, allowAmber: false })
+    const c = buildCommand({ action: 'llm.provider', args: { op: 'update', id: 'mine', patch: { base_url: 'https://x.example' } } }, risky)
+    expect(c.args).toEqual({ op: 'update', id: 'mine', patch: { base_url: 'https://x.example' }, accepted: ['W1', 'W2'] })
+  })
   it('остальные действия: чужих ключей нет (сервер их отбросит или отвергнет)', () => {
     const c = buildCommand({ action: 'kill.set', args: { flatten: true, reason: 'r' } }, risky)
     expect(c.args).toEqual({ flatten: true, reason: 'r' })

@@ -53,7 +53,7 @@ function close(): void {
     <div class="w-conn"><ConnectBoard :provider="provider" :exchange="exchange" @provider="pickProvider" @exchange="pickExchange" /></div>
     <div class="w-cost"><UsageBoard :swaps-open="swaps" :selected="usage" @swaps="pickSwaps" @select="pickUsage" @close="close" /></div>
     <div class="w-trade"><ModeBoard /></div>
-    <div class="w-exp"><ExpertBoard /></div>
+    <div class="w-exp"><ExpertBoard @open-provider="pickProvider" /></div>
     <UiSidePanel :open="open" :label="label" @close="close">
       <RolePanel v-if="role" :key="'r' + role" :role="role" @close="close" />
       <ConnectPanel v-else-if="provider" :key="'p' + provider" kind="provider" :id="provider" @close="close" />

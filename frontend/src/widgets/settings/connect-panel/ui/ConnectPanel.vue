@@ -7,7 +7,10 @@ import { UiChip, UiDetail } from '@/shared/ui'
 import { useExchangeEdit } from '../model/useExchangeEdit'
 import { useProviderEdit } from '../model/useProviderEdit'
 import ExchangeEdit from './ExchangeEdit.vue'
+import { useProviderNet } from '../model/useProviderNet'
+import ProviderAddress from './ProviderAddress.vue'
 import ProviderKey from './ProviderKey.vue'
+import ProviderModels from './ProviderModels.vue'
 import ProviderLimits from './ProviderLimits.vue'
 import ProviderSwitch from './ProviderSwitch.vue'
 import './provider-edit.css'
@@ -15,7 +18,7 @@ import './provider-edit.css'
 /**
  * Боковая панель провайдера или биржи. Провайдер: где работает, ключ словами, лимиты, модели с ценой за миллион токенов, контекстом и тегами, какие роли им пользуются;
  * техническое (имя переменной окружения ключа, хост, профили) внизу. Биржа: статус, режим, исполнитель, виды ключей, лимит позиций. Значений ключей нет ни здесь, ни в данных.
- * Провайдер редактируется, когда доступно действие llm.provider (расширенное управление): включение, потолки расхода, ключ (только запись). Иначе честная заметка и чтение.
+ * Провайдер редактируется, когда доступно действие llm.provider (расширенное управление): включение, потолки расхода, ключ (только запись), адрес, список моделей у провайдера, проверка подключения. Иначе честная заметка и чтение.
  * Биржа остаётся только для чтения. Отладка без сервера: ?edit=mock | mock-calm.
  */
 const props = defineProps<{ kind: 'provider' | 'exchange'; id: string }>()
@@ -30,6 +33,7 @@ if (dbg && dbg.startsWith('mock') && !store.mocked) {
 }
 const edit = useProviderEdit(() => props.id)
 const xedit = useExchangeEdit(() => props.id)
+const net = useProviderNet(() => props.id, () => edit.shownKey.value)
 if (dbg && dbg.startsWith('mock')) useControlStore().mockPlatform(dbg === 'mock-run')
 const roles = computed(() => store.snapshot?.roles ?? [])
 const p = computed(() => (props.kind === 'provider' ? (store.snapshot?.provider_list ?? []).find((x) => x.id === props.id) ?? null : null))
@@ -55,6 +59,8 @@ const verified = (v: boolean | string | null | undefined) => (v === true ? 'пр
         <ProviderSwitch :edit="edit" />
         <ProviderKey :edit="edit" />
         <ProviderLimits :edit="edit" />
+        <ProviderAddress :net="net" :has-key="edit.shownKey.value" />
+        <ProviderModels :net="net" />
       </template>
       <template v-else>
         <p class="locked">Менять провайдеров из дашборда пока нельзя: владельцу нужно включить расширенное управление.</p>

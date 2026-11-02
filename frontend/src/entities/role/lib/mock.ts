@@ -1,5 +1,6 @@
 import type { ExchangeRow, PresetRow, ProfileRow, ProviderRow, RoleModel, RolesSnapshot } from '../model/types'
 import type { OptsArgs, ProfileArgs } from './expert'
+import type { AddArgs } from './providerNet'
 
 /** Профили для отладки без сервера (?edit=mock): одно семейство локальных и облачных, один с выключенным провайдером, один без допуска к live. */
 export const MOCK_PROFILES: ProfileRow[] = [
@@ -157,6 +158,33 @@ export function mockPresetAdd(s: RolesSnapshot, id: string): RolesSnapshot {
     limits: { concurrent: null, rpm: null, day_usd: null, hour_usd: null, day_toks: null }, models: pr.models.map((m) => mockModel(m, m, null)), profiles: [],
   }
   return { ...s, provider_list: [...(s.provider_list ?? []), row], preset_list: (s.preset_list ?? []).map((p) => (p.id === id ? { ...p, added: true } : p)) }
+}
+
+/** Отладка: что сделал бы сервер после llm.provider add со своим spec: выключенный провайдер, ключ ещё не задан. */
+export function mockProviderAdd(s: RolesSnapshot, a: AddArgs): RolesSnapshot {
+  if ((s.provider_list ?? []).some((p) => p.id === a.id)) return s
+  const spec = a.spec as { name?: string; adapter?: string; base_url?: string; allow_private?: boolean; models?: Record<string, { name: string }> }
+  let host: string | null = null
+  try { host = new URL(String(spec.base_url)).host } catch { host = null }
+  const row: ProviderRow = {
+    id: a.id, name: spec.name ?? a.id, adapter: spec.adapter ?? null, enabled: false, local: false, verified: false, note: null, error: null, base_host: host, allow_private: spec.allow_private === true,
+    cred: { needed: true, present: false, perms_ok: null, env: null }, limits: { concurrent: null, rpm: null, day_usd: null, hour_usd: null, day_toks: null },
+    models: Object.entries(spec.models ?? {}).map(([k, m]) => mockModel(k, m.name, { in_miss: 0, in_hit: 0, out: 0 })), profiles: [],
+  }
+  return { ...s, provider_list: [...(s.provider_list ?? []), row] }
+}
+
+/** Отладка: что сделал бы сервер после model_set (новая модель с нулевой ценой) и после update адреса. */
+export function mockModelSet(s: RolesSnapshot, pid: string, key: string, name: string): RolesSnapshot {
+  return {
+    ...s,
+    provider_list: (s.provider_list ?? []).map((p) => (p.id !== pid || p.models.some((m) => m.id === key) ? p : { ...p, models: [...p.models, { ...mockModel(key, name, { in_miss: 0, in_hit: 0, out: 0 }), tools: false }] })),
+  }
+}
+export function mockAddress(s: RolesSnapshot, pid: string, patch: { base_url?: string; allow_private?: boolean }): RolesSnapshot {
+  let host: string | null = null
+  try { host = patch.base_url ? new URL(patch.base_url).host : null } catch { host = null }
+  return { ...s, provider_list: (s.provider_list ?? []).map((p) => (p.id !== pid ? p : { ...p, base_host: host ?? p.base_host, allow_private: patch.allow_private ?? p.allow_private })) }
 }
 
 /** Отладка: что сделал бы сервер после brain.role opts. */

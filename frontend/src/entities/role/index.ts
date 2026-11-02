@@ -1,5 +1,10 @@
 export { useRoleStore } from './model/store'
-export { mockOpts, mockPresetAdd, mockProfile } from './lib/mock'
+export { mockAddress, mockModelSet, mockOpts, mockPresetAdd, mockProfile, mockProviderAdd } from './lib/mock'
+export {
+  ADAPTERS, MAX_SHOWN_MODELS, RE_KEY_FILE, RE_MODEL_NAME, addArgs, addErrors, addLines, addReflects, addressPatch, addressReflects, emptyAdd, hostOf, envName, filterIds, looksPrivate, modelAddReflects, modelKey, modelsNote, modelsOutcome, netErrorText,
+  netReady, newModelSpec, pingLine, pingOutcome, urlProblem,
+} from './lib/providerNet'
+export type { AddArgs, AddDraft, AddErrors, AddressDraft, ModelsOk, NetFail, NetFinal, PingOk } from './lib/providerNet'
 export type { ExchangeRow, ModelPrice, PresetRow, ProfileRow, ProviderModel, ProviderRow, RoleModel, RoleParams, RoleRow, RolesSnapshot, SwapRow } from './model/types'
 export {
   MAX_FALLBACK, addFallback, changeLines, changed, chainArgs, chainArgsOf, chainOf, fallbackCandidates, listText, liveLocked, moveFallback, overlay, profileBlock, reflects, removeFallback, reverseLines, setPrimary, targetOf, useArgs, whatText,

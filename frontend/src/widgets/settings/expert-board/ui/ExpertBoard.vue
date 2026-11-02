@@ -5,12 +5,16 @@ import { THINKING, paramsText, presetNote, useRoleStore } from '@/entities/role'
 import { UiChangeBar } from '@/shared/ui'
 import { reflectText } from '@/shared/lib'
 import { useExpertEdit } from '../model/useExpertEdit'
+import { useProviderAdd } from '../model/useProviderAdd'
+import ProviderAddForm from './ProviderAddForm.vue'
 
 /**
  * Блок «Для специалиста» (свёрнут, на главном виде не мешает): профили моделей (модель с настройками, которую можно выбрать для ролей) и провайдер из шаблона. Замечания к конфигурации показывает «Кто думает» свёрнутым списком.
+ * Провайдера можно добавить из шаблона или свой (ProviderAddForm: адрес, тип, файл ключа, первая модель); после добавления форма предлагает открыть его панель (событие openProvider).
  * Профиль создаётся и правится черновиком со строкой «было → станет»; пустое поле параметра значит «не менять». Подтверждение рисков, если оно нужно, показывает общий диалог.
  * Без расширенного управления остаётся чтение. Отладка без сервера: ?edit=mock | mock-calm.
  */
+defineEmits<{ openProvider: [id: string] }>()
 const store = useRoleStore()
 const action = useActionStore()
 const dbg = new URLSearchParams(location.search).get('edit')
@@ -21,6 +25,7 @@ onMounted(() => {
   }
 })
 const e = useExpertEdit()
+const pa = useProviderAdd()
 const d = e.draft
 const off = computed(() => e.busy.value || !e.canProfile.value)
 const changeLine = computed(() => e.lines.value.map((l) => `${l.label}: ${l.from} → ${l.to}`).join('\n'))
@@ -99,7 +104,7 @@ const used = (u?: string[]): string => (u && u.length ? `используют ${
 
       <section class="sec" aria-labelledby="x-add-h">
         <h3 id="x-add-h" class="h">Добавить провайдера</h3>
-        <p class="sub">Готовые наборы настроек для известных сервисов. Провайдер добавляется выключенным и без ключа.</p>
+        <p class="sub">Готовые наборы настроек для известных сервисов или свой провайдер с собственным адресом. Провайдер добавляется выключенным и без ключа.</p>
         <ul v-if="e.presets.value.length" class="list">
           <li v-for="p in e.presets.value" :key="p.id" class="item">
             <div class="txt">
@@ -113,6 +118,7 @@ const used = (u?: string[]): string => (u && u.length ? `используют ${
         <p v-else class="sub">Все известные шаблоны уже добавлены.</p>
         <p v-if="!e.canPreset.value" class="sub">Добавлять провайдеров из дашборда пока нельзя: владельцу нужно включить расширенное управление.</p>
         <p class="status" role="status" aria-live="polite">{{ reflectText(e.presetWait.state.value) }}</p>
+        <ProviderAddForm :add="pa" @open-provider="(id) => $emit('openProvider', id)" />
       </section>
 
     </div>

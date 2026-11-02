@@ -91,7 +91,7 @@ onBeforeUnmount(() => { wipe(); clearTimeout(msgTimer) })
     <p v-if="!needs" class="pe-meta">{{ p?.local ? 'Ключ не нужен: провайдер работает локально.' : 'Этому провайдеру ключ не нужен.' }}</p>
     <template v-else>
       <p v-if="perms" class="pe-meta warn">{{ perms }}</p>
-      <p v-if="!e.canKey.value" class="pe-locked">Ввести ключ здесь пока нельзя: владельцу нужно включить расширенное управление, либо добавить ключ в терминале.</p>
+      <p v-if="!e.canKey.value" class="pe-locked">Ввести ключ здесь пока нельзя: владельцу нужно включить расширенное управление, либо добавить ключ в терминале командой <code>./tb llm key set {{ p?.id }}</code>.</p>
 
       <div v-if="e.canKey.value && present && !field" class="pe-acts left">
         <button ref="addBtn" type="button" class="pe-btn" :disabled="e.busy.value || sending" @click="openField">Заменить ключ</button>
@@ -124,4 +124,5 @@ onBeforeUnmount(() => { wipe(); clearTimeout(msgTimer) })
 label { font-size: 12px; color: var(--text); }
 .left { justify-content: flex-start; }
 p[role='status']:empty { display: none; }
+code { font-family: var(--mono, ui-monospace, monospace); font-size: 11px; overflow-wrap: anywhere; }
 </style>
