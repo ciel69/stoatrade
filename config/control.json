@@ -14,7 +14,7 @@
   "max_live_starts_day": 3,
   "live_restart_cooldown_min": 10,
   "allow_shutdown": false,
-  "allow_clear_kill_from_dash": false,
+  "allow_clear_kill_from_dash": true,
   "status_stale_s": 15,
   "risk_level_cooldown_min": 60,
   "model_change_cooldown_min": 240,
