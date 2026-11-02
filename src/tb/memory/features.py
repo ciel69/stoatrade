@@ -7,6 +7,7 @@
 import re
 import time
 
+from tb.core import plan_schema
 from tb.memory import cases, privacy
 
 CTX_NUM = ("range_5m_pct", "range_15m_pct", "ret_5m_pct", "turn_surge_5m", "chg_24h_pct", "spread_bps", "funding_pct")
@@ -184,9 +185,47 @@ def apply_brief(sit, brief):
             "blackout": (bool(mk.get("blackout")) if "blackout" in mk else None),
             "dvol": num((sent.get("dvol") or {}).get(sit.get("sym"))) if isinstance(sent.get("dvol"), dict) else None,
             "btc_ret_1h_pct": num(mk.get("btc_ret_1h_pct"))}
+    snap = brief.get("snap") if isinstance(brief.get("snap"), dict) else {}       # brain/brief.save: fng, dvol, risk_off, blackout на момент досье (есть и в урезанном досье)
+    for k, v in (("fng", num(snap.get("fng"))), ("dvol", num(snap.get("dvol"))),
+                 ("risk_off", snap.get("risk_off") if isinstance(snap.get("risk_off"), bool) else None),
+                 ("blackout", snap.get("blackout") if isinstance(snap.get("blackout"), bool) else None)):
+        if cand.get(k) is None:
+            cand[k] = v
     for k, v in cand.items():
         if sit.get(k) is None and v is not None:
             sit[k] = int(v) if k == "fng" else v
+    return finalize({k: v for k, v in sit.items() if k not in ("missing", "retro")}, sit.get("retro") or [])
+
+
+EVENT_FILL = ("range_5m_pct", "ret_5m_pct", "spread_bps", "funding_pct", "turn_surge_5m", "chg_24h_pct")
+
+
+def apply_event(sit, d):
+    """Пополняет пустые рыночные признаки (range_5m_pct, spread_bps, funding_pct, turn_surge_5m, chg_24h_pct, ret_5m_pct) числами события сканера d (поле d события шины).
+    Ничего не затирает: приоритет у ctx входа."""
+    if not isinstance(d, dict):
+        return sit
+    sit = dict(sit)
+    for k in EVENT_FILL:
+        v = num(d.get(k))
+        if sit.get(k) is None and v is not None:
+            sit[k] = v
+    return finalize({k: v for k, v in sit.items() if k not in ("missing", "retro")}, sit.get("retro") or [])
+
+
+def apply_plan(sit, spec, fired=()):
+    """confirmed/confirm_kind из плана (R1, Requirement 11.2): plan_schema.has_confirm(entry.when) - подтверждение свечой/объёмом есть на всех ветках;
+    плана нет - по событиям trigger_fired плана (fired = их cond: 'candle_close', 'volume_spike'...). Уже известное (тег no-confirm, разбор) не затирается."""
+    if sit.get("confirmed") is not None:
+        return sit
+    conf = None
+    if isinstance(spec, dict) and isinstance(spec.get("entry"), dict):
+        conf = bool(plan_schema.has_confirm(spec["entry"].get("when")))
+    elif any(isinstance(c, str) and (c.startswith("candle") or c == "volume_spike") for c in fired or ()):
+        conf = True
+    if conf is None:
+        return sit
+    sit = dict(sit, confirmed=conf, confirm_kind="candle_close" if conf else "none")
     return finalize({k: v for k, v in sit.items() if k not in ("missing", "retro")}, sit.get("retro") or [])
 
 

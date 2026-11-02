@@ -5,9 +5,12 @@ case_id с rev+1 (читатель сворачивает по case_id). Update 
 situation/decision/src фиксируются при создании. Строка <= 3 КБ. privacy_scan проверяется при записи.
 """
 import calendar
+import copy as copy_mod
 import hashlib
 import json
+import os
 import re
+import threading
 import time
 
 from tb import paths
@@ -44,7 +47,7 @@ SITUATION = {
     "turn_surge_5m": (N, 0, 10000), "chg_24h_pct": (N, -100, 10000), "spread_bps": (N, 0, 10000), "funding_pct": (N, -100, 100),
     "stop_pct": (N, 0, 100), "rr_planned": (N, 0, 1000), "size_mult": (N, 0, 10), "utc_hour": (I, 0, 23), "utc_session": (E_, SESSIONS),
     "dow": (I, 0, 6), "confirmed": (B,), "confirm_kind": (E_, CONFIRM_KINDS), "no_confirm_tag": (B,), "blackout": (B,), "fng": (I, 0, 100),
-    "dvol": (N, 0, 1000),
+    "dvol": (N, 0, 1000), "risk_off": (B,),
 }
 NUM_FEATURES = tuple(k for k, v in SITUATION.items() if v[0] in (N, I) and k not in ("utc_hour", "dow"))
 DECISION = {"action": (E_, ACTIONS), "why": (S, 200), "conf": (N, 0, 1), "stop_dist_vs_range5": (N, 0, 1000), "skip_code": (E_, SKIP_CODES)}
@@ -261,46 +264,150 @@ class CaseError(ValueError):
 
 # ---------------------------------------------------------------- хранилище
 
-def read_raw(root=None):
-    """-> (строки по порядку файла, число битых строк)."""
-    return chain.read(cases_path(root))
+HEAD_BYTES = 4096
+
+
+class _Cache:
+    """Состояние чтения одного cases.jsonl: целые строки до offset, свёртка, множество case_id. Дочитывает только хвост (см. _state)."""
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.size = 0
+        self.mtime = None
+        self.head = b""
+        self.offset = 0
+        self.rows = []
+        self.broken = 0
+        self.folded = {}
+        self.ids = set()
+        self.sorted = None
+
+
+_CACHES = {}
+_CACHE_LOCK = threading.Lock()
+
+
+def _fold_row(out, r):
+    cid = r.get("case_id")
+    if r.get("kind") == "new" and cid not in out:
+        c = dict(r)
+        c["ts_upd"] = c.get("ts")
+        out[cid] = c
+    elif r.get("kind") == "update" and cid in out:
+        c = out[cid]
+        for k in UPDATE_KEYS:
+            if k in r:
+                c[k] = dict(c.get(k) or {}, **r[k]) if k == "refs" else r[k]
+        c["rev"] = max(c.get("rev", 1), r.get("rev", 1))
+        c["ts_upd"] = r.get("ts") or c.get("ts_upd")
 
 
 def fold(rows):
     """Строки -> {case_id: случай}: база = строка new, поля из update замещают блоки; rev = последняя; ts_upd = ts последнего update."""
     out = {}
     for r in rows:
-        cid = r.get("case_id")
-        if r.get("kind") == "new" and cid not in out:
-            c = dict(r)
-            c["ts_upd"] = c.get("ts")
-            out[cid] = c
-        elif r.get("kind") == "update" and cid in out:
-            c = out[cid]
-            for k in UPDATE_KEYS:
-                if k in r:
-                    c[k] = dict(c.get(k) or {}, **r[k]) if k == "refs" else r[k]
-            c["rev"] = max(c.get("rev", 1), r.get("rev", 1))
-            c["ts_upd"] = r.get("ts") or c.get("ts_upd")
+        _fold_row(out, r)
     return out
 
 
-def load(root=None):
-    """-> список свёрнутых случаев (по возрастанию ts, затем case_id)."""
-    rows, _ = read_raw(root)
-    return sorted(fold(rows).values(), key=lambda c: (c.get("ts") or "", c["case_id"]))
+def _state(root=None):
+    """Актуальный кеш файла. Размер/первые 4 КБ/mtime не сходятся с сохранёнными -> полное перечитывание; иначе дочитывается хвост от offset.
+    Неполная последняя строка (писатель ещё пишет) в кеш не попадает: тогда результат считается полным чтением без сохранения. Вызывать под _CACHE_LOCK."""
+    path = cases_path(root)
+    key = os.path.abspath(path)
+    ca = _CACHES.get(key)
+    if ca is None:
+        ca = _CACHES[key] = _Cache()
+    try:
+        st = os.stat(path)
+        size, mtime = st.st_size, st.st_mtime_ns
+    except OSError:
+        ca.reset()
+        return ca
+    if size < ca.size or (size == ca.size and mtime != ca.mtime):
+        ca.reset()
+    try:
+        with open(path, "rb") as f:
+            head = f.read(HEAD_BYTES)
+            if not head.startswith(ca.head):
+                ca.reset()
+            if size == ca.size and mtime == ca.mtime and ca.offset == size:
+                ca.head = head
+                return ca
+            f.seek(ca.offset)
+            start = ca.offset
+            data = f.read()
+    except OSError:
+        ca.reset()
+        return ca
+    end = data.rfind(b"\n") + 1
+    rows, broken = [], 0
+    for ln in data[:end].split(b"\n"):
+        if not ln.strip():
+            continue
+        r = chain.parse(ln)
+        if r is None:
+            broken += 1
+        else:
+            rows.append(r)
+    if end != len(data):          # неполная последняя строка: не кешируем её, отдаём временное состояние
+        tail = chain.parse(data[end:])
+        tmp = _Cache()
+        tmp.rows, tmp.broken = ca.rows + rows + ([tail] if tail else []), ca.broken + broken + (0 if tail else 1)
+        tmp.folded = fold(tmp.rows)
+        tmp.ids = set(cid for cid, c in tmp.folded.items())
+        _commit(ca, rows, broken, start + end, head, size, mtime, partial=True)
+        return tmp
+    _commit(ca, rows, broken, start + end, head, size, mtime)
+    return ca
+
+
+def _commit(ca, rows, broken, offset, head, size, mtime, partial=False):
+    for r in rows:
+        ca.rows.append(r)
+        _fold_row(ca.folded, r)
+        if r.get("kind") == "new":
+            ca.ids.add(r.get("case_id"))
+    ca.broken += broken
+    ca.offset, ca.head = offset, head
+    ca.size, ca.mtime = (offset, None) if partial else (size, mtime)       # mtime=None: следующий вызов не примет кеш за актуальный
+    if rows:
+        ca.sorted = None
+
+
+def read_raw(root=None):
+    """-> (строки по порядку файла, число битых строк)."""
+    with _CACHE_LOCK:
+        ca = _state(root)
+        return list(ca.rows), ca.broken
+
+
+def load(root=None, copy=False):
+    """-> список свёрнутых случаев (по возрастанию ts, затем case_id). Объекты общие с кешем процесса: изменять нельзя; кто меняет, берёт copy=True."""
+    with _CACHE_LOCK:
+        ca = _state(root)
+        if ca.sorted is None:
+            ca.sorted = sorted(ca.folded.values(), key=lambda c: (c.get("ts") or "", c["case_id"]))
+        out = list(ca.sorted)
+    return copy_mod.deepcopy(out) if copy else out
 
 
 def get(case_id, root=None, rev=None):
-    rows, _ = read_raw(root)
-    if rev is not None:
-        rows = [r for r in rows if r.get("case_id") == case_id and r.get("rev", 1) <= rev]
-    return fold(rows).get(case_id)
+    """Свёрнутый случай (копия: можно менять) или None; rev ограничивает версию."""
+    with _CACHE_LOCK:
+        ca = _state(root)
+        if rev is not None:
+            c = fold([r for r in ca.rows if r.get("case_id") == case_id and r.get("rev", 1) <= rev]).get(case_id)
+        else:
+            c = ca.folded.get(case_id)
+    return copy_mod.deepcopy(c) if c is not None else None
 
 
 def _exists(case_id, root):
-    rows, _ = read_raw(root)
-    return any(r.get("case_id") == case_id and r.get("kind") == "new" for r in rows)
+    with _CACHE_LOCK:
+        return case_id in _state(root).ids
 
 
 def append_new(rec, root=None, now=None):
@@ -315,11 +422,18 @@ def append_new(rec, root=None, now=None):
         if _exists(norm["case_id"], root):
             raise CaseError("exists: %s" % norm["case_id"])
     try:
-        return chain.append(cases_path(root), cases_lock(root), norm, check=check, max_bytes=MAX_BYTES)
+        row = chain.append(cases_path(root), cases_lock(root), norm, check=check, max_bytes=MAX_BYTES)
     except ValueError as e:
         if isinstance(e, CaseError):
             raise
         raise CaseError(str(e))
+    _refresh(root)
+    return row
+
+
+def _refresh(root):
+    with _CACHE_LOCK:
+        _state(root)
 
 
 def append_update(case_id, patch, root=None, ts=None):
@@ -337,11 +451,13 @@ def append_update(case_id, patch, root=None, ts=None):
             raise CaseError("нет случая %s" % case_id)
         os_rec["rev"] = c.get("rev", 1) + 1
     try:
-        return chain.append(cases_path(root), cases_lock(root), os_rec, check=check, max_bytes=MAX_BYTES)
+        row = chain.append(cases_path(root), cases_lock(root), os_rec, check=check, max_bytes=MAX_BYTES)
     except ValueError as e:
         if isinstance(e, CaseError):
             raise
         raise CaseError(str(e))
+    _refresh(root)
+    return row
 
 
 def verify(root=None):

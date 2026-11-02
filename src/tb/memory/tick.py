@@ -7,23 +7,76 @@
   * вручную `./tb memory sync`.
 Ничего не торгует, сети нет; пишет только cases.jsonl и lessons.jsonl своего корня. Отдельного сервиса платформы не требуется.
 """
+import json
+import os
 import time
 
+from tb import paths
 from tb.core import ideas
 from tb.memory import cases, cfg as memcfg, lessons, migrate
 
 _LAST = {}
 
 
-def sync_now(root=None, now=None, cfg=None, lessons_too=True):
-    """Один шаг без ограничения частоты -> отчёт {"written","new","lessons"} (ошибки наружу как исключения)."""
+def state_file(root=None):
+    return paths.runtime("memory", "tick_state.json", root=root)
+
+
+def snapshot(root=None):
+    """Размер и mtime файлов-источников migrate (сделки, идеи, исходы, решения и их сегменты, config/memory.json) -> {путь: [size, mtime_ns]}."""
+    dec = paths.decisions_file(root)
+    files = [paths.state("trades.jsonl", root=root), ideas.ideas_path(root), ideas.outcomes_path(root), dec, paths.config("memory.json", root=root)]
+    seg = os.path.join(os.path.dirname(dec), "decisions.d")
+    try:
+        files += [os.path.join(seg, n) for n in sorted(os.listdir(seg))]
+    except OSError:
+        pass
+    out = {}
+    for p in files:
+        try:
+            st = os.stat(p)
+            out[os.path.basename(os.path.dirname(p)) + "/" + os.path.basename(p)] = [st.st_size, st.st_mtime_ns]
+        except OSError:
+            out[os.path.basename(os.path.dirname(p)) + "/" + os.path.basename(p)] = None
+    return out
+
+
+def _saved_snapshot(root):
+    try:
+        with open(state_file(root), encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _save_snapshot(root, snap):
+    try:
+        p = state_file(root)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        tmp = p + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(snap, f)
+        os.replace(tmp, p)
+    except OSError:
+        pass
+
+
+def sync_now(root=None, now=None, cfg=None, lessons_too=True, skip_unchanged=True):
+    """Один шаг без ограничения частоты -> отчёт {"written","new","lessons"} (ошибки наружу как исключения).
+    skip_unchanged: источники (размер и mtime) не менялись с прошлого успешного прогона без ошибок -> migrate не вызывается, отчёт с "skipped": True."""
     now = time.time() if now is None else now
     cfg = cfg or memcfg.load(root)
     try:
         ideas.resolve_planned(root, now)           # идеи с поданным планом: сделка или закрытие без входа
     except (OSError, ValueError, KeyError, TypeError):
         pass
+    snap = snapshot(root)
+    if skip_unchanged and _saved_snapshot(root) == snap and os.path.exists(cases.cases_path(root)):
+        return {"written": 0, "new": {}, "errors": [], "skipped": True}
     rep = migrate.migrate(root, dry_run=False, cfg=cfg, final_only=True)
+    if not rep.get("errors"):
+        _save_snapshot(root, snap)
     out = {"written": rep.get("written", 0), "new": rep.get("new", {}), "errors": rep.get("errors", [])[:3]}
     if lessons_too and rep.get("written"):
         try:

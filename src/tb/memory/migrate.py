@@ -8,6 +8,7 @@ plan() строит список новых случаев и update-строк,
 """
 import json
 import os
+import re
 
 from tb import paths
 from tb.core import decisions, ideas
@@ -33,26 +34,82 @@ def _fold_trades(path):
     return [(i, trades[i]) for i in order]
 
 
+PLAN_BRIEF = "plan_brief"                       # decisions what=plan_brief: связь плана с досье и событием, на которых он подан (пишет шлюз при подаче плана)
+RE_BRIEF_ID = re.compile(r"^B-[0-9]{8}-[0-9]{4}-[0-9]{2}$")
+RE_PLAN_ID = re.compile(r"^PL-[A-Za-z0-9-]{1,40}$")
+
+
 def read_sources(root=None):
     outs = {}
     for r in ideas.read_rows(ideas.outcomes_path(root)):
         if r.get("id") is not None:
             outs.setdefault((r.get("kind"), str(r["id"])), []).append(r)
+    decs, links = [], {}
     try:
-        decs = [d for d in decisions.read(limit=0, root=root) if d.get("kind") == "skip"]
+        for d in decisions.read(limit=0, root=root):
+            if d.get("kind") == "skip":
+                decs.append(d)
+            elif d.get("what") == PLAN_BRIEF and isinstance(d.get("plan"), str) and isinstance(d.get("basis"), dict):
+                links.setdefault(d["plan"], d["basis"])          # первая запись плана: досье первой подачи
     except (OSError, ValueError):
-        decs = []
-    return {"trades": _fold_trades(paths.state("trades.jsonl", root=root)), "ideas": ideas.load_ideas(root=root), "outcomes": outs, "decisions": decs}
+        decs, links = [], {}
+    return {"trades": _fold_trades(paths.state("trades.jsonl", root=root)), "ideas": ideas.load_ideas(root=root), "outcomes": outs, "decisions": decs, "plan_links": links}
 
 
 def _brief(root, brief_id):
-    if not brief_id:
+    """Сохранённое досье state/briefs/<brief_id>.json (в нём блок snap: fng, dvol, risk_off, blackout, даже в урезанной версии) или None."""
+    if not isinstance(brief_id, str) or not RE_BRIEF_ID.match(brief_id):
         return None
     try:
         with open(paths.briefs("%s.json" % brief_id, root=root), encoding="utf-8") as f:
-            return json.load(f)
+            b = json.load(f)
     except (OSError, ValueError, TypeError):
         return None
+    return b if isinstance(b, dict) else None
+
+
+class Ext(object):
+    """Ленивые источники признаков НОВОГО случая сделки: связь плана с досье (decisions plan_brief), spec плана, события шины (trigger_fired, scanner_signal).
+    Шина читается один раз и только если понадобилась."""
+
+    def __init__(self, root, links):
+        self.root, self.links = root, links or {}
+        self._bus = None
+
+    def link(self, plan_id):
+        return self.links.get(plan_id) or {}
+
+    def spec(self, plan_id):
+        if not isinstance(plan_id, str) or not RE_PLAN_ID.match(plan_id):
+            return None
+        try:
+            with open(paths.plans(plan_id, "spec.json", root=self.root), encoding="utf-8") as f:
+                d = json.load(f)
+        except (OSError, ValueError, TypeError):
+            return None
+        return d if isinstance(d, dict) else None
+
+    def _load_bus(self):
+        if self._bus is None:
+            sig, fired = {}, {}
+            try:
+                from tb.core import bus
+                for e in bus.read(0, limit=0, root=self.root):
+                    d = e.get("d") if isinstance(e.get("d"), dict) else {}
+                    if e.get("type") == "scanner_signal" and isinstance(e.get("seq"), int):
+                        sig[e["seq"]] = d
+                    elif e.get("type") == "trigger_fired" and e.get("plan"):
+                        fired.setdefault(e["plan"], []).append(d.get("cond"))
+            except (OSError, ValueError, TypeError):
+                pass
+            self._bus = (sig, fired)
+        return self._bus
+
+    def event(self, seq):
+        return self._load_bus()[0].get(seq) if isinstance(seq, int) else None
+
+    def fired(self, plan_id):
+        return self._load_bus()[1].get(plan_id) or []
 
 
 def _post_tags(post):
@@ -61,16 +118,30 @@ def _post_tags(post):
     return {"err": err[:5], "rule_followed": rf if rf in cases.RULE_FOLLOWED else None}
 
 
-def build_trade_case(tid, t, cfg, root=None):
+def build_trade_case(tid, t, cfg, root=None, ext=None):
+    """ext (Ext) передаётся для НОВЫХ случаев: досье по brief_id (журнал или связь плана), confirmed из плана, рыночные поля из события шины по event_seq."""
     op, cl, post = t["open"], t["close"], t["post"]
     tags = features.parse_tags(op.get("tags"))
     sit = features.situation_from_trade(op, post, cfg)
-    sit = features.apply_brief(sit, _brief(root, op.get("brief_id")))
+    plan_id = op.get("plan_id") or tags["plan"]
+    brief_id, event_seq, spec = op.get("brief_id"), None, None
+    if ext is not None and plan_id:
+        link, spec = ext.link(plan_id), ext.spec(plan_id)
+        brief_id = brief_id or link.get("brief_id")
+        seq = link.get("event_seq")
+        if not isinstance(seq, int) or isinstance(seq, bool):
+            seq = ((spec or {}).get("source") or {}).get("event_seq")
+        event_seq = seq if isinstance(seq, int) and not isinstance(seq, bool) else None
+        sit = features.apply_plan(sit, spec, () if spec is not None else ext.fired(plan_id))
+    brief_id = brief_id if isinstance(brief_id, str) and RE_BRIEF_ID.match(brief_id) else None
+    sit = features.apply_brief(sit, _brief(root, brief_id))
+    if ext is not None and event_seq is not None and any(sit.get(k) is None for k in features.EVENT_FILL):
+        sit = features.apply_event(sit, ext.event(event_seq))
     mech = features.is_mechanics(op)
     why, sus = features.why_text(op.get("thesis"))
     role = "mechanics" if mech else ("manual" if tags["manual"] else "chat")
     c = {"case_id": cases.case_id_for(op.get("ts_open"), sit["sym"], tid), "type": "trade", "ts": op.get("ts_open"),
-         "refs": {"journal_id": tid, "idea": op.get("idea"), "plan": op.get("plan_id") or tags["plan"]},
+         "refs": {"journal_id": tid, "idea": op.get("idea"), "plan": plan_id, "brief_id": brief_id, "event_seq": event_seq},
          "src": {"actor": "owner" if tags["manual"] else "agent", "agent_id": tags["agent_id"], "model": tags["model"], "role": role, "exp": op.get("exp") or tags["exp"],
                  "var": op.get("var") or tags["var"], "rules_ver": cfg.get("rules_ver"), "mode": op.get("mode") if op.get("mode") in cases.MODES else "live", "mem": tags["mem"]},
          "situation": sit,
@@ -139,11 +210,14 @@ def plan(root=None, cfg=None, with_signals=False, final_only=False):
            "excluded": [], "with_missing": 0, "errors": [], "updates": {"whatif": 0, "tags": 0}}
     built = []
     trade_ids = set()
+    ext = Ext(root, src.get("plan_links"))
     for tid, t in src["trades"]:
         if t["close"] is not None:
             rep["sources"]["trades_closed"] += 1
             trade_ids.add(tid)
-            built.append(("trades", tid, build_trade_case(tid, t, cfg, root), t))
+            op = t["open"]
+            new_case = cases.case_id_for(op.get("ts_open"), features.base_sym(op.get("sym")), tid) not in existing      # дорогие источники (план, шина) только для нового случая
+            built.append(("trades", tid, build_trade_case(tid, t, cfg, root, ext if new_case else None), t))
     for i in src["ideas"]:
         if final_only and (i.get("status") or "idea") in ideas.ACTIVE + ("planned",):
             continue

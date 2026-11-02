@@ -1,4 +1,4 @@
-"""`./tb memory <команда>`: similar | stats | add | show | sync | migrate | verify | review-queue | review | lesson | backtest | compare. Вывод JSON одной строкой (--text: кратко для человека).
+"""`./tb memory <команда>`: similar | stats | add | show | sync | migrate | coverage | verify | review-queue | review | lesson | backtest | compare. Вывод JSON одной строкой (--text: кратко для человека).
 
 Код возврата: 0 успех, 1 verify нашёл проблему, 2 ошибка использования/валидации. Сеть и биржа не используются; пишутся только state/cases.jsonl и state/lessons.jsonl.
 """
@@ -7,7 +7,7 @@ import json
 import sys
 import time
 
-from tb.memory import agg, backtest, cases, cfg as memcfg, lessons, migrate, privacy, query, review, similar
+from tb.memory import agg, backtest, cases, cfg as memcfg, features, lessons, migrate, privacy, query, review, similar
 
 
 def _out(obj, text=False, lines=None):
@@ -130,6 +130,44 @@ def cmd_verify(a, root, cfg):
     return 0 if res["ok"] else 1
 
 
+COVERAGE_KEYS = ("confirmed", "range_5m_pct", "spread_bps")      # ключевые признаки новых случаев trade (R1, Requirement 11.5): доля пустых < 20%
+COVERAGE_LIMIT = 0.20
+
+
+def coverage_report(rows, since=None):
+    """Доля пустых значений по каждому признаку situation среди случаев (ts >= since, строка 'YYYY-MM-DD...'); общий итог и разрез по типам случаев.
+    sym, side, hyp, missing, retro не считаются (не признаки). -> {"since", "n", "features": {признак: доля}, "by_type": {тип: {"n", "features"}}, "trade_check"}."""
+    feats = [k for k in cases.SITUATION if k not in features.NON_FEATURES]
+    rows = [c for c in rows if since is None or (c.get("ts") or "") >= since]
+
+    def share(cs):
+        n = len(cs)
+        return {k: (sum(1 for c in cs if (c.get("situation") or {}).get(k) is None) / n if n else None) for k in feats}
+    by_type = {}
+    for t in cases.TYPES:
+        cs = [c for c in rows if c.get("type") == t]
+        if cs:
+            by_type[t] = {"n": len(cs), "features": share(cs)}
+    trade = by_type.get("trade")
+    check = None
+    if trade:
+        check = {"limit": COVERAGE_LIMIT, "ok": all(trade["features"][k] < COVERAGE_LIMIT for k in COVERAGE_KEYS),
+                 "features": {k: trade["features"][k] for k in COVERAGE_KEYS}}
+    return {"since": since, "n": len(rows), "features": share(rows), "by_type": by_type, "trade_check": check}
+
+
+def cmd_coverage(a, root, cfg):
+    rep = coverage_report(cases.load(root), a.since)
+    f = lambda v: "-" if v is None else "%.0f%%" % (100 * v)
+    L = ["случаев: %d (с %s)" % (rep["n"], a.since or "начала")] + ["  %s: пусто %s" % (k, f(v)) for k, v in rep["features"].items()]
+    for t, d in rep["by_type"].items():
+        L.append("тип %s: n=%d, пусто: %s" % (t, d["n"], ", ".join("%s %s" % (k, f(v)) for k, v in d["features"].items() if v)))
+    if rep["trade_check"]:
+        L.append("trade: confirmed/range_5m_pct/spread_bps пусто < 20%%: %s" % ("да" if rep["trade_check"]["ok"] else "НЕТ"))
+    _out(rep, a.text, L)
+    return 0
+
+
 def cmd_review_queue(a, root, cfg):
     q = review.queue(cases.load(root), a.limit)
     _out({"n": len(q), "cases": [review.reviewer_input(c) for c in q]})
@@ -223,6 +261,9 @@ def build_parser():
     for k in ("a-from", "a-to", "b-from", "b-to"):
         cp.add_argument("--" + k, dest=k.replace("-", "_"))
     sub.add_parser("verify")
+    cv = sub.add_parser("coverage", help="доля пустых значений по каждому признаку случаев (R1, 11.4)")
+    cv.add_argument("--since", help="YYYY-MM-DD: только случаи с этой даты")
+    cv.add_argument("--text", action="store_true")
     rq = sub.add_parser("review-queue")
     rq.add_argument("--limit", type=int, default=20)
     rv = sub.add_parser("review")
@@ -240,7 +281,7 @@ def build_parser():
     return p
 
 
-HANDLERS = {"similar": cmd_similar, "stats": cmd_stats, "add": cmd_add, "show": cmd_show, "sync": cmd_sync, "migrate": cmd_migrate, "verify": cmd_verify,
+HANDLERS = {"similar": cmd_similar, "stats": cmd_stats, "add": cmd_add, "show": cmd_show, "sync": cmd_sync, "migrate": cmd_migrate, "verify": cmd_verify, "coverage": cmd_coverage,
             "review-queue": cmd_review_queue, "review": cmd_review, "lesson": cmd_lesson, "backtest": cmd_backtest, "compare": cmd_compare}
 
 
