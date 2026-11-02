@@ -33,6 +33,13 @@ def _rd(root, d, name):
 
 
 # ------------------------------------------------------------------ вход аудита
+def plan_of_owner(owner):
+    """Владелец позиции из снимка исполнителя -> id плана: "plan:PL-..." -> "PL-..."; "legacy", None и прочее без изменений."""
+    if isinstance(owner, str) and owner.startswith("plan:") and len(owner) > 5:
+        return owner[5:]
+    return owner
+
+
 def collect_input(ctx, d):
     """Снимок для чек-листа и агента (только файлы и порты, без сети)."""
     root, now = ctx.root, ctx.now()
@@ -74,9 +81,16 @@ def collect_input(ctx, d):
     except Exception:
         act = None
     from tb.lifecycle import cfg as cfgmod
+    positions = []
+    for p in snap.get("positions") or []:
+        if not (_num(p.get("size")) and p["size"] > 0):
+            continue
+        p = dict(p)
+        p["owner"] = plan_of_owner(p.get("owner"))      # исполнитель пишет владельца как "plan:<id>": чек-лист ищет план по чистому id (TRX 2026-11-01: иначе «позиция без плана» и E_ID у close)
+        positions.append(p)
     return {"now": now, "next_day_start": cfgmod.next_day_start(now, ctx.cfg), "cfg": ctx.cfg, "policy": pol, "profile": prof, "equity": c.get("equity"),
             "daily_loss_usdt": c.get("daily_loss_usdt") if _num(c.get("daily_loss_usdt")) else float(prof.get("daily_loss_limit_usdt") or 0.0),
-            "health": hd, "snap": snap, "positions": [p for p in snap.get("positions") or [] if _num(p.get("size")) and p["size"] > 0], "plans": plans, "facts": facts,
+            "health": hd, "snap": snap, "positions": positions, "plans": plans, "facts": facts,
             "facts_age_s": (now - fts) if _num(fts) else None, "dayplan": dp, "plan_max_positions": plan_cap, "brain_ok": bool(ok_brain), "provider_recent_ok": prov_ok,
             "alerts": alerts, "sessions": [act] if act else [], "ideas_n": 0}
 

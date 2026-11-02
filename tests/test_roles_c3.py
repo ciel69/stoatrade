@@ -13,7 +13,7 @@ from tb.gateway import catalog
 from tb.llm import schema as schema_mod
 
 ROOT = _bootstrap.ROOT
-MAX_SYSTEM_CHARS = 12000          # около 4500 токенов (07b п. 5.2)
+MAX_SYSTEM_CHARS = 13000          # около 4800 токенов (07b п. 5.2: было 12000; +1000 на коды сторожа позиции и настроение толпы, указание владельца 2026-11-01)
 NEW_ROLES = ("morning_analyst", "position_manager", "reviewer", "day_auditor")
 
 
@@ -35,11 +35,11 @@ class RolesAndPrompts(unittest.TestCase):
     def test_versions_and_first_line(self):
         for rid in NEW_ROLES:
             r = self.reg.get(rid)
-            ver = {"morning_analyst": 2, "position_manager": 3}.get(rid, 1)       # v2: правило paper-блэкаута (blackout_mode=warn); position_manager v3: реакции на STALLED / FLOW_TURN сторожа
+            ver = {"morning_analyst": 3, "position_manager": 3}.get(rid, 1)       # v2: правило paper-блэкаута (blackout_mode=warn); position_manager v3: реакции на STALLED / FLOW_TURN сторожа
             self.assertEqual(r.version, ver, rid)
             self.assertTrue(r.prompt.startswith("# prompt v%d %s" % (ver, rid)), rid)
         self.assertEqual(self.reg.get("news_reader").version, 0)            # роль WP13b не тронута
-        self.assertTrue(roles_runtime.read_common(ROOT).startswith("# common v3"))
+        self.assertTrue(roles_runtime.read_common(ROOT).startswith("# common v6"))
 
     def test_prefix_stable_between_loads_and_calls(self):
         other = roles_runtime.load(ROOT)

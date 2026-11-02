@@ -1457,8 +1457,13 @@ def validate_amend(old_spec, new_spec, status, live):
             oh, nh = ol.get("max_hold_min"), nl.get("max_hold_min")
             if not _jeq(oh, nh):
                 extend = (not _fin(nh)) or (_fin(oh) and nh > oh)
-                if extend and not be:
-                    _err(iss, "E_HOLD_EXTEND", "lifecycle.max_hold_min", "продлить удержание можно только при стопе в безубытке или лучше")
+                st_ = old_spec.get("session_type")
+                cap = HOLD_EXTEND_CAP_MIN.get(st_) if isinstance(st_, str) else None
+                # без безубытка продление ограничено: не больше чем вдвое за одну правку и не дольше срока следующего горизонта (стоп на месте, риск в деньгах не растёт)
+                bounded = _fin(oh) and _fin(nh) and nh <= HOLD_EXTEND_MAX_X * oh + 1e-9 and cap is not None and nh <= cap
+                if extend and not be and not bounded:
+                    _err(iss, "E_HOLD_EXTEND", "lifecycle.max_hold_min", "без безубытка срок можно продлить не больше чем в %g раза и не дольше %s мин для %s"
+                         % (HOLD_EXTEND_MAX_X, cap, old_spec.get("session_type")))
             if ol.get("flatten_at_session_end") is True and nl.get("flatten_at_session_end") is False and not be:
                 _err(iss, "E_HOLD_EXTEND", "lifecycle.flatten_at_session_end", "отключить закрытие в конце сессии можно только при стопе в безубытке или лучше")
 
@@ -1468,6 +1473,10 @@ def validate_amend(old_spec, new_spec, status, live):
         if k not in FIELDS:
             _err(iss, "E_UNKNOWN_FIELD", k, "неизвестное поле")
     return _dedup(iss)
+
+
+HOLD_EXTEND_MAX_X = 2.0                                                              # продление без безубытка: не больше чем вдвое за одну правку
+HOLD_EXTEND_CAP_MIN = {"scalp": 240, "intraday": 1440, "swing": 4320, "position": 43200}  # и не дольше срока следующего горизонта (entryplan.MAX_HOLD_MIN)
 
 
 def merge_patch(spec, patch):

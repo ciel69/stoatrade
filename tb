@@ -2,9 +2,41 @@
 # Единая точка входа проекта (macOS/Linux). Формат: ./tb <группа> <команда> [аргументы]   (список: ./tb help)
 # Тонкая обёртка: вся логика (ключ Bybit из ~/.config/traider-bot/, снятие прокси ТОЛЬКО для `bybit`) в src/tb/launcher.py,
 # её же используют tb.cmd и tb.ps1 на Windows, поэтому поведение одинаково.
+# Интерпретатор: $TB_PYTHON, иначе .venv/bin/python проекта, иначе python3, иначе python; годится только Python 3.9+.
+# Нет подходящего Python: `./tb setup` предлагает его поставить (scripts/bootstrap.sh), остальные команды подсказывают `./tb setup` (код 3).
 # Корень проекта = папка этого файла; для тестов переопределяется TB_ROOT.
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT" || exit 1
 PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONPATH
-exec python3 -m tb.launcher "$@"
+
+py_ok() {
+  # macOS без Command Line Tools: /usr/bin/python3 только заглушка, вызов открывает окно установки. Не трогаем её.
+  if [ "$(uname -s)" = "Darwin" ] && [ "$(command -v "$1" 2>/dev/null)" = "/usr/bin/python3" ] && ! xcode-select -p >/dev/null 2>&1; then
+    return 1
+  fi
+  "$1" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1
+}
+
+PY=""
+for c in "${TB_PYTHON:-}" "$ROOT/.venv/bin/python" "$ROOT/.venv/Scripts/python.exe" python3 python; do
+  [ -n "$c" ] || continue
+  if py_ok "$c"; then PY="$c"; break; fi
+done
+# Git Bash / MSYS на Windows: алиасы python/python3 из WindowsApps там не работают, запускатель py работает
+if [ -z "$PY" ] && command -v py >/dev/null 2>&1 && py -3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then
+  PYTHONUTF8=1; PYTHONIOENCODING=utf-8; export PYTHONUTF8 PYTHONIOENCODING
+  exec py -3 -m tb.launcher "$@"
+fi
+
+if [ -z "$PY" ]; then
+  if [ "${1:-}" = "setup" ]; then
+    shift
+    exec sh "$ROOT/scripts/bootstrap.sh" "$@"
+  fi
+  echo "Не найден Python 3.9 или новее (нужен для ./tb)." >&2
+  echo "Запустите: ./tb setup   (проверит среду и предложит установить Python; ничего не ставит без вашего согласия)" >&2
+  echo "Уже стоит в другом месте: TB_PYTHON=/путь/к/python3 ./tb ..." >&2
+  exit 3
+fi
+exec "$PY" -m tb.launcher "$@"

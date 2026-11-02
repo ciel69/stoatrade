@@ -19,15 +19,17 @@ DEFAULTS = {
     "version": 1,
     "watch_symbols": [],
     "pyramid": {"enabled": False, "min_r": 1.0, "max_adds": 1, "max_add_risk_frac": 1.0, "min_gap_s": 60},
-    "stop_moves": {"min_interval_s": 5, "min_step_ticks": 2, "min_gap_bps_from_price": 8, "max_moves_per_hour": 30},
-    # автозащита прибыли: исполнитель сам подтягивает стоп у любой позиции (в том числе без правил manage в плане); только в сторону прибыли
-    "auto_protect": {"enabled": True, "be_r": 0.7, "trail_activate_r": 1.0, "trail_lock_frac": 0.5},
-    # сторож позиции (logic/watch.py): будит мозг (position_manager) по STALLED / FLOW_TURN. paper_only=true: пока только бумажные позиции.
-    # TODO(live): если на paper сторож окажется жизнеспособным (число пробуждений и результат решений мозга, ./tb exp stats), включить для live: paper_only=false (решение владельца)
-    "position_watch": {"enabled": True, "paper_only": True, "stalled_min": 15, "stalled_min_r": 0.5, "flow_turn_s": 30, "max_wakes_per_hour": 3},
+    "stop_moves": {"min_interval_s": 5, "min_step_ticks": 2, "min_step_r": 0.1, "min_gap_bps_from_price": 8, "max_moves_per_hour": 30},      # min_step_r: ход стопа по правилу не меньше 0.1R
+    # автозащита прибыли: исполнитель сам подтягивает стоп у любой позиции (в том числе без правил manage в плане); только в сторону прибыли.
+    # be_r 0.7 проверен контрфактом по минутным свечам (31 paper-сделка 29.10-01.11): 0.7R -0.79R, 1.0R -1.28R, без безубытка -2.99R, без защиты -6.11R.
+    "auto_protect": {"enabled": True, "be_r": 0.7, "trail_activate_r": 1.0, "trail_lock_frac": 0.5, "min_profit_r": 0.2, "stop_slip_bps": 5},
+    # сторож позиции (logic/watch.py): будит мозг (position_manager) по NEWS / FAST_MOVE / STRUCT_BREAK / CROWD_TURN / BOOK_WALL / VOL_SPIKE / REGIME_CHANGE / FLOW_TURN / STALLED.
+    # Указание владельца 2026-11-01: монета в позиции под постоянным надзором, paper и live одинаково (paper_only=false), до 12 пробуждений в час на позицию.
+    "position_watch": {"enabled": True, "paper_only": False, "stalled_min": 15, "stalled_min_r": 0.5, "flow_turn_s": 30, "max_wakes_per_hour": 12,
+                       "fast_move_atr": 2.0, "fast_move_s": 60, "struct_break_s": 30, "struct_break_buf_pct": 0.1, "wall_atr": 1.5, "vol_spike_x": 3.0, "news_max_age_s": 180},
     # WebSocket Trade API Bybit (executor/ws_trade.py): ордерные запросы (create/amend/cancel) по постоянному соединению. Выключено до проверки на testnet: ./tb exec wscheck
     "ws_trade": {"enabled": False, "request_timeout_s": 5.0, "ping_s": 20.0},
-    "entry": {"max_price_age_s": 3, "max_chase_bps": 15, "no_confirm_max_size_mult": 0.5, "blocked_attempts_max": 3,
+    "entry": {"max_price_age_s": 3, "max_chase_bps": 15, "chase_atr_frac": 0.3, "chase_rr_floor": 1.5, "no_confirm_max_size_mult": 0.5, "blocked_attempts_max": 3,
               "retry_after_s": 15, "fill_wait_s": 2, "max_level_distance_pct": 25},
     "protections": {"symbol_cooldown_after_stop_min": 30,
                     "pause_after_consecutive_stops": {"n": 2, "minutes": 60, "require_confirm": True},
@@ -53,9 +55,10 @@ def defaults():
 SAFER = {
     "pyramid.enabled": "bool_false", "pyramid.min_r": "max", "pyramid.max_adds": "min", "pyramid.max_add_risk_frac": "min",
     "auto_protect.enabled": "bool_true", "auto_protect.be_r": "min", "auto_protect.trail_activate_r": "min", "auto_protect.trail_lock_frac": "max",
+    "auto_protect.min_profit_r": "max", "auto_protect.stop_slip_bps": "max",
     "pyramid.min_gap_s": "max", "blackout.pre_min": "max", "stop_moves.max_moves_per_hour": "min", "paper.blackout_size_mult": "min",
     "entry.max_price_age_s": "min", "entry.max_chase_bps": "min", "entry.no_confirm_max_size_mult": "min",
-    "entry.blocked_attempts_max": "min", "entry.max_level_distance_pct": "min",
+    "entry.blocked_attempts_max": "min", "entry.max_level_distance_pct": "min", "entry.chase_atr_frac": "min", "entry.chase_rr_floor": "max",
     "protections.symbol_cooldown_after_stop_min": "max", "protections.pause_after_consecutive_stops.n": "min",
     "protections.pause_after_consecutive_stops.minutes": "max", "protections.pause_after_consecutive_stops.require_confirm": "bool_true",
     "protections.max_entries_per_hour": "min", "protections.max_entries_per_day": "min", "protections.max_plans_active": "min",

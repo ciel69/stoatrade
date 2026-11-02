@@ -5,8 +5,10 @@ snapshot(sym) читает ТОЛЬКО локальные файлы runtime/ (
   ts, price, price_src, range_5m_pct, range_15m_pct, ret_5m_pct, ret_15m_pct, turn_surge_5m (оборот 5м, x к норме 5 минут),
   turn_x_median (оборот 24ч, x к медиане рынка), chg_24h_pct, spread_bps, funding_pct (ставка фандинга, %), oi_chg_15m_pct,
   rank, score, tradable (из hot.json: топ-N и blocked; монеты вне топа имеют только цену/фид), regime, risk_off (market.json, context.json),
-  age_s {hot, prices, market, context}: возраст каждого источника в секундах на момент снимка, src: список использованных источников,
-  late_s: если запись open делается позже самого входа (sync заполнил лимит, ts_open раньше) - на сколько секунд снимок позже входа.
+  age_s {hot, prices, market, context, structure}: возраст каждого источника в секундах на момент снимка, src: список использованных источников,
+  late_s: если запись open делается позже самого входа (sync заполнил лимит, ts_open раньше) - на сколько секунд снимок позже входа,
+  trend {dir, ret_1h_pct, ret_4h_pct, ret_24h_pct, btc} и reg_1h (режим по свечам 1ч) из runtime/structure.json (trend_of: только закрытые свечи).
+  regime: словарь памяти случаев (memory/cases.REGIMES: trend|range|volatile|unknown), см. regime_class; источник: режим фида market.json, если он известен, иначе структура 1ч.
 """
 import json
 import os
@@ -76,6 +78,47 @@ def _r(x, n=4):
     return None if x is None else round(x, n)
 
 
+# Режимы структуры/фида (trend_up|trend_down|range|storm|unknown) -> словарь памяти случаев и плана дня (trend|range|volatile|unknown; unclear ставит только план дня)
+REGIME_CLASS = {"trend_up": "trend", "trend_down": "trend", "range": "range", "storm": "volatile", "unknown": "unknown"}
+TREND_K4 = 1.0              # |ret_4h| >= 1 ATR(1ч) в % цены: тренд за 4 часа
+TREND_K24 = 2.5             # |ret_24h| >= 2.5 ATR(1ч): старший тренд за сутки (важнее 4ч: откат внутри суточного тренда не должен выглядеть сменой направления)
+TREND_UNIT_PCT = 1.0        # ATR(1ч) неизвестен: единица 1% цены
+
+
+def regime_class(reg):
+    """'trend_up' -> 'trend', 'storm' -> 'volatile', 'range' -> 'range', 'unknown' -> 'unknown'; уже классовое значение (trend/range/volatile/unclear) остаётся; иное -> None."""
+    if reg in REGIME_CLASS:
+        return REGIME_CLASS[reg]
+    return reg if reg in ("trend", "range", "volatile", "unclear") else None
+
+
+def trend_of(s):
+    """Тренд монеты по записи runtime/structure.json -> {dir, ret_1h_pct, ret_4h_pct, ret_24h_pct} | None (нет записи или возвратов).
+    Только закрытые свечи: ret_1h_pct = r1hc (закрытие 5м к закрытию 12 свечей назад), ret_4h_pct / ret_24h_pct = r4h / r24h (закрытые свечи 1ч);
+    r1h структуры (цена формирующейся свечи) сюда не берётся. Правило dir: единица u = a1h_pct (ATR 1ч в % цены, иначе 1%);
+    |ret_24h| >= 2.5u -> знак ret_24h (старший тренд), иначе |ret_4h| >= 1u -> знак ret_4h, иначе flat. up | down | flat."""
+    if not isinstance(s, dict):
+        return None
+    r1, r4, r24 = _num(s.get("r1hc")), _num(s.get("r4h")), _num(s.get("r24h"))
+    if r4 is None and r24 is None:
+        return None
+    a = _num(s.get("a1h_pct"))
+    u = a if a and a > 0 else TREND_UNIT_PCT
+    d = "flat"
+    if r24 is not None and abs(r24) >= TREND_K24 * u:
+        d = "up" if r24 > 0 else "down"
+    elif r4 is not None and abs(r4) >= TREND_K4 * u:
+        d = "up" if r4 > 0 else "down"
+    return {"dir": d, "ret_1h_pct": _r(r1, 3), "ret_4h_pct": _r(r4, 3), "ret_24h_pct": _r(r24, 3)}
+
+
+def _struct_rows(root):
+    d = _read(paths.runtime("structure.json", root=root))
+    if not d or not isinstance(d.get("symbols"), dict):
+        return None, {}
+    return d, d["symbols"]
+
+
 def snapshot(sym, now=None, ts_open_epoch=None, root=None):
     """-> dict ctx (может быть пустым). Никогда не бросает исключений."""
     try:
@@ -125,8 +168,8 @@ def _snapshot(sym, now, ts_open_epoch, root):
         if _num(m.get("price")):
             a = _num(m.get("age_s")) or 0.0
             cands.append(((age["market"] or 0.0) + a if age["market"] is not None else None, _num(m["price"]), "market.json"))
-        if m.get("regime"):
-            ctx["regime"] = str(m["regime"])
+        if regime_class(m.get("regime")):
+            ctx["regime"] = regime_class(m["regime"])
         # поля, которых нет в hot.json (монета вне топа), добираем из фида; единицы приводим к процентам
         for k, v, f in (("ret_5m_pct", m.get("ret_5m"), 100.0), ("ret_15m_pct", m.get("ret_15m"), 100.0)):
             if k not in ctx and _num(v) is not None:
@@ -143,6 +186,20 @@ def _snapshot(sym, now, ts_open_epoch, root):
         ctx["price"], ctx["price_src"] = p, s
     if not ctx:
         return {}                     # контекст рынка (context.json) относится ко всем монетам: без данных по самой монете снимок пуст
+    sd, rows = _struct_rows(root)     # тренд и режим по закрытым свечам 1ч (structure.json): без него память случаев видела regime=unknown во всех сделках
+    srow = rows.get(base)
+    if isinstance(srow, dict):
+        src.append("structure")
+        age["structure"] = _age(sd, now)
+        tr = trend_of(srow)
+        if tr:
+            bt = trend_of(rows.get("BTC")) if base != "BTC" else None
+            tr["btc"] = bt["dir"] if bt else None
+            ctx["trend"] = tr
+        if srow.get("reg") in REGIME_CLASS:
+            ctx["reg_1h"] = srow["reg"]
+            if ctx.get("regime") in (None, "unknown"):
+                ctx["regime"] = REGIME_CLASS[srow["reg"]]
     if cx and "risk_off" in cx:
         src.append("context")
         age["context"] = _age(cx, now)

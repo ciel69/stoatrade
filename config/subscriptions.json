@@ -54,6 +54,8 @@
         "critical_per_hour": 30,
         "coalesce_s": 90,
         "class_jobs_per_hour": {
+          "1": 90,
+          "2": 60,
           "3": 36,
           "4": 10
         }

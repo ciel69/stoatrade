@@ -3,9 +3,10 @@
 Зачем: runtime/levels.json исполнитель пишет только при планах/позициях, а EMA/режим в market.json фида нужен прогрев в десятки минут, поэтому мозг на старте дня
 видел `regime: unknown` и ни одного уровня. Здесь свечи берутся из ПУБЛИЧНОГО REST Bybit (kline 5м и 1ч, без ключа), поэтому данные есть сразу и не зависят от планов.
 
-Состав символов (по приоритету): BTC, ETH, SOL; символы открытых позиций (exec_snapshot.json); монеты по запросу (runtime/structure_req.json: их пишут сканер при
+Состав символов (по приоритету): BTC, ETH, SOL; символы открытых позиций (exec_snapshot.json); монеты плана дня (state/control/day_limits.json symbols: патруль
+и сценарий дня, мозг должен видеть их полностью); монеты по запросу (runtime/structure_req.json: их пишут сканер при
 сигнале, досье мозга и get_brief, когда по монете события структуры нет; запрос живёт REQ_TTL_S); топ-`hot_n` горячих tradable монет из runtime/hot.json. Всего до `max_syms`
-(MAX_SYMS=16), монеты, ушедшие из состава, выбрасываются (свечи и запись в файле). Размер файла ограничен (~700 байт на монету).
+(MAX_SYMS=32), монеты, ушедшие из состава, выбрасываются (свечи и запись в файле). Размер файла ограничен (~700 байт на монету).
 Запрос на символ: kline 5м (300 свечей = 25 ч) раз в `every_s` (базовые и позиции) или `hot_every_s` (горячие и по запросу), kline 1ч (200 свечей = 8 дней, хватает на неделю
 с понедельника UTC) раз в `h1_every_s` / `hot_h1_every_s`. Между запросами к бирже пауза `pause_s` (по умолчанию 2 с): прогрев 11 монет ~1 мин, дальше ~6 запросов в минуту.
 Монета по запросу получает свечи вне очереди: цикл просыпается на новый запрос (не чаще раза в 5 с).
@@ -27,12 +28,12 @@ from tb.logic import levels as L
 SCHEMA = "tb.structure/1"
 FILE = "structure.json"
 BASE = ("BTC", "ETH", "SOL")
-MAX_SYMS = 16
+MAX_SYMS = 32                 # базовые 3 + позиции + план дня (до 12) + запросы (6) + горячие (8)
 HOT_N = 8                     # сколько горячих монет держать в структуре помимо базовых и позиций
-HARD_MAX_SYMS = 24            # потолок размера файла независимо от конфига
+HARD_MAX_SYMS = 32            # потолок размера файла независимо от конфига (~700 байт на монету)
 HOT_EVERY_S = 180.0
 HOT_H1_EVERY_S = 1800.0
-PAUSE_S = 2.0                 # пауза между запросами свечей к публичному REST (лимит биржи многократно выше)
+PAUSE_S = 1.0                 # пауза между запросами свечей к публичному REST (лимит биржи многократно выше): 32 монеты ~1 мин на круг
 LIMIT_5M = 300
 LIMIT_1H = 200
 EXTRA_PAUSE_S = 0.15
@@ -138,6 +139,7 @@ def analyze(book, now):
     closes5 = [c.c for c in c5]
     if len(closes5) >= 13:
         out["r1h"] = sig(_pct(px, closes5[-13]), 3)
+        out["r1hc"] = sig(_pct(closes5[-1], closes5[-13]), 3)      # только закрытые свечи (r1h берёт цену формирующейся): для блока trend досье и ctx входа
     closes1h = [c.c for c in c1h]
     if len(closes1h) >= 5:
         out["r4h"] = sig(_pct(closes1h[-1], closes1h[-5]), 3)
@@ -228,6 +230,12 @@ def _pos_syms(root):
     return [p.get("sym") for p in (snap.get("positions") if isinstance(snap, dict) and isinstance(snap.get("positions"), list) else []) if isinstance(p, dict)]
 
 
+def _day_syms(root):
+    """Монеты плана дня (state/control/day_limits.json symbols): их будит патруль, мозгу по ним нужна полная структура."""
+    d = read_json(paths.control_dir("day_limits.json", root=root))
+    return [s for s in (d.get("symbols") if isinstance(d, dict) and isinstance(d.get("symbols"), list) else []) if isinstance(s, str)]
+
+
 def read_requests(root, now=None):
     """-> [SYM] живых запросов на структуру (новые первыми), без просроченных."""
     now = time.time() if now is None else now
@@ -265,7 +273,7 @@ def request(root, syms, now=None):
 
 
 def wanted_symbols(root, extra=(), n=MAX_SYMS, hot_n=HOT_N, now=None):
-    """-> [(SYM, SYMUSDT)]: BTC, ETH, SOL, extra, символы позиций, монеты по запросу, затем до hot_n tradable из hot.json; без дублей, до n."""
+    """-> [(SYM, SYMUSDT)]: BTC, ETH, SOL, extra, символы позиций, монеты плана дня, монеты по запросу, затем до hot_n tradable из hot.json; без дублей, до n."""
     out = []
     n = max(1, min(int(n), HARD_MAX_SYMS))
 
@@ -279,6 +287,8 @@ def wanted_symbols(root, extra=(), n=MAX_SYMS, hot_n=HOT_N, now=None):
     for s in extra:
         add(s)
     for s in _pos_syms(root):
+        add(s)
+    for s in _day_syms(root):
         add(s)
     for s in read_requests(root, now):
         add(s)
@@ -305,6 +315,20 @@ class Collector(object):
         self.tried = {}
         self.last = None
         self.last_step = -1e18
+        self.src, self.xfallbacks = {}, 0                 # источник свечей по монете (bybit | биржа ccxt) и число запасных загрузок
+        self.xklines = None                               # запасные свечи с других бирж (marketdata/xklines.rows); включает сервис: enable_xklines(); класс сам в сеть ccxt не ходит
+
+    def enable_xklines(self, exchanges=None):
+        """Включить запасной источник свечей через ccxt (структура монеты не остаётся пустой при сбое REST Bybit: VPN, гео-блок, лимит). -> True, если ccxt доступен."""
+        try:
+            from tb.marketdata import xklines
+        except Exception:  # noqa: BLE001
+            return False
+        if not xklines.available():
+            return False
+        exs = tuple(exchanges) if exchanges else xklines.EXCHANGES
+        self.xklines = lambda sym, interval, limit: xklines.rows(sym, interval, limit, exchanges=exs)
+        return True
 
     def _ttls(self, sym, fast):
         return (self.every_s, self.h1_every_s) if (sym in BASE or sym in fast) else (self.hot_every_s, self.hot_h1_every_s)
@@ -314,6 +338,24 @@ class Collector(object):
         now = self.clock() if now is None else now
         have = ((self.last or {}).get("symbols") or {})
         return [s for s in read_requests(self.root, now) if s not in have and now - self.tried.get(s, -1e18) >= REQ_RETRY_S]
+
+    def _rows_any(self, sym, symbol, interval, limit):
+        """Свечи с Bybit; при сбое REST Bybit (VPN, гео-блок, лимит) те же свечи с другой биржи через ccxt (marketdata/xklines): монета не остаётся без структуры.
+        Источник запоминается в self.src[sym] ("bybit" | биржа ccxt) и попадает в файл."""
+        try:
+            got = _rows(self.c, symbol, interval, limit)
+            self.src[sym] = "bybit"
+            return got
+        except Exception as e:  # noqa: BLE001
+            if self.xklines is None:
+                raise
+            try:
+                got, eid = self.xklines(sym, interval, limit)
+            except Exception:  # noqa: BLE001 - запасной источник тоже молчит: наружу исходная ошибка Bybit
+                raise e
+            self.src[sym] = eid
+            self.xfallbacks += 1
+            return got
 
     def step(self, symbols=None, write=True):
         """Один проход: свежие свечи -> структура всех символов. Ошибка по символу не валит остальные. -> dict файла."""
@@ -329,11 +371,11 @@ class Collector(object):
             self.tried[sym] = now
             try:
                 if now - self.t1h.get(sym, -1e18) >= ttl1:
-                    book.seed(60, _rows(self.c, symbol, 60, LIMIT_1H), now=now)
+                    book.seed(60, self._rows_any(sym, symbol, 60, LIMIT_1H), now=now)
                     self.t1h[sym] = now
                     self.sleep(self.pause_s)
                 if now - self.t5.get(sym, -1e18) >= ttl5:
-                    book.seed(5, _rows(self.c, symbol, 5, LIMIT_5M), now=now)
+                    book.seed(5, self._rows_any(sym, symbol, 5, LIMIT_5M), now=now)
                     self.t5[sym] = now
                     self.sleep(self.pause_s)
             except Exception as e:                       # сеть/лимит/формат/геоблок: цикл живёт, причина попадает в файл (err_why)
@@ -348,12 +390,16 @@ class Collector(object):
                 row = None
             if row:
                 row["ts"] = int(self.t5.get(sym, now))
+                if self.src.get(sym) and self.src[sym] != "bybit":
+                    row["src"] = self.src[sym]                              # свечи взяты с другой биржи (REST Bybit был недоступен)
                 data[sym] = row
         keep = set(x[0] for x in syms)
-        for d in (self.books, self.t5, self.t1h, self.tried):          # монеты, ушедшие из состава (вышли из hot, запрос истёк), выбрасываются
+        for d in (self.books, self.t5, self.t1h, self.tried, self.src):    # монеты, ушедшие из состава (вышли из hot, запрос истёк), выбрасываются
             for k in [k for k in d if k not in keep]:
                 del d[k]
         doc = {"schema": SCHEMA, "ts_epoch": round(now, 3), "symbols": data}
+        if self.xfallbacks:
+            doc["xfallbacks"] = self.xfallbacks
         if errs:
             doc["err"] = errs
             doc["err_why"] = why
@@ -376,6 +422,8 @@ def run_loop(client, root=None, cfg=None, clock=time.time, sleep=time.sleep, sto
     col = Collector(client, root, cfg.get("every_s", 60.0), cfg.get("h1_every_s", 600.0), cfg.get("max_syms", MAX_SYMS), clock, sleep,
                     hot_n=cfg.get("hot_n", HOT_N), hot_every_s=cfg.get("hot_every_s", HOT_EVERY_S), hot_h1_every_s=cfg.get("hot_h1_every_s", HOT_H1_EVERY_S),
                     pause_s=cfg.get("pause_s", PAUSE_S))
+    if cfg.get("xklines", True):                              # запасные свечи с других бирж через ccxt, когда REST Bybit молчит (scan.structure.xklines=false выключает)
+        col.enable_xklines(cfg.get("xklines_exchanges"))
     while not stop():
         try:
             col.step()

@@ -330,9 +330,20 @@ def request(root, syms, now):
 
 
 def read_symbols(root, cfg, now=None):
-    """Набор монет потока: always (BTC/ETH/SOL), затем запрошенные сканом по сигналам (новые первыми), затем горячие из runtime/hot.json (tradable); не больше n_syms."""
+    """Набор монет потока: always (BTC/ETH/SOL), монеты открытых позиций и планов исполнителя (сторож позиции смотрит их стакан и ленту: указание владельца 2026-11-01),
+    затем запрошенные сканом по сигналам (новые первыми), затем горячие из runtime/hot.json (tradable); не больше n_syms."""
     now = time.time() if now is None else now
     out = [x for x in cfg.get("always") or [] if isinstance(x, str)]
+    try:
+        with open(paths.exec_snapshot_file(root=root), encoding="utf-8") as f:
+            snap = json.load(f)
+        for key in ("positions", "plans"):
+            for p in (snap.get(key) if isinstance(snap, dict) and isinstance(snap.get(key), list) else []):
+                s = p.get("sym") if isinstance(p, dict) else None
+                if isinstance(s, str) and s and s not in out:
+                    out.append(s)
+    except (OSError, ValueError, AttributeError, TypeError):
+        pass
     try:
         with open(paths.runtime("flow_req.json", root=root), encoding="utf-8") as f:
             req = json.load(f)
@@ -353,7 +364,7 @@ def read_symbols(root, cfg, now=None):
 
 def fetch_binance(timeout=5.0):
     """bookTicker Binance USDT-M по всем символам -> {SYM без USDT: mid}. Исключение при сбое (вызывающий гасит)."""
-    req = urllib.request.Request(BINANCE_URL, headers={"User-Agent": "open-trader/flowwatch"})
+    req = urllib.request.Request(BINANCE_URL, headers={"User-Agent": "stoa/flowwatch"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         rows = json.loads(r.read().decode("utf-8"))
     out = {}

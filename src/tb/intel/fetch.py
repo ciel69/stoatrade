@@ -22,6 +22,33 @@ from tb.intel import sources as src_mod
 
 MAX_BYTES = 1024 * 1024
 UA = src_mod.UA
+PARTIAL_MIN_BYTES = 2048       # лента XML, оборванная после стольких байт, разбирается по полученным записям
+STALL_S = 6.0                  # после первых байт ждать следующую порцию не дольше (обрыв передачи у провайдера)
+_XML_CT = ("xml", "rss", "atom")
+
+
+def _read_body(r, max_bytes, timeout):
+    """Тело ответа порциями. Если передача остановилась (2026-11-01: Cloudflare/Vercel у провайдера отдают 20-25 КБ и замолкают), лента XML
+    возвращается частично с флагом partial: свежие записи идут первыми, парсер достраивает оборванный конец. Остальное -> timeout. -> (bytes, partial)."""
+    ct = (r.headers.get("Content-Type") or "").lower()
+    xml = any(x in ct for x in _XML_CT)
+    buf = bytearray()
+    try:
+        while len(buf) <= max_bytes:
+            c = r.read(16384)
+            if not c:
+                return bytes(buf), False
+            buf += c
+            if xml and len(buf) >= PARTIAL_MIN_BYTES:
+                try:
+                    r.fp.raw._sock.settimeout(min(STALL_S, timeout))      # обрыв ждём недолго: интервал источника всё равно повторит запрос
+                except (AttributeError, OSError):
+                    pass
+        return bytes(buf), False
+    except (socket.timeout, TimeoutError):
+        if xml and len(buf) >= PARTIAL_MIN_BYTES:
+            return bytes(buf), True
+        raise
 RE_SID = re.compile(r"^[A-Za-z0-9_.-]{1,40}$")
 
 
@@ -75,10 +102,15 @@ def http_get_text(url, params=None, headers=None, timeout=10.0, max_bytes=MAX_BY
             cl = r.headers.get("Content-Length")
             if cl and cl.isdigit() and int(cl) > max_bytes:
                 raise FetchError("toobig", cl)
-            body = r.read(max_bytes + 1)
+            body, partial = _read_body(r, max_bytes, timeout)
             if len(body) > max_bytes:
                 raise FetchError("toobig", ">%d" % max_bytes)
-            return Resp(r.status, {k.lower(): v for k, v in r.headers.items()}, body, r.geturl())
+            hd = {k.lower(): v for k, v in r.headers.items()}
+            if partial:
+                hd["x-tb-partial"] = "1"
+                hd.pop("etag", None)                  # частичное тело не кэшируется как полное: следующий запрос без If-None-Match
+                hd.pop("last-modified", None)
+            return Resp(r.status, hd, body, r.geturl())
     except FetchError:
         raise
     except urllib.error.HTTPError as e:
@@ -208,7 +240,10 @@ class Fetcher(object):
                 raise FetchError("toobig")
             pctx = dict(ctx or {})
             pctx["now"] = now
+            pctx["partial"] = resp.headers.get("x-tb-partial") == "1"
             data = src_mod.parse(src, body, pctx)
+            if pctx["partial"]:
+                data["partial"] = True
             items = data.pop("items", None) or []
             return self._ok(src, cache, now, data, items, resp, ms, persist)
         except FetchError as e:

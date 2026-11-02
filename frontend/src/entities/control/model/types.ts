@@ -1,0 +1,77 @@
+/** Контракты управления днём (сервер: src/tb/dash2/ctlbridge.py и тема `ctl` в topics.py). */
+export type DayMode = 'paper' | 'testnet' | 'observe'
+/** Режим в окне запуска: к трём безопасным добавлены реальные деньги (доступны, только когда это разрешает сервер). */
+export type StartMode = DayMode | 'live'
+export type PlatformState = 'stopped' | 'starting' | 'running' | 'closing' | 'halted' | 'unknown'
+
+export interface CtlCheck {
+  id: string
+  name: string
+  /** red: жёсткое условие, amber: предупреждение */
+  sev: 'red' | 'amber' | string
+  ok: boolean
+  msg: string
+}
+
+export interface DayStepRow {
+  name: string
+  phase: string | null
+  ok: boolean | null
+  code: string | null
+}
+
+/** Тема `ctl`: без времён и возрастов, меняется только при смене состояния. */
+export interface CtlSnapshot {
+  alive: boolean
+  configured: boolean
+  platform: { state: PlatformState | null; mode: string | null; session: string | null; health: string | null; day_id: string | null; trading: boolean | null; observe: boolean | null }
+  step: { name: string; i?: number; n?: number } | null
+  kill: { flatten: boolean; reason: string } | null
+  /** снятие аварийной остановки кнопкой включено владельцем (флаг control.allow_clear_kill_from_dash); без него остаётся только команда в терминале */
+  clear_kill?: boolean
+  /** запуск дня на реальные деньги из дашборда включён владельцем (флаг control.allow_live_start_from_dash); без него реальные деньги отсюда недоступны */
+  live_start?: boolean
+  risk: { level: number | null; name: string | null }
+  busy: boolean
+  checks: CtlCheck[]
+  banner: { level: string | null; text: string } | null
+  day: { day_id: string | null; state: string | null; mode: string | null; steps: DayStepRow[] } | null
+  /** последние команды управления (без времён): что было отдано ctl и чем кончилось */
+  last?: Array<{ action: string; code: string; status: string; msg: string }>
+}
+
+/** hello.ctl: управление включено только при open_local и ключе подписи; csrf привязан к соединению. */
+export interface CtlHello {
+  enabled: boolean
+  csrf?: string
+  reason?: 'no_key' | 'token_mode'
+  /** расширенное управление включено (auth.dash2_full); modes: какие действия доступны дашборду, плюс 'llmkey' */
+  full?: boolean
+  modes?: string[]
+}
+
+export interface ChallengeData {
+  action?: string
+  danger?: boolean
+  gates?: Array<{ id: string; name?: string; ok?: boolean; msg?: string; deferred?: boolean }>
+  phrases?: string[]
+  nonce?: string
+  warnings?: Array<{ id: string; code?: string; msg?: string }>
+  pre_amber?: Array<{ id?: string; name?: string; msg?: string; code?: string }>
+  blocked?: boolean
+  expires_in?: number
+}
+
+/** Ответ на запрос условий по сокету (`ctl_result`). */
+export interface CtlResult {
+  id: string
+  kind: 'challenge' | 'command'
+  action: string
+  ok: boolean
+  code: string
+  msg: string
+  data?: ChallengeData
+}
+
+/** Фаза проверки условий запуска в окне дня (сама остановка и итоги команд ведёт entities/action). */
+export type FlowPhase = 'idle' | 'checking' | 'ready' | 'blocked' | 'starting' | 'done' | 'failed'

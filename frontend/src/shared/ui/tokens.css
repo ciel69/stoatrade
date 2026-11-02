@@ -1,0 +1,83 @@
+/* Токены темы (источник: DESIGN.md): цвета, типографика, отступы, радиусы. Тёмная тема по умолчанию, светлая по prefers-color-scheme или [data-theme]. */
+:root {
+  color-scheme: dark;
+  --bg: #0b121a;
+  --panel: #121c28;
+  --panel2: #1a2634;
+  --line: #223142;
+  --line2: #31445a;
+  --text: #e8eef4;
+  --muted: #93a4b8;
+  --accent: #4db3ff;
+  --accent-bg: #14304a;
+  --pos: #5fd38d;
+  --neg: #ff7b7b;
+  --warn: #f5a524;
+  --zone-brain: #a58bff;
+  /* зоны разделов (как на старом дашборде): цвет значка раздела в боковой колонке */
+  --zone-now: #4db3ff;
+  --zone-trades: #3cc4b5;
+  --zone-market: #e58fc1;
+  --zone-system: #9aa9ba;
+  --lift: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 10px 30px rgba(0, 0, 0, 0.28);
+
+  --font: "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  /* единый потолок ширины всех страниц (общий класс .page в app/styles/global.css) */
+  --page-max: 1920px;
+  --radius: 10px;
+  --radius-sm: 6px;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --bg: #eef2f6;
+    --panel: #ffffff;
+    --panel2: #e8eef4;
+    --line: #d6dee7;
+    --line2: #b9c5d2;
+    --text: #0f1a26;
+    --muted: #4a5b6f;
+    --accent: #0b63b5;
+    --accent-bg: #dcebf9;
+    --pos: #0b7a43;
+    --neg: #b42318;
+    --warn: #8a5200;
+    --zone-brain: #6a4fd1;
+    --zone-now: #0b63b5;
+    --zone-trades: #0b8a7a;
+    --zone-market: #b0397f;
+    --zone-system: #5c6b7d;
+    --lift: 0 1px 0 rgba(255, 255, 255, 0.55) inset, 0 6px 20px rgba(15, 26, 38, 0.07);
+  }
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #eef2f6;
+  --panel: #ffffff;
+  --panel2: #e8eef4;
+  --line: #d6dee7;
+  --line2: #b9c5d2;
+  --text: #0f1a26;
+  --muted: #4a5b6f;
+  --accent: #0b63b5;
+  --accent-bg: #dcebf9;
+  --pos: #0b7a43;
+  --neg: #b42318;
+  --warn: #8a5200;
+  --zone-brain: #6a4fd1;
+  --zone-now: #0b63b5;
+  --zone-trades: #0b8a7a;
+  --zone-market: #b0397f;
+  --zone-system: #5c6b7d;
+  --lift: 0 1px 0 rgba(255, 255, 255, 0.55) inset, 0 6px 20px rgba(15, 26, 38, 0.07);
+}

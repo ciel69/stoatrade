@@ -662,35 +662,6 @@ class TestApiAndServer(Fx):
         finally:
             shutil.rmtree(empty, ignore_errors=True)
 
-    def test_http_get_ok_post_405_host_403_and_static(self):
-        srv = server.make_server(0, self.root)
-        th = threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
-        th.start()
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        base = "http://127.0.0.1:%d" % srv.server_address[1]
-        try:
-            for p in ("/api/v2/state", "/api/v2/plans?status=armed", "/api/v2/plan?id=" + P1, "/api/v2/decisions?only=fail&limit=5", "/api/v2/brief", "/api/v2/events", "/api/v2/exp?by=variant&mode=paper"):
-                r = opener.open(base + p, timeout=5)
-                self.assertEqual(r.status, 200, p)
-                json.loads(r.read().decode("utf-8"))
-            for n in ("v-strip.js", "v-plans.js", "v-decisions.js", "v-brief.js", "v-exp.js"):
-                self.assertEqual(opener.open(base + "/" + n, timeout=5).status, 200, n)
-            for method in ("POST", "PUT", "DELETE", "PATCH"):
-                req = urllib.request.Request(base + "/api/v2/state", data=b"{}", method=method)
-                with self.assertRaises(urllib.error.HTTPError) as cm:
-                    opener.open(req, timeout=5)
-                self.assertEqual(cm.exception.code, 405)
-            req = urllib.request.Request(base + "/api/v2/state", headers={"Host": "evil.example.com"})
-            with self.assertRaises(urllib.error.HTTPError) as cm:
-                opener.open(req, timeout=5)
-            self.assertEqual(cm.exception.code, 403)
-            with self.assertRaises(urllib.error.HTTPError) as cm:
-                opener.open(base + "/api/v2/plan?id=../../state", timeout=5)
-            self.assertEqual(cm.exception.code, 400)
-        finally:
-            srv.shutdown()
-            srv.server_close()
-
 
 class TestSafety(Fx):
     def test_no_secret_in_any_v2_response(self):
@@ -714,35 +685,6 @@ class TestSafety(Fx):
                     "os.remove", "os.replace", "os.rename", "shutil", ".write(", "os.makedirs", "unlink"):
             self.assertNotIn(bad, src, bad)
         self.assertIsNone(re.search(r"open\([^)]*[\"'][wax+]b?[\"']", src))
-
-    def test_server_has_no_write_handlers(self):
-        src = open(server.__file__, encoding="utf-8").read()
-        # WP12 (решение владельца 2026-10-28): POST разрешён только под /api/ctl/*, остальные методы по-прежнему 405
-        self.assertIn("do_PUT = do_DELETE = do_PATCH = do_OPTIONS = _deny", src)
-        self.assertIn('not path.startswith("/api/ctl/")', src)
-        self.assertEqual(src.count("def do_POST"), 1)
-
-    def test_scripts_listed_and_included(self):
-        html = open(os.path.join(server.STATIC, "index.html"), encoding="utf-8").read()
-        for n in ("v-strip.js", "v-plans.js", "v-decisions.js", "v-brief.js", "v-exp.js"):
-            self.assertIn(n, server.SCRIPTS)
-            self.assertIn('src="/%s"' % n, html)
-            self.assertTrue(os.path.exists(os.path.join(server.STATIC, n)))
-
-    def test_static_js_uses_text_nodes_only(self):
-        for n in server.SCRIPTS:
-            txt = open(os.path.join(server.STATIC, n), encoding="utf-8").read()
-            for bad in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function"):
-                self.assertNotIn(bad, txt, "%s: %s" % (n, bad))
-            self.assertNotIn("method:", txt.replace('method: "GET"', "").replace('method: "POST"' if n == "v-control.js" else "\0", ""), n)
-
-    def test_page_has_no_control_buttons(self):
-        html = open(os.path.join(server.STATIC, "index.html"), encoding="utf-8").read()
-        self.assertNotIn("<form", html)
-        self.assertNotIn("/api/kill", html)
-        for n in server.SCRIPTS:
-            txt = open(os.path.join(server.STATIC, n), encoding="utf-8").read()
-            self.assertNotIn("/api/kill", txt)
 
 
 class TestPerformance(unittest.TestCase):

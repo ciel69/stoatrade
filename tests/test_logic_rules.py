@@ -215,12 +215,48 @@ class LifecycleTest(unittest.TestCase):
         self.assertEqual((a[0]["type"], a[0]["reason"], a[0]["frac"]), ("close", "invalidation", 1.0))
         self.assertEqual(R.evaluate_lifecycle(p, managing_rt(), view(99.6), T0, LIM), [])
 
-    def test_max_hold(self):
+    def test_chase_rr_floor_and_zone_tolerance(self):
+        """CHASE: дальше допуска вход разрешён, если RR от текущей цены после издержек >= chase_rr_floor; зона входа задаёт допуск не меньше половины своей ширины."""
+        lim = dict(LIM, entry=dict(LIM["entry"], chase_rr_floor=1.5), round_trip_fee_bps=18.0)
+        p = long_plan()                                                        # ref 100, стоп 99, цели 103/105
+        r = R.evaluate_entry(p, {"status": "armed"}, view(100.3), T0, lim)      # 30 б.п. > 15, RR ~2.4
+        self.assertTrue(r["fire"], r)
+        r = R.evaluate_entry(p, {"status": "armed"}, view(101.5), T0, lim)      # RR ~0.9
+        self.assertEqual(r["blocked"], "CHASE")
+        self.assertEqual(R.evaluate_entry(p, {"status": "armed"}, view(100.3), T0, LIM)["blocked"], "CHASE")     # без порога RR как раньше
+        z = long_plan()
+        z["entry"]["when"] = {"kind": "price_in_zone", "low": 99.7, "high": 100.3}
+        self.assertTrue(R.evaluate_entry(z, {"status": "armed"}, view(100.25), T0, LIM)["fire"])                 # 25 б.п. внутри зоны ±30 б.п.
+
+    def test_max_hold_never_closes_only_wakes_brain(self):
+        """Срок удержания позицию не закрывает (указание владельца 2026-11-01): выход только по стопу, целям или решению мозга. По истечении веха hold_expired один раз на срок."""
         p = long_plan(lifecycle={"max_hold_min": 10})
         rt = managing_rt(entered=T0 - 600)
-        a = R.evaluate_lifecycle(p, rt, view(100.0), T0, LIM)
-        self.assertEqual((a[0]["type"], a[0]["reason"], a[0]["why"]), ("close", "timeout", "LIFECYCLE:MAX_HOLD"))
-        self.assertEqual(R.evaluate_lifecycle(p, managing_rt(entered=T0 - 599), view(100.0), T0, LIM), [])
+        self.assertEqual(R.evaluate_lifecycle(p, rt, view(100.0), T0, LIM), [])
+        self.assertEqual(R.evaluate_lifecycle(p, managing_rt(entered=T0 - 6000), view(100.0), T0, LIM), [])
+        res = R.evaluate_manage(p, rt, view(100.0), T0, LIM)
+        ev = [e for e in res["events"] if e["name"] == "hold_expired"]
+        self.assertEqual((len(ev), ev[0]["hold"]), (1, 10))
+        rt2 = merge(rt, res["rt_patch"])
+        self.assertEqual([e for e in R.evaluate_manage(p, rt2, view(100.0), T0 + 60, LIM)["events"] if e["name"] == "hold_expired"], [])      # один раз
+        p["lifecycle"]["max_hold_min"] = 20                                                                                                     # продлили: новая веха по новому сроку
+        self.assertEqual(len([e for e in R.evaluate_manage(p, rt2, view(100.0), T0 + 600, LIM)["events"] if e["name"] == "hold_expired"]), 1)
+        self.assertEqual([e for e in R.evaluate_manage(p, managing_rt(entered=T0 - 599), view(100.0), T0, LIM)["events"] if e["name"] == "hold_expired"], [])
+
+    def test_hold_expiring_wake(self):
+        """Веха hold_expiring за 20% срока (не раньше 30 и не позже 5 мин до MAX_HOLD) один раз на срок; после продления срока будит снова."""
+        p = long_plan(lifecycle={"max_hold_min": 60})
+        names = lambda rt, now: [e for e in R.evaluate_manage(p, rt, view(100.2, now=now), now, LIM)["events"] if e["name"] == "hold_expiring"]
+        self.assertEqual(names(managing_rt(entered=T0 - 47 * 60), T0), [])                 # за 13 мин до срока: рано (порог 12 мин)
+        rt = managing_rt(entered=T0 - 49 * 60)
+        res = R.evaluate_manage(p, rt, view(100.2), T0, LIM)
+        ev = [e for e in res["events"] if e["name"] == "hold_expiring"]
+        self.assertEqual((len(ev), ev[0]["hold"]), (1, 60))
+        rt2 = merge(rt, res["rt_patch"])
+        self.assertEqual(names(rt2, T0 + 1), [])                                           # один раз
+        p["lifecycle"]["max_hold_min"] = 120
+        self.assertEqual(names(rt2, T0 + 1), [])                                           # после продления до 120 рано
+        self.assertEqual(len(names(rt2, T0 + 60 * 60)), 1)                                 # и снова будит перед новым сроком
 
     def test_session_end_flatten(self):
         lim = dict(LIM, session_end_ts=T0 + 20)
@@ -759,6 +795,27 @@ class AutoProtectTest(unittest.TestCase):
         rt = managing_rt(stop=101.5)
         rt["pos"]["best_px"] = 102.0
         self.assertEqual(stops(R.evaluate_manage(long_plan(), rt, view(101.8), T0, self.AP)), [])
+
+    def test_profit_floor_waits_when_costs_eat_the_lock(self):
+        # узкий стоп 0.23% (BTC 2026-11-01): издержки круга 18 бп + проскальзывание 5 бп ~ 1R, пол = 100.23 + 0.2R = 100.276
+        rt = managing_rt(r=0.23)
+        rt["pos"]["best_px"] = 100.161                               # +0.7R: безубыток с комиссиями был бы ниже пола
+        self.assertEqual(stops(R.evaluate_manage(long_plan(), rt, view(100.161), T0, self.AP)), [])
+        rt = managing_rt(side="short", r=0.23)
+        rt["pos"]["best_px"] = 99.839
+        self.assertEqual(stops(R.evaluate_manage(short_plan(), rt, view(99.839), T0, self.AP)), [])
+
+    def test_profit_floor_lifts_breakeven_and_blocks_lock_below_it(self):
+        rt = managing_rt(r=0.23)
+        rt["pos"]["best_px"] = 100.5                                 # mfe_lock дал бы 100.25 (ниже пола), безубыток поднят до пола
+        s = stops(R.evaluate_manage(long_plan(), rt, view(100.5), T0, self.AP))
+        self.assertEqual(len(s), 1)
+        self.assertGreaterEqual(s[0]["to"], 100.27)
+        self.assertLess(s[0]["to"], 100.5)
+        rt = managing_rt(side="short", r=0.23)
+        rt["pos"]["best_px"] = 99.5
+        s = stops(R.evaluate_manage(short_plan(), rt, view(99.5), T0, self.AP))
+        self.assertLessEqual(s[0]["to"], 99.73)
 
 
 if __name__ == "__main__":

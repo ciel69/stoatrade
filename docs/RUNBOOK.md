@@ -1,7 +1,7 @@
 # RUNBOOK: платформа v2 (WP11-B)
 
 Платформа = супервизор + сервисы под ним. Запускается одной командой, живёт без чата и без агента Claude. Сервисы: `exec` (исполнитель), `scan` (сканер как сервис),
-`dispatch` (диспетчер подписок), `ctl` (сервис управления, WP12: `docs/CONTROL.md`), `dash` (дашборд), `mcp` и `brain` (резерв: см. ниже). Код: `src/tb/platform/`, настройки: `config/platform.json`, `config/subscriptions.json`.
+`dispatch` (диспетчер подписок), `ctl` (сервис управления, WP12: `docs/CONTROL.md`), `dash` (дашборд: с 2026-11-02 новый, Vue + WebSocket, порт 8765; живость не проверяется, `hb: none`; запускается как `./tb dash --port N`), `mcp` и `brain` (резерв: см. ниже). Код: `src/tb/platform/`, настройки: `config/platform.json`, `config/subscriptions.json`.
 
 ## Команды
 Просто: `./tb start` (всё в фоне, профиль из `config/local/platform.json`, иначе paper; мозг входит в набор и стартует, если есть условия, иначе одна строка «мозг выключен: ...»), `./tb stop`, `./tb restart`, `./tb status`.
@@ -73,7 +73,7 @@ Windows: `./tb up --print-windows` печатает PowerShell-скрипт с `
 Недостающие ключи берутся из `tb.platform.services.DEFAULTS`. Разделы:
 - `profile`, `services.<профиль>`: список сервисов по умолчанию.
 - `supervisor`: `poll_s`, `status_s`, `stop_grace_s`, `exec_stop_grace_s`, `stable_s`, `restart{base_s,factor,max_s,max_tries}`, `retry_after_giveup_s`, `fatal_codes`, `fatal_within_s`, `down_event_repeat_s`, `log{max_bytes,keep}`.
-- `svc.<сервис>`: `hb` (`exec`|`file`|`none`), `hb_stale_s`, `grace_s`, для `dash` `port`, для `mcp`/`brain` `module` и `args`.
+- `svc.<сервис>`: `hb` (`exec`|`file`|`none`), `hb_stale_s`, `grace_s`, для `dash` (8765) `port`, для `mcp`/`brain` `module` и `args`.
 - `scan`: пороги прежние (hotscan): `interval, top, min_turnover, max_spread_bps, max_lot, range_pct, surge_min, cooldown, wake_score, max_per_hour, idea_zone_pct, outcome_min`; `env` (рынок, по умолчанию mainnet:
   публичные данные), `publish_info` (тихие события тоже в шину как info), `dedup_s` (окна дедупликации по виду события).
 - `dispatch`: `poll_s`, `retry_*`, `max_attempts` (webhook), `api{jobs_per_hour, critical_per_hour, coalesce_s, settle_s, max_seqs}`, `queue_keep`, `classes` (тип события -> класс приоритета).

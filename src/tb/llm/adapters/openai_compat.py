@@ -19,6 +19,19 @@ DEFAULT_THINKING = {"off": {"thinking": {"type": "disabled"}},
 THINK_BUDGET = {"low": 1024, "medium": 4096, "high": 8192}
 
 
+
+def _hist_args(c):
+    """Аргументы вызова в истории: исходный текст, если это JSON; иначе разобранные args или {} (битый JSON в истории сервер отклоняет)."""
+    raw = c.get("raw_args")
+    if raw:
+        try:
+            json.loads(raw)
+            return raw
+        except ValueError:
+            pass
+    return json.dumps(c.get("args") or {}, ensure_ascii=False)
+
+
 class OpenAICompat(Adapter):
     kind = "openai-compatible"
     pass_reasoning_always = False       # DeepSeek: reasoning_content возвращается при запросах с tools
@@ -41,7 +54,7 @@ class OpenAICompat(Adapter):
                 calls = m.get("tool_calls") or []
                 if calls:
                     o["tool_calls"] = [{"id": c["id"], "type": "function",
-                                        "function": {"name": c["name"], "arguments": c.get("raw_args") or json.dumps(c.get("args") or {}, ensure_ascii=False)}}
+                                        "function": {"name": c["name"], "arguments": _hist_args(c)}}
                                        for c in calls]
                     if not o["content"]:
                         o["content"] = None

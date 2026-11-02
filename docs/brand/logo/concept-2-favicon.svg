@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <rect width="32" height="32" rx="9" fill="#0b121a"/>
+  <g transform="translate(16 16) scale(0.84) translate(-16 -16)" fill="none" stroke="#4db3ff" stroke-width="3.5" stroke-linecap="round">
+  <!-- Концепция 2 «Бар открытия»: OHLC-бар, левая засечка Open ниже правой Close (растущий бар) -->
+  <path d="M16 4.5V27.5"/>
+  <path d="M7.5 21H16"/>
+  <path d="M16 11H24.5"/>
+  </g>
+</svg>

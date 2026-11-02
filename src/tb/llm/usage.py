@@ -86,7 +86,7 @@ def _append(row, root):
         return False
 
 
-def record(meta, provider, model, usage=None, usd=0.0, lat_ms=0, ok=True, err=None, retries=0, finish=None, root=None, now=None):
+def record(meta, provider, model, usage=None, usd=0.0, lat_ms=0, ok=True, err=None, retries=0, finish=None, root=None, now=None, err_msg=None):
     """Дописывает строку вызова -> True/False. Сбой записи учёта не роняет вызов."""
     now = time.time() if now is None else now
     row = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)), "t": round(now, 3)}
@@ -95,6 +95,8 @@ def record(meta, provider, model, usage=None, usd=0.0, lat_ms=0, ok=True, err=No
     row.update({"provider": _fld(provider), "model": _fld(model), "in": u["in"], "in_hit": u["in_hit"], "in_write": u["in_write"], "out": u["out"],
                 "reasoning": u["reasoning"], "usd": round(float(usd), 8), "lat_ms": int(max(0, lat_ms)), "ok": bool(ok),
                 "err": _fld(err) if err else None, "fmt_err": False, "retries": int(retries), "finish": _fld(finish)})
+    if err_msg and not ok:
+        row["err_msg"] = re.sub(r"[\x00-\x1f]", " ", str(err_msg))[:160]
     return _append(row, root)
 
 

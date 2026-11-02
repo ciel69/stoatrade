@@ -6,9 +6,10 @@ Most documents are in Russian. English entry points: `README.md`, `SECURITY.md`,
 | file | what |
 |---|---|
 | `PROVIDERS.md` / `PROVIDERS.ru.md` | connect an LLM provider: templates, keys, profiles, roles, local models, budgets, errors |
-| `QUICKSTART.md` | quick start of the paper profile, tab-by-tab dashboard guide, troubleshooting |
+| `QUICKSTART.md` | first run (`./tb setup` / `tb.cmd setup`: environment check, Python and dependency install, LLM, start), paper profile, dashboard sections, troubleshooting |
 | `RUNBOOK.md` | operations: start/stop, checklists, emergency, services, autostart |
-| `WINDOWS.md` | running on Windows (not verified) |
+| `WINDOWS.md` | running on Windows (limited real-machine testing) |
+| `images/README.md` | dashboard screenshots: demo data, how to regenerate (`npm --prefix frontend run screenshots`) |
 | `PERMISSIONS.md` | permission rules for the agent shell (`./tb`) |
 | `PUBLISH_CHECKLIST.md` | what to do before publishing this repository, audit results |
 
@@ -20,7 +21,10 @@ Most documents are in Russian. English entry points: `README.md`, `SECURITY.md`,
 | `DESIGN_V2.md` | design analysis and target architecture, modes of Claude integration |
 | `SPEC.md`, `SPEC_FEED.md` | earlier spec and feed spec |
 | `HARNESS.md` | session harness: types, cycle |
+| `ROADMAP.md` | roadmap of the learning brain: stages 0-6, block IDs `R<stage>.<n>`, spec-first workflow, status |
 | `BACKLOG.md` | open work items |
+| `FRONTEND_PLAN.md` | the dashboard (Vue 3, WebSocket, `./tb dash`, port 8765; built `frontend/dist` is in the repository): decisions and stages |
+| `DESKTOP.md` | brief: desktop app (Tauri 2 + Python sidecar), stages D0-D4, owner decisions |
 
 ## Safety and control
 | file | what |

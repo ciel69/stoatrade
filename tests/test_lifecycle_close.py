@@ -469,6 +469,82 @@ class TestExecution(unittest.TestCase):
         self.assertIsNone(e.day())
         self.assertIsNone(days.banner(e.root))
 
+    def test_real_owner_format_plan_prefix_is_matched_to_plan(self):
+        """Исполнитель пишет владельца позиции как "plan:<id>" (reconcile.owner_of): чек-лист находит план, а не считает позицию «без плана», и close идёт с чистым id
+        (TRX 2026-11-01: иначе E_ID «плана нет» и день висел в closing)."""
+        e = _lc.LC(self)
+        e.brain.avail = False
+        day = day_with(e, intraday())
+        real = e.ex.snapshot
+
+        def prefixed(now):
+            s = real(now)
+            for p in s["positions"]:
+                if p.get("owner"):
+                    p["owner"] = "plan:%s" % p["owner"]
+            return s
+        e.ex.snapshot = prefixed
+        r = e.stop()
+        rows = e.rd_day(day, "checklist.json")["rows"]
+        pos = [x for x in rows if x["kind"] == "pos"]
+        self.assertEqual((pos[0]["plan"], pos[0]["item"]), ("PL-1-SOL-01", "pos:PL-1-SOL-01"))
+        self.assertNotIn("A0_ORPHAN", pos[0]["codes"])                                          # план найден: это не «позиция без плана»
+        self.assertEqual(e.ex.ops("close"), [("close", "PL-1-SOL-01")])                          # close с чистым id плана
+        self.assertEqual(r["data"]["state"], "stopped")
+
+    def test_stuck_day_retries_close_while_position_lives(self):
+        """Провал C6 при живом исполнителе: повторная проверка сама повторяет close по позиции с планом (не чаще раза в минуту, до трёх раз), день закрывается."""
+        e = _lc.LC(self)
+        e.brain.avail = False
+        day = day_with(e, intraday())
+        e.ex.silent_ops.add("close")
+        e.stop()
+        e.advance_t(125)
+        api._LAST_CLOSE.clear()
+        api.tick(e.root, e.t[0])
+        self.assertEqual(e.day()["state"], "closing")
+        n0 = len(e.ex.ops("close"))
+        e.ex.silent_ops.clear()
+        e.advance_t(61)
+        api._LAST_CLOSE.clear()
+        api.tick(e.root, e.t[0])                                                 # повтор close ушёл и исполнитель его выполнил
+        self.assertEqual(len(e.ex.ops("close")), n0 + 1)
+        self.assertEqual([c for c in e.ex.sent if c["op"] == "close"][-1]["tag"], "recheck.1")
+        api._LAST_CLOSE.clear()
+        e.advance_t(3)
+        r = api.tick(e.root, e.t[0])
+        self.assertEqual(r["state"], "stopped")
+
+    def test_stuck_paper_day_is_forced_closed_after_retries_so_next_day_can_start(self):
+        """Paper: исполнитель так и не подтвердил закрытие: после трёх повторов день завершается принудительно (позиция остаётся под исполнителем), баннер alarm,
+        состояние stopped с кодом forced_paper: автостарт следующего дня не блокируется."""
+        e = _lc.LC(self)
+        e.brain.avail = False
+        day = day_with(e, intraday())
+        e.ex.silent_ops.add("close")
+        e.stop()
+        e.advance_t(125)
+        api._LAST_CLOSE.clear()
+        api.tick(e.root, e.t[0])
+        self.assertEqual(e.day()["state"], "closing")
+        for _ in range(3):
+            e.advance_t(61)
+            api._LAST_CLOSE.clear()
+            api.tick(e.root, e.t[0])
+            self.assertEqual(e.day()["state"], "closing")
+        self.assertEqual(len([c for c in e.ex.sent if c["op"] == "close" and c["tag"].startswith("recheck")]), 3)
+        e.advance_t(61)
+        api._LAST_CLOSE.clear()
+        r = api.tick(e.root, e.t[0])
+        self.assertEqual(r["state"], "stopped")
+        d = e.rd_day(day, "day.json")
+        self.assertEqual(d["closing"]["forced"]["why"], "retries_exhausted")
+        self.assertEqual(d["closing"]["forced"]["left"], ["PL-1-SOL-01"])
+        self.assertIn("pos:PL-1-SOL-01", d["closing"]["manual"])
+        self.assertEqual(r["auto"], None)                                         # остановка владельцем: авто-причины нет (автостарт идёт только после автостопа)
+        b = days.banner(e.root)
+        self.assertEqual(b["level"], "alarm")
+
     def test_stuck_day_recovers_when_positions_disappear(self):
         e = _lc.LC(self)
         e.brain.avail = False
@@ -704,6 +780,7 @@ class TestEmergencyAndTime(unittest.TestCase):
         day = day_with(e)
         d = e.day()
         d["runner"] = {"pid": 1, "hb": e.t[0]}
+        d["mode"] = "testnet"                                                    # live/testnet: после рестарта торговля только по подтверждению
         days.save(e.root, d)
         e.w("runtime/platform/supervisor.json", {"pid": os.getpid(), "started": e.t[0] + 5})
         with mock.patch("tb.lifecycle.api._supervisor_started", return_value=e.t[0] + 5):
@@ -715,6 +792,27 @@ class TestEmergencyAndTime(unittest.TestCase):
         self.assertTrue(r["ok"])
         self.assertTrue(e.r("state/control/trading.json")["enabled"])
         self.assertEqual(api.resume_day(e.root, {}, e.t[0])["code"], "E_STATE")
+
+    def test_paper_restart_needs_no_resume(self):
+        """Paper: рестарт платформы не выключает флаг и не вешает баннер; день, уже помеченный needs_resume, снимается сам (баннер рестарта тоже)."""
+        e = _lc.LC(self)
+        day_with(e)
+        d = e.day()
+        d["runner"] = {"pid": 1, "hb": e.t[0]}
+        days.save(e.root, d)
+        with mock.patch("tb.lifecycle.api._supervisor_started", return_value=e.t[0] + 5):
+            api.tick(e.root, e.t[0] + 10)
+        self.assertFalse(e.day().get("needs_resume"))
+        self.assertTrue(e.r("state/control/trading.json")["enabled"])
+        d = e.day()
+        d["needs_resume"] = True                                                 # день, застрявший до исправления
+        days.save(e.root, d)
+        days.set_trading(e.root, False, d)
+        days.set_banner(e.root, "warn", api.RESTART_BANNER + ": торговля выключена до подтверждения (день %s)" % d["day_id"], d["day_id"])
+        api.tick(e.root, e.t[0] + 20)
+        self.assertFalse(e.day().get("needs_resume"))
+        self.assertTrue(e.r("state/control/trading.json")["enabled"])
+        self.assertIsNone(days.banner(e.root))
 
 
 class TestEdges(unittest.TestCase):

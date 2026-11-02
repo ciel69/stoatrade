@@ -283,7 +283,10 @@ class TestBrief(unittest.TestCase):
             self.assertEqual(b["market"]["blackout"]["mode"], want, exec_mode)
         b = {"market": {"btc": {}}}
         brief._blackout_mode(b, types.SimpleNamespace(root=root, health={"data": {"mode": "paper"}}))
-        self.assertEqual(b["market"], {"btc": {}})
+        self.assertEqual(b["market"], {"btc": {}, "news_mode": "warn"})        # news_mode: правило для новостей важностью 3-4 (paper = warn)
+        b = {"market": {"btc": {}}}
+        brief._blackout_mode(b, types.SimpleNamespace(root=root, health={"data": {"mode": "live"}}))
+        self.assertEqual(b["market"]["news_mode"], "block")
 
 
 class TestStats(unittest.TestCase):
@@ -313,7 +316,7 @@ class TestPrompts(unittest.TestCase):
         from tb.brain import roles_runtime
         reg = roles_runtime.load(_bootstrap.ROOT)
         ma, pm = reg.get("morning_analyst"), reg.get("position_manager")
-        self.assertEqual((ma.version, pm.version), (2, 3))      # position_manager v3: реакции на STALLED / FLOW_TURN сторожа
+        self.assertEqual((ma.version, pm.version), (3, 3))      # morning_analyst v3: новости 3-4 на paper предупреждение и шорт-уклон;      # position_manager v3: реакции на STALLED / FLOW_TURN сторожа
         for r in (ma, pm):
             self.assertIn("blackout.mode=warn", r.system)
             self.assertIn("only paper", r.system)

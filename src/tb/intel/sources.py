@@ -198,6 +198,20 @@ def parse_time_any(s):
     return ts
 
 
+def _repair_feed(raw):
+    """Оборванная лента (передача остановилась на середине): обрезка после последней целой записи и закрытие корня. -> Element или None."""
+    low = raw.lower()
+    for close, tail in ((b"</item>", b"</channel></rss>"), (b"</entry>", b"</feed>")):
+        i = low.rfind(close)
+        if i < 0:
+            continue
+        try:
+            return ET.fromstring(raw[:i + len(close)] + tail)
+        except ET.ParseError:
+            return None
+    return None
+
+
 def parse_feed(body, ctx):
     """RSS 2.0 / Atom. Отказ от DTD/ENTITY (взрыв сущностей); сырые поля режутся до 2000 символов, очистка делается позже (items.make_item)."""
     raw = body if isinstance(body, (bytes, bytearray)) else str(body).encode("utf-8", "replace")
@@ -207,7 +221,9 @@ def parse_feed(body, ctx):
     try:
         root = ET.fromstring(bytes(raw))
     except ET.ParseError:
-        raise ParseError("xml")
+        root = _repair_feed(bytes(raw))
+        if root is None:
+            raise ParseError("xml")
     entries = []
     for el in root.iter():
         t = _local(el.tag)
@@ -372,14 +388,24 @@ SOURCE_DEFS = [
      "interval_s": 1800, "fields": ["v"], "note": "подтверждён context.py"},
     {"id": "btc_dom", "kind": "struct", "group": "coingecko", "url": "https://api.coingecko.com/api/v3/global", "params": {}, "format": "json",
      "parser": "btc_dom", "interval_s": 1800, "fields": ["v"], "hist_key": "v", "note": "подтверждён context.py (sources.global); chg_24h считается по своей истории"},
-    {"id": "rss_coindesk", "kind": "text", "group": "coindesk", "url": "https://www.coindesk.com/arc/outboundfeeds/rss/", "params": {}, "format": "rss",
-     "parser": "feed", "interval_s": 90, "fields": ["items"]},
+    {"id": "rss_coindesk", "kind": "text", "group": "coindesk", "url": "https://www.coindesk.com/arc/outboundfeeds/rss", "params": {}, "format": "rss",
+     "parser": "feed", "interval_s": 90, "fields": ["items"], "timeout_s": 20,
+     "note": "без слэша в конце (со слэшем 308-редирект); хостинг иногда отвечает ~10 с, отсюда таймаут 20 с (2026-11-01: ночные таймауты на 10 с)"},
     {"id": "rss_cointelegraph", "kind": "text", "group": "cointelegraph", "url": "https://cointelegraph.com/rss", "params": {}, "format": "rss",
-     "parser": "feed", "interval_s": 90, "fields": ["items"]},
+     "parser": "feed", "interval_s": 90, "fields": ["items"], "timeout_s": 20},
     {"id": "rss_theblock", "kind": "text", "group": "theblock", "url": "https://www.theblock.co/rss.xml", "params": {}, "format": "rss",
-     "parser": "feed", "interval_s": 90, "fields": ["items"]},
+     "parser": "feed", "interval_s": 90, "fields": ["items"], "timeout_s": 20},
     {"id": "rss_decrypt", "kind": "text", "group": "decrypt", "url": "https://decrypt.co/feed", "params": {}, "format": "rss", "parser": "feed",
-     "interval_s": 180, "fields": ["items"]},
+     "interval_s": 180, "fields": ["items"], "timeout_s": 20},
+    # подстраховка 2026-11-01: у провайдера ленты за Cloudflare/Vercel обрываются на 20-25 КБ; эти отдавались целиком (небольшие или другой путь)
+    {"id": "rss_cryptonews", "kind": "text", "group": "cryptonews", "url": "https://crypto.news/feed/", "params": {}, "format": "rss", "parser": "feed",
+     "interval_s": 300, "fields": ["items"], "timeout_s": 20},
+    {"id": "rss_ambcrypto", "kind": "text", "group": "ambcrypto", "url": "https://ambcrypto.com/feed/", "params": {}, "format": "rss", "parser": "feed",
+     "interval_s": 300, "fields": ["items"], "timeout_s": 20},
+    {"id": "rss_investing", "kind": "text", "group": "investing", "url": "https://www.investing.com/rss/news_301.rss", "params": {}, "format": "rss",
+     "parser": "feed", "interval_s": 600, "fields": ["items"], "timeout_s": 20, "note": "Investing.com: новости криптовалют"},
+    {"id": "rss_marketwatch", "kind": "text", "group": "marketwatch", "url": "https://feeds.content.dowjones.io/public/rss/mw_topstories", "params": {},
+     "format": "rss", "parser": "feed", "interval_s": 600, "fields": ["items"], "timeout_s": 20, "note": "макро: главные новости MarketWatch (ФРС, рынки США)"},
     {"id": "cal_bls_ics", "kind": "struct", "group": "bls", "url": "https://www.bls.gov/schedule/news_release/bls.ics", "params": {}, "format": "ics",
      "parser": "ics", "interval_s": 86400, "fields": ["events"], "note": "CPI/NFP; сайт может отдавать 403 ботам -> источник degraded, календарь остаётся на кандидатах"},
     {"id": "cal_fomc_html", "kind": "struct", "group": "fed", "url": "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm", "params": {},

@@ -7,6 +7,8 @@
 import calendar
 import time
 
+from tb.core.stops import loss_stop
+
 HOUR = 3600.0
 DAY = 86400.0
 
@@ -36,14 +38,14 @@ def closed_sorted(trades):
 
 
 def symbol_cooldown(trades, sym, now, minutes):
-    """Эпоха конца паузы по монете после стопа (reason == 'sl') или None, если паузы нет.
+    """Эпоха конца паузы по монете после убыточного стопа (stops.loss_stop) или None, если паузы нет.
 
     >>> symbol_cooldown([{"sym": "SOL", "reason": "sl", "ts_close": "2026-10-28T10:00:00Z"}], "SOL", 1793181600.0 + 600, 30) is not None
     True
     """
     last = None
     for tc, t in closed_sorted(trades):
-        if t.get("sym") == sym and t.get("reason") == "sl":
+        if t.get("sym") == sym and loss_stop(t):
             last = tc
     if last is None:
         return None
@@ -55,7 +57,7 @@ def stop_streak(trades):
     """-> (длина серии стопов подряд среди последних закрытых, эпоха последнего стопа серии или None)."""
     n, last = 0, None
     for tc, t in reversed(closed_sorted(trades)):
-        if t.get("reason") != "sl":
+        if not loss_stop(t):                      # стоп в плюс (подтянутый в прибыль) серию рвёт
             break
         n += 1
         if last is None:
@@ -136,7 +138,7 @@ def cooldowns(trades, now, prot):
     prot = exec_limits.protections."""
     out = {"symbols": {}, "global": 0}
     minutes = float(prot.get("symbol_cooldown_after_stop_min", 30))
-    syms = set(t.get("sym") for t in real_trades(trades) if t.get("reason") == "sl" and t.get("sym"))
+    syms = set(t.get("sym") for t in real_trades(trades) if loss_stop(t) and t.get("sym"))
     for s in syms:
         u = symbol_cooldown(trades, s, now, minutes)
         if u:

@@ -5,7 +5,8 @@ run(call, req, run_tool, ...) -> LoopResult. call(req) -> Resp (LLMClient или
 исполняется не более `repeat_limit` раз; сверх лимита вызов не исполняется, модель получает REPEAT; `loop_hits` >= `loop_abort` -> status "loop"),
 пустой ответ (одна подсказка, затем "empty"), усечённый ответ/аргументы (finish=length: подсказка, затем "truncated"), неизвестный инструмент
 (не исполняется), проверка итогового JSON по схеме с подсказкой (format_retries), параллельные вызовы исполняются последовательно, на КАЖДЫЙ tool_call
-есть ответ. `check(obj) -> [коды]` (необязательно) добавляет смысловую проверку к схеме: коды уходят в подсказку повтора. reasoning_content/thinking-блоки сохраняются в истории (Resp.message) и уходят провайдеру адаптером.
+есть ответ. `check(obj) -> [коды]` (необязательно) добавляет смысловую проверку к схеме: коды уходят в подсказку повтора. `repair(obj) -> obj` (необязательно)
+чинит в коде то, что код знает точнее модели (лишние значения списков кодов), до проверки схемы: слабая модель не тратит повтор. reasoning_content/thinking-блоки сохраняются в истории (Resp.message) и уходят провайдеру адаптером.
 status: ok | empty | truncated | loop | max_rounds | format | cancelled. LLMError из call пробрасывается (решает fallback раннер).
 """
 import json
@@ -45,7 +46,7 @@ def _result_text(res, limit):
 
 
 def run(call, req, run_tool, max_rounds=8, repeat_limit=2, loop_abort=2, schema=None, format_retries=2, empty_retries=1, truncated_retries=1,
-        max_result_chars=MAX_RESULT_CHARS, should_stop=None, check=None):
+        max_result_chars=MAX_RESULT_CHARS, should_stop=None, check=None, repair=None):
     res = LoopResult()
     msgs = list(req.messages)
     names = {t["name"] for t in req.tools}
@@ -106,7 +107,7 @@ def run(call, req, run_tool, max_rounds=8, repeat_limit=2, loop_abort=2, schema=
             msgs.append(user("The answer is empty. Give the final answer in the required format."))
             continue
         if schema is not None:
-            obj, errs = schema_mod.check_text(resp.text, schema)
+            obj, errs = schema_mod.check_text(resp.text, schema, repair=repair)
             if resp.finish == "length" and errs and errs[0] != "TRUNCATED":
                 errs = ["TRUNCATED"] + errs
             if not errs and check is not None:         # смысловая проверка роли (WP11-C3): те же коды и повтор, что для ошибок схемы

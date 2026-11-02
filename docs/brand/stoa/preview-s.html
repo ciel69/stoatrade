@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Знак Stoa, буква S</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%230b121a'/%3E%3Cg transform='translate(16 16) scale(0.84) translate(-16 -16)' fill='none' stroke='%234db3ff' stroke-width='3.5' stroke-linecap='round'%3E%3Cpath d='M13 5A6 6 0 0 0 13 17M19 15A6 6 0 0 1 19 27'/%3E%3C/g%3E%3C/svg%3E">
+<style>
+  :root {
+    --d-bg: #0b121a; --d-panel: #121c28; --d-line: #223142; --d-line2: #31445a; --d-text: #e8eef4; --d-muted: #93a4b8; --d-accent: #4db3ff;
+    --l-bg: #eef2f6; --l-panel: #ffffff; --l-line: #d6dee7; --l-text: #0f1a26; --l-muted: #4a5b6f; --l-accent: #0b63b5;
+    --font: "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--d-bg); color: var(--d-text); font: 14px/1.5 var(--font); }
+  ::selection { background: #14304a; color: var(--d-text); }
+  main { max-width: 1120px; margin: 0 auto; padding: 40px 16px 64px; }
+  h1 { font-size: 26px; letter-spacing: -0.02em; margin: 0 0 6px; }
+  .lead { color: var(--d-muted); margin: 0 0 28px; max-width: 70ch; }
+  section { margin-bottom: 56px; }
+  h2 { font-size: 18px; letter-spacing: -0.01em; margin: 0 0 4px; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+  h2 .tag { font-size: 12px; font-weight: 600; color: var(--d-accent); border: 1px solid var(--d-line2); border-radius: 999px; padding: 1px 9px; }
+  .about { color: var(--d-muted); margin: 0 0 16px; max-width: 72ch; }
+  .pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+  .board { border-radius: 14px; padding: 20px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 22px; }
+  .dark  { background: var(--d-panel); border: 1px solid var(--d-line); color: var(--d-accent); --tx: var(--d-text); --mt: var(--d-muted); --bg: var(--d-bg); }
+  .light { background: var(--l-panel); border: 1px solid var(--l-line); color: var(--l-accent); --tx: var(--l-text); --mt: var(--l-muted); --bg: var(--l-bg); }
+  .sizes { display: flex; align-items: flex-end; gap: 22px; flex-wrap: wrap; }
+  .sizes figure { margin: 0; display: grid; justify-items: center; gap: 6px; }
+  figcaption { font-size: 11px; color: var(--mt); font-variant-numeric: tabular-nums; }
+  svg { display: block; }
+  .row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .row > svg { max-width: 100%; height: auto; }
+  .mono, .word { color: var(--tx); }
+  .chrome { display: flex; gap: 2px; align-items: flex-end; padding: 6px 6px 0; border-radius: 8px 8px 0 0; background: color-mix(in srgb, var(--tx) 6%, transparent); }
+  .tab { display: flex; align-items: center; gap: 7px; background: var(--bg); border-radius: 7px 7px 0 0; padding: 6px 12px 6px 9px; font-size: 12px; color: var(--tx); }
+  .tab.idle { background: transparent; color: var(--mt); }
+  .nav { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; background: color-mix(in srgb, var(--tx) 5%, transparent); }
+  .nav span { font-size: 15px; font-weight: 650; letter-spacing: -0.01em; color: var(--tx); }
+  .strip { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; margin-bottom: 48px; }
+  .strip .board { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; padding: 16px 20px; }
+  .cell { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .cell span { font-size: 12px; color: var(--mt); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .loader { height: 240px; display: grid; place-content: center; justify-items: center; gap: 14px; background: var(--bg); }
+  .loader-word { color: var(--tx); animation: sa-word calc(240ms*var(--k,1)) cubic-bezier(0.23,1,0.32,1) calc(260ms*var(--k,1)) both; }
+  @keyframes sa-word { from { opacity: 0; transform: translateY(4px); } }
+  .controls { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin: 0 0 14px; color: var(--d-muted); }
+  button { font: inherit; font-weight: 600; color: var(--d-text); background: var(--d-panel); border: 1px solid var(--d-line2); border-radius: 8px; padding: 6px 14px; cursor: pointer; transition: background-color 150ms ease, border-color 150ms ease, transform 120ms ease-out; }
+  button:active { transform: scale(0.97); }
+  @media (hover: hover) and (pointer: fine) { button:hover { background: #1a2634; border-color: var(--d-accent); } }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--d-accent); outline-offset: 2px; }
+  label { display: inline-flex; gap: 8px; align-items: center; cursor: pointer; }
+  input[type=checkbox] { accent-color: var(--d-accent); width: 16px; height: 16px; margin: 0; }
+  code { font-size: 12.5px; color: var(--d-text); background: var(--d-panel); border: 1px solid var(--d-line); border-radius: 5px; padding: 0 5px; }
+  a { color: var(--d-accent); text-underline-offset: 3px; }
+  .sa-h{animation:sa-in calc(380ms*var(--k,1)) cubic-bezier(0.23,1,0.32,1) both}
+.sa-t{--dx:-3px;--dy:-3px}
+.sa-b{--dx:3px;--dy:3px;animation-delay:calc(70ms*var(--k,1))}
+@keyframes sa-in{from{opacity:0;transform:translate(var(--dx),var(--dy))}}
+@keyframes sa-fade{from{opacity:0}}
+@media (prefers-reduced-motion:reduce){.sa-h{animation:sa-fade 200ms ease both}}
+  .sb-h{animation:sb-in calc(380ms*var(--k,1)) cubic-bezier(0.23,1,0.32,1) both}
+.sb-t{--sb-dx:-3px;--sb-dy:-3px}
+.sb-b{--sb-dx:3px;--sb-dy:3px;animation-delay:calc(70ms*var(--k,1))}
+@keyframes sb-in{from{opacity:0;transform:translate(var(--sb-dx),var(--sb-dy))}}
+@keyframes sb-fade{from{opacity:0}}
+@media (prefers-reduced-motion:reduce){.sb-h{animation:sb-fade 200ms ease both}}
+  @media (prefers-reduced-motion: reduce) { .loader-word { animation: sa-fade 200ms ease both; } button:active { transform: none; } }
+  @media (max-width: 760px) { .pair, .strip { grid-template-columns: minmax(0, 1fr); } }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="morig" viewBox="0 0 32 32"><g fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19.75 6H12.75A5 5 0 0 0 12.75 16"/><path d="M19.25 16A5 5 0 0 1 19.25 26H12.25"/></g></symbol>
+    <symbol id="m2a" viewBox="0 0 32 32"><g fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 5A6 6 0 0 0 13 17"/><path d="M19 15A6 6 0 0 1 19 27"/></g></symbol><symbol id="m2b" viewBox="0 0 32 32"><g fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 5H13A6 6 0 0 0 13 17"/><path d="M19 15A6 6 0 0 1 19 27H12.5"/></g></symbol><symbol id="m2c" viewBox="0 0 32 32"><g fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 6H13A5 5 0 0 0 13 16H19A5 5 0 0 1 19 26H10"/></g></symbol><symbol id="m2d" viewBox="0 0 32 32"><g fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20.55 8.125A5.25 5.25 0 1 0 12.625 14.772"/><path d="M19.375 17.228A5.25 5.25 0 1 1 11.45 23.875"/></g></symbol>
+    <symbol id="word" viewBox="0 0 56 34"><g transform="translate(0 2)" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9.697 8.25A4.5 4.5 0 1 0 5.8 15A4.5 4.5 0 1 1 1.903 21.75"/><path d="M16.8 7V20.5A3.5 3.5 0 0 0 20.3 24M13.8 13H21.3"/><circle cx="31.6" cy="18.5" r="5.5"/><circle cx="48.4" cy="18.5" r="5.5"/><path d="M53.9 13V24"/></g></symbol>
+  </defs>
+</svg>
+<main>
+  <h1>Знак Stoa: доработка буквы S</h1>
+  <p class="lead">Вторая концепция из <a href="preview.html">первого круга</a> в четырёх доработках. У исходного варианта длинные горизонтальные хвосты делали знак похожим на звено цепи и на цифру 5. Здесь хвосты укорочены или убраны, а половины по-разному сведены. Формат прежний: монолиния 3.5, круглые концы, currentColor.</p>
+
+  <h2>Рядом на 16 и 24 px</h2>
+  <p class="about">Первым стоит исходный вариант для сравнения.</p>
+  <div class="strip">
+    <div class="board dark"><div class="cell"><svg width="16" height="16" aria-hidden="true"><use href="#morig"/></svg><svg width="24" height="24" aria-hidden="true"><use href="#morig"/></svg><span>было: 2</span></div><div class="cell"><svg width="16" height="16" aria-hidden="true"><use href="#m2a"/></svg><svg width="24" height="24" aria-hidden="true"><use href="#m2a"/></svg><span>2a. Полукольца</span></div><div class="cell"><svg width="16" height="16" aria-hidden="true"><use href="#m2b"/></svg><svg width="24" height="24" aria-hidden="true"><use href="#m2b"/></svg><span>2b. Полукольца с хвостами</span></div><div class="cell"><svg width="16" height="16" aria-hidden="true"><use href="#m2c"/></svg><svg width="24" height="24" aria-hidden="true"><use href="#m2c"/></svg><span>2c. Цельная</span></div><div class="cell"><svg width="16" height="16" aria-hidden="true"><use href="#m2d"/></svg><svg width="24" height="24" aria-hidden="true"><use href="#m2d"/></svg><span>2d. Круглая разомкнутая</span></div></div>
+    <div class="board light"><div class="cell"><svg width="16" height="16" aria-hidden="true"><use href="#morig"/></svg><svg width="24" height="24" aria-hidden="true"><use href="#morig"/></svg><span>было: 2</span></div><div class="cell"><svg width="16" height="16" aria-hidden="true"><use href="#m2a"/></svg><svg width="24" height="24" aria-hidden="true"><use href="#m2a"/></svg><span>2a. Полукольца</span></div><div class="cell"><svg width="16" height="16" aria-hidden="true"><use href="#m2b"/></svg><svg width="24" height="24" aria-hidden="true"><use href="#m2b"/></svg><span>2b. Полукольца с хвостами</span></div><div class="cell"><svg width="16" height="16" aria-hidden="true"><use href="#m2c"/></svg><svg width="24" height="24" aria-hidden="true"><use href="#m2c"/></svg><span>2c. Цельная</span></div><div class="cell"><svg width="16" height="16" aria-hidden="true"><use href="#m2d"/></svg><svg width="24" height="24" aria-hidden="true"><use href="#m2d"/></svg><span>2d. Круглая разомкнутая</span></div></div>
+  </div>
+
+  <section>
+    <h2>2a. Полукольца <span class="tag">рекомендую</span></h2>
+    <p class="about">Две чистые полудуги без хвостов. Верхняя открыта вправо, нижняя влево, по высоте они заходят друг за друга на две единицы, но не касаются. Глаз сам замыкает S. Две половины — мозг и исполнитель: роли переходят одна в другую, а ключ остаётся только у одной. Устроено так же, как одобренный «Проём»: две дуги толщиной 3.5, разрыв как знак открытости.</p>
+    <div class="pair"><div class="board dark">
+        <div class="sizes"><figure><svg width="16" height="16" aria-hidden="true"><use href="#m2a"/></svg><figcaption>16</figcaption></figure><figure><svg width="28" height="28" aria-hidden="true"><use href="#m2a"/></svg><figcaption>28</figcaption></figure><figure><svg width="64" height="64" aria-hidden="true"><use href="#m2a"/></svg><figcaption>64</figcaption></figure><figure><svg width="128" height="128" aria-hidden="true"><use href="#m2a"/></svg><figcaption>128</figcaption></figure><figure class="mono"><svg width="28" height="28" aria-hidden="true"><use href="#m2a"/></svg><figcaption>цвет текста</figcaption></figure></div>
+        <div class="row">
+          <div class="chrome"><div class="tab"><svg width="16" height="16" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#0b121a"/><g transform="translate(16 16) scale(0.84) translate(-16 -16)" color="#4db3ff"><use href="#m2a"/></g></svg><span>Stoa · дашборд</span></div><div class="tab idle"><span>Bybit</span></div></div>
+          <div class="nav"><svg width="30" height="30" aria-hidden="true"><use href="#m2a"/></svg><span>Stoa</span></div>
+          <div class="nav"><svg width="30" height="30" aria-hidden="true"><use href="#m2a"/></svg></div>
+        </div>
+        <div class="row"><svg width="98" height="34" viewBox="0 0 98 34" role="img" aria-label="Stoa"><use href="#m2a" x="0" y="1" width="32" height="32"/><use class="word" href="#word" x="42" y="0" width="56" height="34"/></svg></div>
+        <div class="row"><svg width="196" height="68" viewBox="0 0 98 34" role="img" aria-label="Stoa"><use href="#m2a" x="0" y="1" width="32" height="32"/><use class="word" href="#word" x="42" y="0" width="56" height="34"/></svg></div>
+      </div><div class="board light">
+        <div class="sizes"><figure><svg width="16" height="16" aria-hidden="true"><use href="#m2a"/></svg><figcaption>16</figcaption></figure><figure><svg width="28" height="28" aria-hidden="true"><use href="#m2a"/></svg><figcaption>28</figcaption></figure><figure><svg width="64" height="64" aria-hidden="true"><use href="#m2a"/></svg><figcaption>64</figcaption></figure><figure><svg width="128" height="128" aria-hidden="true"><use href="#m2a"/></svg><figcaption>128</figcaption></figure><figure class="mono"><svg width="28" height="28" aria-hidden="true"><use href="#m2a"/></svg><figcaption>цвет текста</figcaption></figure></div>
+        <div class="row">
+          <div class="chrome"><div class="tab"><svg width="16" height="16" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#0b121a"/><g transform="translate(16 16) scale(0.84) translate(-16 -16)" color="#4db3ff"><use href="#m2a"/></g></svg><span>Stoa · дашборд</span></div><div class="tab idle"><span>Bybit</span></div></div>
+          <div class="nav"><svg width="30" height="30" aria-hidden="true"><use href="#m2a"/></svg><span>Stoa</span></div>
+          <div class="nav"><svg width="30" height="30" aria-hidden="true"><use href="#m2a"/></svg></div>
+        </div>
+        <div class="row"><svg width="98" height="34" viewBox="0 0 98 34" role="img" aria-label="Stoa"><use href="#m2a" x="0" y="1" width="32" height="32"/><use class="word" href="#word" x="42" y="0" width="56" height="34"/></svg></div>
+        <div class="row"><svg width="196" height="68" viewBox="0 0 98 34" role="img" aria-label="Stoa"><use href="#m2a" x="0" y="1" width="32" height="32"/><use class="word" href="#word" x="42" y="0" width="56" height="34"/></svg></div>
+      </div></div>
+  </section>
+  <section>
+    <h2>2b. Полукольца с хвостами</h2>
+    <p class="about">Те же полукольца, но с короткими горизонтальными концами сверху и снизу. Буква читается твёрже, а горизонтали намекают на уровни. Хвосты короче, чем в исходном варианте, поэтому звена цепи не получается.</p>
+    <div class="pair"><div class="board dark">
+        <div class="sizes"><figure><svg width="16" height="16" aria-hidden="true"><use href="#m2b"/></svg><figcaption>16</figcaption></figure><figure><svg width="28" height="28" aria-hidden="true"><use href="#m2b"/></svg><figcaption>28</figcaption></figure><figure><svg width="64" height="64" aria-hidden="true"><use href="#m2b"/></svg><figcaption>64</figcaption></figure><figure><svg width="128" height="128" aria-hidden="true"><use href="#m2b"/></svg><figcaption>128</figcaption></figure><figure class="mono"><svg width="28" height="28" aria-hidden="true"><use href="#m2b"/></svg><figcaption>цвет текста</figcaption></figure></div>
+        <div class="row">
+          <div class="chrome"><div class="tab"><svg width="16" height="16" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#0b121a"/><g transform="translate(16 16) scale(0.84) translate(-16 -16)" color="#4db3ff"><use href="#m2b"/></g></svg><span>Stoa · дашборд</span></div><div class="tab idle"><span>Bybit</span></div></div>
+          <div class="nav"><svg width="30" height="30" aria-hidden="true"><use href="#m2b"/></svg><span>Stoa</span></div>
+          <div class="nav"><svg width="30" height="30" aria-hidden="true"><use href="#m2b"/></svg></div>
+        </div>
+        <div class="row"><svg width="98" height="34" viewBox="0 0 98 34" role="img" aria-label="Stoa"><use href="#m2b" x="0" y="1" width="32" height="32"/><use class="word" href="#word" x="42" y="0" width="56" height="34"/></svg></div>
+        <div class="row"><svg width="196" height="68" viewBox="0 0 98 34" role="img" aria-label="Stoa"><use href="#m2b" x="0" y="1" width="32" height="32"/><use class="word" href="#word" x="42" y="0" width="56" height="34"/></svg></div>
+      </div><div class="board light">
+        <div class="sizes"><figure><svg width="16" height="16" aria-hidden="true"><use href="#m2b"/></svg><figcaption>16</figcaption></figure><figure><svg width="28" height="28" aria-hidden="true"><use href="#m2b"/></svg><figcaption>28</figcaption></figure><figure><svg width="64" height="64" aria-hidden="true"><use href="#m2b"/></svg><figcaption>64</figcaption></figure><figure><svg width="128" height="128" aria-hidden="true"><use href="#m2b"/></svg><figcaption>128</figcaption></figure><figure class="mono"><svg width="28" height="28" aria-hidden="true"><use href="#m2b"/></svg><figcaption>цвет текста</figcaption></figure></div>
+        <div class="row">
+          <div class="chrome"><div class="tab"><svg width="16" height="16" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#0b121a"/><g transform="translate(16 16) scale(0.84) translate(-16 -16)" color="#4db3ff"><use href="#m2b"/></g></svg><span>Stoa · дашборд</span></div><div class="tab idle"><span>Bybit</span></div></div>
+          <div class="nav"><svg width="30" height="30" aria-hidden="true"><use href="#m2b"/></svg><span>Stoa</span></div>
+          <div class="nav"><svg width="30" height="30" aria-hidden="true"><use href="#m2b"/></svg></div>
+        </div>
+        <div class="row"><svg width="98" height="34" viewBox="0 0 98 34" role="img" aria-label="Stoa"><use href="#m2b" x="0" y="1" width="32" height="32"/><use class="word" href="#word" x="42" y="0" width="56" height="34"/></svg></div>
+        <div class="row"><svg width="196" height="68" viewBox="0 0 98 34" role="img" aria-label="Stoa"><use href="#m2b" x="0" y="1" width="32" height="32"/><use class="word" href="#word" x="42" y="0" width="56" height="34"/></svg></div>
+      </div></div>
+  </section>
+  <section>
+    <h2>2c. Цельная</h2>
+    <p class="about">S одной непрерывной линией: три горизонтали и две дуги. Средняя горизонталь — общий уровень, через который проходят обе половины. Самый спокойный и плотный вариант, но и самый обычный: таких S много.</p>
+    <div class="pair"><div class="board dark">
+        <div class="sizes"><figure><svg width="16" height="16" aria-hidden="true"><use href="#m2c"/></svg><figcaption>16</figcaption></figure><figure><svg width="28" height="28" aria-hidden="true"><use href="#m2c"/></svg><figcaption>28</figcaption></figure><figure><svg width="64" height="64" aria-hidden="true"><use href="#m2c"/></svg><figcaption>64</figcaption></figure><figure><svg width="128" height="128" aria-hidden="true"><use href="#m2c"/></svg><figcaption>128</figcaption></figure><figure class="mono"><svg width="28" height="28" aria-hidden="true"><use href="#m2c"/></svg><figcaption>цвет текста</figcaption></figure></div>
+        <div class="row">
+          <div class="chrome"><div class="tab"><svg width="16" height="16" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#0b121a"/><g transform="translate(16 16) scale(0.84) translate(-16 -16)" color="#4db3ff"><use href="#m2c"/></g></svg><span>Stoa · дашборд</span></div><div class="tab idle"><span>Bybit</span></div></div>
+          <div class="nav"><svg width="30" height="30" aria-hidden="true"><use href="#m2c"/></svg><span>Stoa</span></div>
+          <div class="nav"><svg width="30" height="30" aria-hidden="true"><use href="#m2c"/></svg></div>
+        </div>
+        <div class="row"><svg width="98" height="34" viewBox="0 0 98 34" role="img" aria-label="Stoa"><use href="#m2c" x="0" y="1" width="32" height="32"/><use class="word" href="#word" x="42" y="0" width="56" height="34"/></svg></div>
+        <div class="row"><svg width="196" height="68" viewBox="0 0 98 34" role="img" aria-label="Stoa"><use href="#m2c" x="0" y="1" width="32" height="32"/><use class="word" href="#word" x="42" y="0" width="56" height="34"/></svg></div>
+      </div><div class="board light">
+        <div class="sizes"><figure><svg width="16" height="16" aria-hidden="true"><use href="#m2c"/></svg><figcaption>16</figcaption></figure><figure><svg width="28" height="28" aria-hidden="true"><use href="#m2c"/></svg><figcaption>28</figcaption></figure><figure><svg width="64" height="64" aria-hidden="true"><use href="#m2c"/></svg><figcaption>64</figcaption></figure><figure><svg width="128" height="128" aria-hidden="true"><use href="#m2c"/></svg><figcaption>128</figcaption></figure><figure class="mono"><svg width="28" height="28" aria-hidden="true"><use href="#m2c"/></svg><figcaption>цвет текста</figcaption></figure></div>
+        <div class="row">
+          <div class="chrome"><div class="tab"><svg width="16" height="16" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#0b121a"/><g transform="translate(16 16) scale(0.84) translate(-16 -16)" color="#4db3ff"><use href="#m2c"/></g></svg><span>Stoa · дашборд</span></div><div class="tab idle"><span>Bybit</span></div></div>
+          <div class="nav"><svg width="30" height="30" aria-hidden="true"><use href="#m2c"/></svg><span>Stoa</span></div>
+          <div class="nav"><svg width="30" height="30" aria-hidden="true"><use href="#m2c"/></svg></div>
+        </div>
+        <div class="row"><svg width="98" height="34" viewBox="0 0 98 34" role="img" aria-label="Stoa"><use href="#m2c" x="0" y="1" width="32" height="32"/><use class="word" href="#word" x="42" y="0" width="56" height="34"/></svg></div>
+        <div class="row"><svg width="196" height="68" viewBox="0 0 98 34" role="img" aria-label="Stoa"><use href="#m2c" x="0" y="1" width="32" height="32"/><use class="word" href="#word" x="42" y="0" width="56" height="34"/></svg></div>
+      </div></div>
+  </section>
+  <section>
+    <h2>2d. Круглая разомкнутая</h2>
+    <p class="about">Классическая круглая S той же формы, что в надписи «Stoa», с косым разрывом посередине. Самая «типографская»: знак и надпись — одна буква. На 16 px разрыв почти исчезает, и знак становится просто буквой.</p>
+    <div class="pair"><div class="board dark">
+        <div class="sizes"><figure><svg width="16" height="16" aria-hidden="true"><use href="#m2d"/></svg><figcaption>16</figcaption></figure><figure><svg width="28" height="28" aria-hidden="true"><use href="#m2d"/></svg><figcaption>28</figcaption></figure><figure><svg width="64" height="64" aria-hidden="true"><use href="#m2d"/></svg><figcaption>64</figcaption></figure><figure><svg width="128" height="128" aria-hidden="true"><use href="#m2d"/></svg><figcaption>128</figcaption></figure><figure class="mono"><svg width="28" height="28" aria-hidden="true"><use href="#m2d"/></svg><figcaption>цвет текста</figcaption></figure></div>
+        <div class="row">
+          <div class="chrome"><div class="tab"><svg width="16" height="16" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#0b121a"/><g transform="translate(16 16) scale(0.84) translate(-16 -16)" color="#4db3ff"><use href="#m2d"/></g></svg><span>Stoa · дашборд</span></div><div class="tab idle"><span>Bybit</span></div></div>
+          <div class="nav"><svg width="30" height="30" aria-hidden="true"><use href="#m2d"/></svg><span>Stoa</span></div>
+          <div class="nav"><svg width="30" height="30" aria-hidden="true"><use href="#m2d"/></svg></div>
+        </div>
+        <div class="row"><svg width="98" height="34" viewBox="0 0 98 34" role="img" aria-label="Stoa"><use href="#m2d" x="0" y="1" width="32" height="32"/><use class="word" href="#word" x="42" y="0" width="56" height="34"/></svg></div>
+        <div class="row"><svg width="196" height="68" viewBox="0 0 98 34" role="img" aria-label="Stoa"><use href="#m2d" x="0" y="1" width="32" height="32"/><use class="word" href="#word" x="42" y="0" width="56" height="34"/></svg></div>
+      </div><div class="board light">
+        <div class="sizes"><figure><svg width="16" height="16" aria-hidden="true"><use href="#m2d"/></svg><figcaption>16</figcaption></figure><figure><svg width="28" height="28" aria-hidden="true"><use href="#m2d"/></svg><figcaption>28</figcaption></figure><figure><svg width="64" height="64" aria-hidden="true"><use href="#m2d"/></svg><figcaption>64</figcaption></figure><figure><svg width="128" height="128" aria-hidden="true"><use href="#m2d"/></svg><figcaption>128</figcaption></figure><figure class="mono"><svg width="28" height="28" aria-hidden="true"><use href="#m2d"/></svg><figcaption>цвет текста</figcaption></figure></div>
+        <div class="row">
+          <div class="chrome"><div class="tab"><svg width="16" height="16" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#0b121a"/><g transform="translate(16 16) scale(0.84) translate(-16 -16)" color="#4db3ff"><use href="#m2d"/></g></svg><span>Stoa · дашборд</span></div><div class="tab idle"><span>Bybit</span></div></div>
+          <div class="nav"><svg width="30" height="30" aria-hidden="true"><use href="#m2d"/></svg><span>Stoa</span></div>
+          <div class="nav"><svg width="30" height="30" aria-hidden="true"><use href="#m2d"/></svg></div>
+        </div>
+        <div class="row"><svg width="98" height="34" viewBox="0 0 98 34" role="img" aria-label="Stoa"><use href="#m2d" x="0" y="1" width="32" height="32"/><use class="word" href="#word" x="42" y="0" width="56" height="34"/></svg></div>
+        <div class="row"><svg width="196" height="68" viewBox="0 0 98 34" role="img" aria-label="Stoa"><use href="#m2d" x="0" y="1" width="32" height="32"/><use class="word" href="#word" x="42" y="0" width="56" height="34"/></svg></div>
+      </div></div>
+  </section>
+
+  <section>
+    <h2>Появление на экране загрузки <span class="tag">2a</span></h2>
+    <p class="about">Половины приходят навстречу друг другу: верхняя сверху-слева, нижняя снизу-справа, и встают на место. Это передача ролей, а не эффект ради эффекта. Сдвиг 3 единицы, 380 мс, вторая половина отстаёт на 70 мс, всё готово к 450 мс, кривая ease-out (0.23, 1, 0.32, 1). Проигрывается один раз. При «уменьшении движения» знак просто проявляется за 200 мс. Отдельный файл: <code>concept-2a-animated.svg</code>.</p>
+    <div class="controls">
+      <button type="button" id="replay">Повторить</button>
+      <label><input type="checkbox" id="slow"> Замедлить в 4 раза</label>
+    </div>
+    <div class="pair" id="loaders">
+      <div class="board dark loader"><svg width="72" height="72" viewBox="0 0 32 32" role="img" aria-label="Stoa" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path class="sa-h sa-t" d="M13 5A6 6 0 0 0 13 17"/><path class="sa-h sa-b" d="M19 15A6 6 0 0 1 19 27"/></svg><svg class="loader-word" width="56" height="34" viewBox="0 0 56 34" aria-hidden="true"><use href="#word"/></svg></div>
+      <div class="board light loader"><svg width="72" height="72" viewBox="0 0 32 32" role="img" aria-label="Stoa" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path class="sa-h sa-t" d="M13 5A6 6 0 0 0 13 17"/><path class="sa-h sa-b" d="M19 15A6 6 0 0 1 19 27"/></svg><svg class="loader-word" width="56" height="34" viewBox="0 0 56 34" aria-hidden="true"><use href="#word"/></svg></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Появление на экране загрузки <span class="tag">2b, выбран</span></h2>
+    <p class="about">То же движение, что у 2a, но половины приходят вместе с хвостами: верхняя сверху-слева, нижняя снизу-справа. Сдвиг 3 единицы, 380 мс, вторая половина отстаёт на 70 мс, всё готово к 450 мс, кривая ease-out (0.23, 1, 0.32, 1), один раз. При «уменьшении движения» знак проявляется за 200 мс. Отдельный файл: <code>concept-2b-animated.svg</code>, классы <code>sb-*</code>. Кнопки выше перезапускают обе анимации.</p>
+    <div class="pair" id="loaders-b">
+      <div class="board dark loader"><svg width="72" height="72" viewBox="0 0 32 32" role="img" aria-label="Stoa" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path class="sb-h sb-t" d="M19.5 5H13A6 6 0 0 0 13 17"/><path class="sb-h sb-b" d="M19 15A6 6 0 0 1 19 27H12.5"/></svg><svg class="loader-word" width="56" height="34" viewBox="0 0 56 34" aria-hidden="true"><use href="#word"/></svg></div>
+      <div class="board light loader"><svg width="72" height="72" viewBox="0 0 32 32" role="img" aria-label="Stoa" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path class="sb-h sb-t" d="M19.5 5H13A6 6 0 0 0 13 17"/><path class="sb-h sb-b" d="M19 15A6 6 0 0 1 19 27H12.5"/></svg><svg class="loader-word" width="56" height="34" viewBox="0 0 56 34" aria-hidden="true"><use href="#word"/></svg></div>
+    </div>
+  </section>
+</main>
+<script>
+  (function () {
+    var boxes = [document.getElementById('loaders'), document.getElementById('loaders-b')];
+    var slow = document.getElementById('slow');
+    function replay() {
+      boxes.forEach(function (box) {
+        box.style.setProperty('--k', slow.checked ? '4' : '1');
+        box.querySelectorAll('.loader').forEach(function (el) { el.replaceWith(el.cloneNode(true)); });
+      });
+    }
+    document.getElementById('replay').addEventListener('click', replay);
+    slow.addEventListener('change', replay);
+  })();
+</script>
+</body>
+</html>

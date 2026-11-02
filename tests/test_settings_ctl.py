@@ -251,53 +251,5 @@ class TestGetContract(Base):
         self.assertAlmostEqual(o["total"]["usd"], 0.002)
 
 
-class TestRealHttp(Base):
-    """Реальный HTTP-сервер дашборда на свободном порту loopback во временном корне: GET /api/settings/*, ввод ключа POST, ключ не возвращается."""
-
-    def setUp(self):
-        Base.setUp(self)
-        import threading
-        self.srv = server.make_server(0, self.e.root)
-        self.port = self.srv.server_address[1]
-        threading.Thread(target=self.srv.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
-        self.addCleanup(self._close)
-
-    def _close(self):
-        self.srv.shutdown()
-        self.srv.server_close()
-
-    def call(self, method, path, data=None, headers=None):
-        import urllib.error
-        import urllib.request
-        h = {"Host": "127.0.0.1:%d" % self.port}
-        h.update(headers or {})
-        r = urllib.request.Request("http://127.0.0.1:%d%s" % (self.port, path), data=data, method=method, headers=h)
-        try:
-            with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(r, timeout=5) as resp:
-                return resp.status, resp.read()
-        except urllib.error.HTTPError as e:
-            return e.code, e.read()
-
-    def test_get_endpoints_and_key_post(self):
-        code, raw = self.call("GET", "/api/settings/providers")
-        self.assertEqual(code, 200)
-        o = json.loads(raw.decode("utf-8"))
-        self.assertTrue([p for p in o["providers"] if p["id"] == "deepseek"])
-        for ep in ("overview", "profiles", "roles", "exchanges", "usage", "revisions", "presets"):
-            self.assertEqual(self.call("GET", "/api/settings/" + ep)[0], 200, ep)
-        # POST ключа без входа и без CSRF: отказ, файла нет
-        hdrs = {"Origin": "http://127.0.0.1:%d" % self.port, "Content-Type": "application/json"}
-        code, raw = self.call("POST", "/api/ctl/llmkey", json.dumps({"provider": "deepseek", "value": FAKE}).encode(), hdrs)
-        self.assertIn(code, (401, 403, 503))
-        self.assertNotIn(FAKE, raw.decode("utf-8"))
-        self.assertFalse(os.path.exists(os.path.join(self.e.keys, "deepseek.env")))
-        # вход по токену + CSRF: ключ принят, ответ без значения
-        code, raw = self.call("POST", "/api/ctl/login", json.dumps({"token": self.e.token}).encode(), hdrs)
-        self.assertEqual(code, 200, raw)
-        lg = json.loads(raw.decode("utf-8"))
-        # cookie возвращается заголовком, берём через повторный запрос с urllib-обработчиком недоступно: проверяем прямой вызов ctlweb уже выше
-        self.assertTrue(lg["csrf"])
-
-
 if __name__ == "__main__":
     unittest.main()

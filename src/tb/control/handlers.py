@@ -10,7 +10,7 @@ import time
 import uuid
 
 from tb import paths
-from tb.control import audit, auth, brain_iface, ctlstate, gates, lifecycle, protocol, riskstore, settings_args, settings_ctl
+from tb.control import audit, auth, brain_iface, ctlstate, gates, killclear, lifecycle, protocol, riskstore, settings_args, settings_ctl
 from tb.core import exec_cfg
 from tb.platform import services as S
 
@@ -20,6 +20,21 @@ MAX_INBOX_BYTES = protocol.MAX_COMMAND_BYTES
 KEEP_OUTBOX_S = 7 * 86400
 LIVE_ACTIONS = ("day.start", "risk.set", "brain.use", "carry.decide", "platform.shutdown", "kill.set", "stop.emergency", "brain.role", "exchange.set")
 
+
+ROLL_FILE = "auto_roll.json"      # ожидание автостарта следующего paper-дня (переживает перезапуск ctl)
+ROLL_RETRY_S = 600
+ROLL_RETRY_FAST_S = (90, 180, 300)   # первые повторы быстрые: после перезапуска платформы фид исполнителя прогревается за секунды (2026-11-02 D-20261102-1: P3 через 3 с после старта ctl)
+
+
+def _mmss(s):
+    s = int(s)
+    return "%d мин" % (s // 60) if s % 60 == 0 else "%d:%02d мин" % (s // 60, s % 60)
+
+
+def roll_retry_s(tries):
+    """Пауза до следующей попытки автостарта по номеру неудачной попытки (0 = первая): 90, 180, 300 с, дальше ROLL_RETRY_S."""
+    t = max(0, int(tries or 0))
+    return ROLL_RETRY_FAST_S[t] if t < len(ROLL_RETRY_FAST_S) else ROLL_RETRY_S
 
 class Reject(Exception):
     def __init__(self, code, data=None):
@@ -184,6 +199,11 @@ class Ctl(object):
         elif action == "platform.shutdown":
             req["danger"] = True
             req["phrases"] = ["ВЫКЛЮЧАЮ ПЛАТФОРМУ"]
+        elif action == "kill.clear":       # снятие защиты: всегда с nonce; для live ещё и фраза (её подставляет движок дашборда)
+            ev = killclear.evaluate(self.root, now, self.cfg, st)
+            req["gates"], req["blocked"], req["danger"] = ev["gates"], not ev["ok"], True
+            req["phrases"] = ["СНИМАЮ KILL LIVE %s" % ctlstate.utc_day(now)] if ev["mode"] == "live" else []
+            req["kill"] = {"reason": (ev["kill"] or {}).get("reason", ""), "flatten": bool((ev["kill"] or {}).get("flatten")), "mode": ev["mode"], "active": ev["active"]}
         return req
 
     def check_confirm(self, cmd, req):
@@ -210,7 +230,7 @@ class Ctl(object):
             return self.h_challenge(cmd)
         if a == "platform.shutdown" and not self.cfg.get("allow_shutdown"):
             raise Reject("E_DISABLED")
-        handler = {"day.start": self.h_day_start, "day.stop": self.h_day_stop, "stop.emergency": self.h_kill, "kill.set": self.h_kill, "mode.set": self.h_mode_set,
+        handler = {"kill.clear": self.h_kill_clear,"day.start": self.h_day_start, "day.stop": self.h_day_stop, "stop.emergency": self.h_kill, "kill.set": self.h_kill, "mode.set": self.h_mode_set,
                    "risk.set": self.h_risk_set, "carry.decide": self.h_pass, "report.ack": self.h_pass, "day.resume": self.h_resume, "notify.test": self.h_pass, "notify.set": self.h_notify_set,
                    "brain.use": self.h_brain, "brain.rollback": self.h_brain, "brain.reload": self.h_brain, "intel.refresh": self.h_intel,
                    "platform.shutdown": self.h_shutdown}.get(a)
@@ -222,12 +242,16 @@ class Ctl(object):
 
     def h_challenge(self, cmd):
         inner, iargs = cmd["args"]["action"], cmd["args"]["args"]
+        if inner == "kill.clear":
+            self.kill_clear_precheck()
         req = self.requirements(inner, iargs)
         data = {"action": inner, "danger": req["danger"], "phrases": req["phrases"], "gates": req["gates"], "warnings": req["warnings"], "blocked": req["blocked"],
                 "expires_in": int(self.cfg["nonce_ttl_s"]), "min_delay": int(self.cfg["min_delay_s"]), "nonce": None}
         if inner == "day.start" and iargs.get("mode") != "live" and not req["blocked"]:
             pv = lifecycle.preflight_preview(self.root, dict(iargs), self.now())
             data["pre_amber"] = (pv or {}).get("amber") or []         # жёлтые предстартовые проверки: окно «Старт» просит принять каждую (allow_amber + accepted)
+        if inner == "kill.clear":
+            data["kill"] = req.get("kill")
         if inner == "day.start" and self.platform()["state"] != "stopped":
             return self.finish(cmd, "rejected", "E_STATE", data)
         if req["blocked"]:
@@ -243,6 +267,8 @@ class Ctl(object):
     # ------------------------------------------------------------ day.start / day.stop
     def h_day_start(self, cmd):
         args = cmd["args"]
+        if cmd.get("src") != "auto":
+            self.roll_clear()                                       # владелец сам запускает день: автоповтор не нужен
         st = self.platform()
         if st["state"] != "stopped":
             raise Reject("E_STATE", {"state": st["state"]})
@@ -355,6 +381,7 @@ class Ctl(object):
             return self._fail_start(cmd, "E_INTERNAL", {}, prev)
 
     def h_day_stop(self, cmd):
+        self.roll_clear()                                           # владелец остановил день: автостарт не повторяем
         st = self.platform()
         if st["state"] != "running":
             raise Reject("E_STATE", {"state": st["state"]})
@@ -376,6 +403,26 @@ class Ctl(object):
             self.check_confirm(cmd, req)
         self.apply_kill(args.get("flatten"), args.get("reason") or "emergency")
         return self.finish(cmd, "done", "OK", {"flatten": bool(args.get("flatten"))})
+
+    def kill_clear_precheck(self):
+        """Флаг читается заново при каждом обращении (выключение вступает в силу сразу). -> Reject(E_DISABLED | E_STATE)."""
+        if ctlstate.load_cfg(self.root).get("allow_clear_kill_from_dash") is not True:       # строго true: "true", 1, "yes" не включают
+            raise Reject("E_DISABLED")
+        if exec_cfg.kill_state(self.root) is None:
+            raise Reject("E_STATE", {"why": "no_kill"})
+
+    def h_kill_clear(self, cmd):
+        """Снятие KILL из нового дашборда (решение владельца 2026-11-02). То же действие, что `./tb exec resume` (exec_cfg.clear_kill), но только после предусловий
+        killclear.evaluate (исполнитель жив, день не идёт, стоп на бирже у каждой позиции; live: все жёсткие ворота старта) и подтверждения: nonce всегда, для live ещё фраза."""
+        self.kill_clear_precheck()
+        req = self.requirements("kill.clear", cmd["args"])
+        if req["blocked"]:
+            raise Reject("E_GATE", {"gates": [g for g in req["gates"] if not g["ok"]] or req["gates"]})
+        self.check_confirm(cmd, req)
+        info = req["kill"]
+        was = exec_cfg.clear_kill(self.root)
+        note = ("KILL снят; причина: %s; flatten=%s" % (info["reason"] or "-", "да" if info["flatten"] else "нет"))[:200]
+        return self.finish(cmd, "done", "OK", {"was_killed": bool(was), "mode": info["mode"]}, {"note": note, "mode": info["mode"]})
 
     def apply_kill(self, flatten, reason):
         """KILL на диске (если его создал не дашборд) и переход платформы в halted."""
@@ -518,6 +565,12 @@ class Ctl(object):
         if r and not self.busy:
             self.sync_day(r)
         st = self.platform()
+        pend = ctlstate.read_json(paths.control_dir(ROLL_FILE, root=self.root))
+        if isinstance(pend, dict) and pend.get("args"):
+            if st["state"] == "running":
+                self.roll_clear()                                   # следующий день идёт: повтор не нужен
+            elif st["state"] == "stopped" and not self.busy and now >= float(pend.get("next") or 0) and self.cfg.get("auto_roll_paper", True):
+                self.auto_roll({"args": pend["args"]}, tries=int(pend.get("tries") or 0))
         if st["state"] == "running" and st.get("mode") == "live" and st.get("trading"):
             if now - getattr(self, "_last_mon", 0.0) >= float(self.cfg["auto_downgrade_s"]):
                 self._last_mon = now
@@ -540,6 +593,40 @@ class Ctl(object):
             if st.get("mode") == "live":
                 ctlstate.note_live_stop(self.root, self.now())
             self.save_platform(state="stopped", since=now, mode="observe", day_id=None, step=None, live_waivers=[], trading=False)
+            if r.get("auto") and st.get("mode") == "paper" and self.cfg.get("auto_roll_paper", True):
+                self.auto_roll(r)
+
+    def roll_clear(self):
+        try:
+            os.remove(paths.control_dir(ROLL_FILE, root=self.root))
+        except OSError:
+            pass
+
+    def auto_roll(self, r, tries=0):
+        """Paper: день закрылся сам (конец дня, max_day_hours, конец сессии) -> следующий стартует тем же путём, что кнопка «Старт» (gates, исполнитель, план дня).
+        Без дыры между днями (2026-10-30 01:05-04:37 сессии не было, 13 входов на дне обвала BTC получили NO_SESSION). Мягкие предупреждения paper принимаются
+        автоматически (записаны в аудит, src=auto); жёсткий запрет (KILL, gates) -> баннер и без старта. Live и testnet только командой владельца."""
+        a = dict(r.get("args") or {}, mode="paper", allow_amber=True)      # paper: жёлтые предстартовые проверки (недоступный RSS и т.п.) не мешают дню; красные блокируют
+        ok, _msg, args = protocol.validate_args("day.start", a)
+        if not ok:
+            return None
+        # ждём старта: если попытка отклонится (в том числе в фоновом потоке старта), ctl повторит через roll_retry_s(tries), пока платформа остановлена (2026-11-01: день не стартовал из-за P15)
+        wait = roll_retry_s(tries)
+        ctlstate.write_json(paths.control_dir(ROLL_FILE, root=self.root), {"args": {k: a.get(k) for k in ("mode", "session", "allow_amber", "team") if a.get(k) is not None},
+                                                                          "next": round(self.now() + wait, 1), "tries": tries + 1})
+        req = self.requirements("day.start", args)
+        if req["blocked"] or exec_cfg.kill_state(self.root) is not None:
+            self.banner = {"level": "warn", "text": "Paper-день закрыт по концу дня, следующий не запущен: есть запрет (см. проверки старта); повтор через %s" % _mmss(wait), "day_report": None}
+            return None
+        args["accepted"] = sorted(w["id"] for w in req["warnings"])
+        cmd = {"id": "K-%s-%s" % (time.strftime("%Y%m%dT%H%M%S", time.gmtime(self.now())), uuid.uuid4().hex[:6]), "action": "day.start", "args": args, "src": "auto", "sess": None}
+        try:
+            res = self.h_day_start(cmd)
+        except Reject as e:
+            res = {"status": "rejected", "code": e.code}
+        if isinstance(res, dict) and res.get("status") in ("rejected", "failed"):
+            self.banner = {"level": "warn", "text": "Автостарт следующего paper-дня отклонён (%s): повтор через %s или кнопка «Старт»" % (res.get("code"), _mmss(wait)), "day_report": None}
+        return res
 
     def downgrade(self, bad):
         st = self.platform()
@@ -584,7 +671,8 @@ class Ctl(object):
                 "team": {"live_team": bs.get("live_team"), "agent": bs.get("agent"), "profiles": bs.get("profiles") or {}, "available": brain_iface.available()},
                 "risk": {"level": rl["level"], "name": rl["name"], "source": rl["source"], "levels": riskstore.levels_list(self.root)},
                 "pending": [{"id": self.busy, "action": "day.start"}] if self.busy else [], "last": list(self.last), "banner": self.banner or lifecycle.banner(self.root),
-                "config": {"allow_shutdown": bool(self.cfg.get("allow_shutdown")), "nonce_ttl_s": self.cfg["nonce_ttl_s"], "min_delay_s": self.cfg["min_delay_s"],
+                "config": {"allow_shutdown": bool(self.cfg.get("allow_shutdown")), "allow_clear_kill": ctlstate.load_cfg(self.root).get("allow_clear_kill_from_dash") is True,
+                           "allow_live_start_dash": ctlstate.load_cfg(self.root).get("allow_live_start_from_dash") is True, "nonce_ttl_s": self.cfg["nonce_ttl_s"], "min_delay_s": self.cfg["min_delay_s"],
                            "min_type_s": self.cfg["min_type_s"]}}
 
     def write_status(self):

@@ -23,7 +23,7 @@ SESSION_TYPES = ("scalp", "intraday", "swing", "position")
 SESSION_RANK = dict((t, i) for i, t in enumerate(SESSION_TYPES))
 DAY = "day"                    # сессия-день: горизонт сделок выбирает агент; dayplan.session.type = максимальный горизонт на сегодня (по умолчанию position)
 DAY_MAX_HORIZON = "position"
-SETUPS = ("level_reclaim", "level_reject", "sweep_reject", "breakout_retest", "range_fade", "trend_pullback", "none")
+SETUPS = ("level_reclaim", "level_reject", "sweep_reject", "breakout_retest", "range_fade", "trend_pullback", "momentum_chase", "none")
 RE_SYM = re.compile(r"^[A-Z0-9]{2,20}$")
 RE_RISK = re.compile(r"^[a-z0-9_]{2,30}$")
 TOP_KEYS = {"schema", "day_id", "regime", "bias", "session", "watch", "allowed_setups", "avoid", "limits", "carry", "carried_review", "risks", "questions", "why"}
@@ -302,12 +302,25 @@ def conservative_plan(env, why="консервативный план: мозг 
             "carry": {"allow": False, "max_positions": 0}, "risks": [], "questions": [], "why": why[:200]}
 
 
+AGGRESSIVE_LEVEL = 4                                          # с уровня риска 4 запасной план не сужает сетапы и число планов (владелец выбрал риск осознанно)
+AGGRESSIVE_MIN_PLANS = 4
+
+
 def make_env(ctx, d, args):
+    from tb.core import risklevels
     fx = _rd(paths.runtime("intel", "facts.json", root=ctx.root))
     pol = BLACKOUT.policy(ctx.root, d.get("mode"))          # warn только при mode == paper; live/testnet всегда block
+    setups, max_plans = list(ctx.cfg["default_setups"]), int(ctx.cfg["default_max_new_plans"])
+    try:
+        aggressive = int(risklevels.current_level(ctx.root).get("level") or 0) >= AGGRESSIVE_LEVEL
+    except Exception:
+        aggressive = False
+    if aggressive:
+        setups = [x for x in SETUPS if x != "none"]
+        max_plans = max(max_plans, AGGRESSIVE_MIN_PLANS)
     return {"blackout_warn": pol["mode"] == "warn", "blackout_size": pol["size_mult"], "day_id": d["day_id"], "session_type": (d.get("session") or {}).get("type") or DAY,
-            "caps": caps(ctx, d), "symbols": allowed_symbols(ctx.root), "blackout_soon": blackout_soon(fx), "default_setups": ctx.cfg["default_setups"],
-            "default_max_new_plans": int(ctx.cfg["default_max_new_plans"])}
+            "caps": caps(ctx, d), "symbols": allowed_symbols(ctx.root), "blackout_soon": blackout_soon(fx), "default_setups": setups,
+            "default_max_new_plans": max_plans}
 
 
 # ------------------------------------------------------------------ S5 брифинг
@@ -381,6 +394,7 @@ def step_dayplan(ctx, d, args):
     ctlstate.write_json(paths.control_dir("day_limits.json", root=ctx.root),
                         {"day_id": d["day_id"], "ts_epoch": round(time.time(), 1), "symbols": lim["symbols"], "max_new_plans": lim["max_new_plans"], "max_risk_usdt": lim["max_risk_usdt"],
                          "size_mult": lim["size_mult"], "allowed_setups": plan["allowed_setups"], "avoid": plan["avoid"],
+                         "regime": plan["regime"], "bias": plan["bias"],          # утренний сценарий: смена тренда против него снимает рамку плана (validate.off_plan)
                          # сессия-день: dayplan.session.type = максимальный горизонт сделок на сегодня (entry_scout не выше него)
                          "max_horizon": plan["session"]["type"] if env2["session_type"] == DAY else None})
     d["dayplan"] = {"source": meta["source"], "regime": plan["regime"], "bias": plan["bias"], "session": plan["session"], "max_new_plans": lim["max_new_plans"],

@@ -123,7 +123,7 @@ def next_steps(root, cfg, profile, environ=None):
     if not st["key"] or not st["token"]:
         steps.append("не хватает ключа/токена входа: выполни ./tb setup (один раз), затем ./tb start")
     link = S.link_of("dash", cfg)
-    steps.append("открой %s (для paper вход без токена; токен нужен только для опасных действий: ./tb control token new)" % link)
+    steps.append("открой %s (новый дашборд, токена в нём нет; опасное включает владелец флагами в config/control.json, docs/CONTROL.md)" % link)
     steps.append("нажми «Старт» в дашборде (профиль %s); состояние: ./tb status, остановка: ./tb stop" % profile)
     return steps
 

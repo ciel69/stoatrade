@@ -70,6 +70,50 @@ class Book(unittest.TestCase):
         self.assertEqual(snap["totals_1h"], {"long": 10000, "short": 0})
 
 
+class RelativeLoudness(unittest.TestCase):
+    def test_crash_2026_10_29(self):
+        """Час обвала 29.10: квота громких уже израсходована мелкими событиями, но каскад BTC на 15 млн будит (крупный: от big_x порогов монеты),
+        а 240 тыс. по BTC при обороте 2.65 млрд/сутки теперь тихие (порог BTC ~0.92 млн)."""
+        b = liqwatch.LiqBook({"max_loud_per_hour": 6})
+        b.turn.update({"BTC": 2650e6, "ETH": 1500e6})
+        b.recent_loud = [NOW - 60] * 6                                       # лимит часа исчерпан
+        b.handle(msg("BTC", "Buy", 190, 79306.6), NOW)                      # ~15.07 млн лонгов
+        b.handle(msg("ETH", "Buy", 3070, 2261.97), NOW)                     # ~6.94 млн
+        ev = {e["sym"]: e for e in b.cascades(NOW)}
+        self.assertTrue(ev["BTC"]["wake"])
+        self.assertIn("КРУПНЫЙ", ev["BTC"]["reasons"][0])
+        self.assertTrue(ev["ETH"]["wake"])                                   # 6.9 млн >= 10 x ~0.52 млн
+        b2 = liqwatch.LiqBook({"max_loud_per_hour": 6})
+        b2.turn["BTC"] = 2650e6
+        b2.handle(msg("BTC", "Buy", 3.05, 79306.6), NOW)                    # ~242 тыс.: для BTC шум
+        self.assertFalse(b2.cascades(NOW)[0]["wake"])
+        self.assertAlmostEqual(b2.loud_usd("BTC"), 0.1 * 2650e6 / 288, 0)
+        self.assertEqual(b2.loud_usd("NEW"), 200000.0)                       # нет оборота: прежний порог
+
+    def test_big_flag_reaches_dispatcher_class_1(self):
+        """Крупный каскад: флаг big проходит публикатор и шину, диспетчер даёт класс 1 (лимит сигналов скана класса 3 его не съедает)."""
+        from tb.core import bus
+        from tb.platform import dispatcher
+        ev = liqwatch.make_event("BTC", "long", 15083189.0, {"n": 989}, 79306.6, NOW, True, 300.0, big=True)
+        pub = scansvc.Publisher.__new__(scansvc.Publisher)
+        pub.cfg = {}
+        d, sym = pub.convert(ev)
+        self.assertTrue(d["big"])
+        clean = bus.sanitize({"seq": 1, "ts": "2026-10-29T20:48:17Z", "type": "scanner_signal", "pri": "wake", "sym": sym, "d": d})
+        self.assertEqual(dispatcher.event_class(clean, {"scanner_signal": 3}), 1)
+        small = liqwatch.make_event("BTC", "long", 242000.0, {"n": 9}, 79306.6, NOW, True, 300.0)
+        d2, _ = pub.convert(small)
+        self.assertNotIn("big", d2)
+        self.assertEqual(dispatcher.event_class({"type": "scanner_signal", "d": d2}, {"scanner_signal": 3}), 3)
+
+    def test_quota_goes_to_strongest(self):
+        b = liqwatch.LiqBook({"max_loud_per_hour": 1})
+        b.handle(msg("AAA", "Buy", 2500, 100.0), NOW)                       # 250k: 1.25 порога
+        b.handle(msg("BBB", "Buy", 9000, 100.0), NOW)                       # 900k: 4.5 порога
+        ev = {e["sym"]: e["wake"] for e in b.cascades(NOW)}
+        self.assertEqual(ev, {"AAA": False, "BBB": True})
+
+
 class RunnerFiles(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp(prefix="tbliq_")

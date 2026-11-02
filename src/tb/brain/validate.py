@@ -22,23 +22,79 @@ PM_ARGS = {"hold": (), "close": (), "cancel": (), "hold_plan": (), "release_plan
            "amend": ("patch",), "escalate": ("reason_code",)}
 ESCALATE_CODES = ("SECRET_REQUEST", "NEED_OWNER", "DATA_GAP")
 ERR_TAGS = ("no-confirm", "chase", "tight-stop", "wide-stop", "wrong-direction", "news-miss", "size", "fee-drag", "rule-break", "good-process-bad-luck", "good")
-SETUPS = ("level_reclaim", "level_reject", "sweep_reject", "breakout_retest", "range_fade", "trend_pullback", "none")
+SETUPS = ("level_reclaim", "level_reject", "sweep_reject", "breakout_retest", "range_fade", "trend_pullback", "momentum_chase", "none")      # momentum_chase: вход по рынку по импульсу, только уровни риска 4-5 (risk_levels setup_aggr high)
 RE_CODE = r"^[a-z0-9_]{2,30}$"
 RE_TAG = r"^[a-z0-9._-]{2,40}$"                    # как plan_schema.RE_TAG (теги гипотезы/сетапа плана)
 ENTRY_DECISIONS = ("skip", "propose")
 ENTRY_SKIP_CODES = ("no_setup", "no_confirm", "blackout", "pause", "busy", "rr_low", "wide_stop", "no_slots", "no_data", "no_levels", "kill", "other")
 ENTRY_TAGS = ("no-confirm", "blackout")
 ENTRY_PROPOSE_KEYS = ("sym", "side", "horizon", "level", "stop", "tp", "setup", "hypothesis", "ttl_min", "confirm", "thesis")
-ENTRY_OPTIONAL_KEYS = ("zone", "size_mult", "tags")
+ENTRY_OPTIONAL_KEYS = ("zone", "size_mult", "tags", "entry_type")
 ENTRY_MIN_RR = 2.0                                  # риск/прибыль брутто не ниже 2, когда в досье нет порога сессии (по средней цене целей при равных долях)
-ENTRY_PRECHECK_CODES = ("WIDE_RANGE", "DAY_NO_PLANS", "NO_SLOTS", "ROOM_CLOSED", "SYM_BUSY", "PAUSE_SYM", "PAUSE_ALL", "MIN_SIZE_SYM")   # отказы по данным досье без вызова модели
+ENTRY_PRECHECK_CODES = ("WIDE_RANGE", "DAY_NO_PLANS", "NO_SLOTS", "ROOM_CLOSED", "SYM_BUSY", "PAUSE_SYM", "PAUSE_ALL", "MIN_SIZE_SYM", "NO_DATA", "NO_SESSION",
+                        "STALE_DATA")   # отказы по данным досье без вызова модели
+MAX_DATA_AGE_S = 120.0                              # цена монеты события у сканера/фида старше этого (brief.data.px_age_s) = STALE_DATA; порог: config/brain.json runtime.max_data_age_s
+                                                    # (разбор paper 2026-11-02: XPL, hot.json и prices.json устарели на 90 мин, вход разрешён)
+FADE_IMPULSE_ATR = 2.0                              # свеча события от 2 ATR(5м) против входа = импульс (кит, каскад): вход против него без реакции запрещён любому сетапу,
+                                                    # кроме sweep_reject и level_reclaim (они по определению после реакции). UAI 2026-11-01: trend_pullback long в свечу -2.85%
+REACTION_SETUPS = ("sweep_reject", "level_reclaim")  # сетапы «после реакции цены»: единственные, которым можно входить против импульса и против паники/эйфории
 ENTRY_SIZE_MULT_MAX = 0.5                           # потолок size_mult, который вообще может назвать модель (только уменьшение)
-ENTRY_MIN_STOP_PCT = 0.1                            # стоп не ближе 0.1% к уровню входа (и не ближе ATR(5м) и трёх спредов)
+ENTRY_MIN_STOP_PCT = 0.1                            # стоп не ближе 0.1% к уровню входа (и не ближе ENTRY_STOP_ATR_MULT*ATR(5м) и трёх спредов)
+ENTRY_STOP_ATR_MULT = 1.5                           # стоп не ближе 1.5 ATR(5м): стоп в одну свечу выбивало шумом за минуты (разбор paper 2026-10-29/30: LIT, USELESS, ERA, XPL)
+ENTRY_STOP_COST_MULT = 2.0                          # стоп не ближе двух издержек круга (session.cost_rt_pct): при стопе 0.23-0.4% комиссии = 0.6-1R, 8 таких сделок BTC/ETH/SOL
+                                                    # 2026-10-29..11-01 дали -3.2R в факте и во всех контрфактах (комиссии 1.96 USDT при PnL -1.64); Bybit taker 0.24% -> пол 0.48%,
+                                                    # лимитный вход (maker, session.cost_rt_maker_pct 0.18%) -> пол 0.35%: scalp остаётся возможен, но только лимитом
+
+
+def stop_floor_pct(ctx, entry_type=None):
+    """Пол ширины стопа от уровня в %: 0.1%, 1.5 ATR(5м), три спреда и две издержки круга (одна формула для validate и cands).
+    entry_type="limit": издержки круга с maker-входом (cost_rt_maker_pct), если досье их даёт."""
+    ctx = ctx or {}
+    cost = ctx.get("cost_rt_pct") or 0.0
+    if entry_type == "limit" and ctx.get("cost_rt_maker_pct"):
+        cost = min(cost, ctx["cost_rt_maker_pct"])
+    return max(ENTRY_MIN_STOP_PCT, ENTRY_STOP_ATR_MULT * (ctx.get("a5_pct") or 0.0), 3.0 * (ctx.get("spread_bps") or 0.0) / 100.0, ENTRY_STOP_COST_MULT * cost)
+
+
+FADE_SETUPS = ("range_fade", "level_reject")        # входы против движения события
+CHASE_SETUP = "momentum_chase"                      # вход по рынку ПО импульсу события (указание владельца 2026-10-31: на высоком риске можно «прокатиться»)
+CHASE_MIN_LEVEL = 4                                 # только уровни риска 4-5 (guard проверяет то же через risk_levels setup_aggr)
+CHASE_SURGE_X = 10.0                                # импульс: оборот 5м от 10x нормы И свеча от 4 ATR(5м), движение в сторону входа. Бэктест 60 дн, 49 монет:
+CHASE_RANGE_ATR = 4.0                               # мягкий порог (3x или 2 ATR) 29.7 тыс. сделок, валовый R -0.02; экстрим 2.3 тыс., +0.11 (12 ч), ловит обвал BTC 29.10 (+2.5R)
+FADE_SURGE_X = 3.0                                  # оборот 5м от этого множителя при движении против входа = импульс, фейд без реакции запрещён
 ENTRY_MAX_STOP_PCT = 10.0
 ENTRY_MAX_LEVEL_DIST_PCT = 3.0                      # уровень входа не дальше 3% от цены
 ENTRY_MAX_LEVEL_DIST_LOOSE_PCT = 5.0                # на уровнях риска 4-5 (paper-разведка входов): до 5%, лимитная заявка ждёт у уровня до ttl
 LOOSE_RISK_LEVEL = 4                                # с этого уровня риска мягче правила диапазона свечи и дальности уровня (entry_scout работает только в paper)
 ENTRY_MAX_ZONE_PCT = 1.0                            # ширина зоны входа без подтверждения не шире 1% от уровня
+LEVEL_POOL_TOL_PCT = 0.3                            # уровень входа обязан совпадать с уровнем из struct/levels/ideas досье (допуск 0.3% или половина ATR 5м):
+                                                    # UAI 2026-11-01: структуры по монете не было, локальная модель выдумала уровень, стоп и цели, сделка -2.9R
+
+
+def level_pool(brief, sym):
+    """Все известные уровни монеты из досье: struct.s[sym] res/sup/day/pd/wk, levels[sym] swing_5m/swing_1h/day/prev_day/week, активные идеи по монете.
+    -> отсортированный список цен без точных дублей (кластеризация близких уровней в cands). Пусто = уровней код не знает."""
+    brief = brief if isinstance(brief, dict) else {}
+    raw = []
+    st = ((brief.get("struct") or {}).get("s") or {}).get(sym) if isinstance(brief.get("struct"), dict) else None
+    if isinstance(st, dict):
+        for k in ("res", "sup"):
+            raw += [r[0] for r in (st.get(k) or []) if isinstance(r, list) and r]
+        for k in ("day", "wk"):
+            raw += list(st.get(k) or [])[:2]
+        raw += list(st.get("pd") or [])[:2]
+    lv = (brief.get("levels") or {}).get(sym) if isinstance(brief.get("levels"), dict) else None
+    if isinstance(lv, dict):
+        raw += list(lv.get("swing_5m") or []) + list(lv.get("swing_1h") or [])
+        for k in ("day", "prev_day", "week"):
+            v = lv.get(k)
+            if isinstance(v, dict):
+                raw += [v.get("hi"), v.get("lo")]
+    ideas = (brief.get("ideas") or {}).get("active") if isinstance(brief.get("ideas"), dict) else None
+    for i in ideas or []:
+        if isinstance(i, dict) and i.get("sym") == sym:
+            raw.append(i.get("level"))
+    return sorted(set(float(v) for v in raw if _num(v) and v > 0))
 RE_SYM = r"^[A-Z0-9]{2,20}$"
 SESSION_ORDER = ("scalp", "intraday", "swing", "position")
 OPPOSITE_OK = ("range_fade", "level_reject")        # watch против bias допустим только для этих сетапов (07b 5.3)
@@ -87,7 +143,7 @@ ENTRY = {"type": "object", "required": ["schema", "event_seq", "decision", "why"
     "zone": {"type": "object", "required": ["low", "high"], "properties": {"low": {"type": "number", "minimum": 1e-12}, "high": {"type": "number", "minimum": 1e-12}}},
     "stop": {"type": "number", "minimum": 1e-12}, "tp": {"type": "array", "minItems": 1, "maxItems": 3, "items": {"type": "number", "minimum": 1e-12}},
     "setup": {"enum": list(SETUPS)}, "hypothesis": {"type": "string", "pattern": RE_TAG}, "ttl_min": {"type": "integer", "minimum": 5, "maximum": 240},
-    "confirm": {"enum": ["candle", "none"]}, "size_mult": {"type": "number", "minimum": 0.1, "maximum": ENTRY_SIZE_MULT_MAX},
+    "confirm": {"enum": ["candle", "none"]}, "entry_type": {"enum": ["market", "limit"]}, "size_mult":{"type": "number", "minimum": 0.1, "maximum": ENTRY_SIZE_MULT_MAX},
     "tags": {"type": "array", "maxItems": 2, "items": {"enum": list(ENTRY_TAGS)}}, "thesis": _s(280, 10),
     "why": _s(200, 1), "conf": {"type": "number", "minimum": 0, "maximum": 1}}}
 
@@ -104,7 +160,7 @@ DAYPLAN = {"type": "object", "required": ["schema", "regime", "bias", "session",
     "watch": {"type": "array", "maxItems": 6, "items": {"type": "object", "required": ["sym", "side", "level", "setup", "note"], "properties": {
         "sym": {"type": "string", "pattern": RE_SYM}, "side": {"enum": ["long", "short"]}, "level": {"type": "number", "minimum": 1e-12},
         "setup": {"enum": list(SETUPS)}, "note": _s(120)}}},
-    "allowed_setups": {"type": "array", "maxItems": 7, "items": {"enum": list(SETUPS)}},
+    "allowed_setups": {"type": "array", "maxItems": 8, "items": {"enum": list(SETUPS)}},
     "avoid": {"type": "array", "maxItems": 10, "items": {"type": "string", "pattern": RE_SYM}},
     "limits": {"type": "object", "required": ["max_new_plans", "max_risk_usdt", "symbols", "size_mult"], "properties": {
         "max_new_plans": {"type": "integer", "minimum": 0, "maximum": 6}, "max_risk_usdt": {"type": "number", "minimum": 0},
@@ -269,6 +325,7 @@ def entry_context(brief, event=None):
     ctx["a5_pct"] = a5
     ctx["spread_bps"] = _num(st.get("sp")) if _num(st.get("sp")) is not None else _num(d.get("spread_bps"))
     ctx["range_5m_pct"] = _num(d.get("range_5m_pct"))
+    ctx["surge_x"], ctx["ret_5m"] = _num(d.get("turn_surge_5m")), _num(d.get("ret_5m_pct"))
     bo = (brief.get("market") or {}).get("blackout") if isinstance(brief.get("market"), dict) else None
     if isinstance(bo, dict):
         ctx["blackout_min"] = _num(bo.get("in_min"))
@@ -289,7 +346,15 @@ def entry_context(brief, event=None):
     rl = _num((brief.get("risk_level") or {}).get("level")) if isinstance(brief.get("risk_level"), dict) else None
     ctx["risk_level"] = int(rl) if rl is not None else None
     sm_ = brief.get("struct_missing") if isinstance(brief.get("struct_missing"), list) else []
-    ctx["struct_missing"] = bool(sym and sym in sm_ and not isinstance(lv, dict))      # структуры по монете события ещё нет (свечи подтягиваются)
+    ctx["struct_missing"] = bool(sym and sym in sm_)      # структуры по монете события ещё нет (свечи подтягиваются): раннер ждёт её, а не зовёт модель без уровней (levels без struct бывает пустым)
+    ctx["level_pool"] = level_pool(brief, sym) if sym else []      # известные коду уровни монеты: уровень входа обязан быть одним из них (_entry: NO_LEVELS / LEVEL_NOT_IN_STRUCT)
+    cr = brief.get("crowd") if isinstance(brief.get("crowd"), dict) else {}
+    ctx["crowd_mood"] = cr.get("mood") if cr.get("mood") in ("panic", "euphoria", "crowded_long", "crowded_short", "calm", "unclear") else None
+    ctx["crowd_bias"] = cr.get("bias") if cr.get("bias") in ("long", "short", "none") else None
+    dt = brief.get("data") if isinstance(brief.get("data"), dict) else {}
+    ctx["data_ready"] = dt.get("ready") if isinstance(dt.get("ready"), bool) else None      # полнота данных монеты события (brief.data): False = входа нет
+    ctx["data_px"] = dt.get("px") if isinstance(dt.get("px"), bool) else None              # цена монеты у сканера/фида есть (False = данных нет вовсе)
+    ctx["data_age_s"] = _num(dt.get("px_age_s"))                                            # возраст самой свежей цены монеты у сканера/фида, с (brief._px_age)
     nc = (brief.get("risk_level") or {}).get("no_confirm") if isinstance(brief.get("risk_level"), dict) else None
     if isinstance(nc, dict):
         ctx["no_confirm_allowed"] = nc.get("allowed") if isinstance(nc.get("allowed"), bool) else None
@@ -299,6 +364,7 @@ def entry_context(brief, event=None):
     # пороги типа сессии и издержки круга из досье (те же, что у guard): без них остаются константы ENTRY_MIN_RR / ENTRY_MAX_STOP_PCT;
     # сессия-день: пороги по горизонтам (session.horizons), горизонт называет модель в ответе
     ctx["min_rr"], ctx["max_stop_pct"], ctx["cost_rt_pct"] = _num(ses.get("min_rr")), _num(ses.get("max_stop_pct")), _num(ses.get("cost_rt_pct"))
+    ctx["cost_rt_maker_pct"] = _num(ses.get("cost_rt_maker_pct"))      # круг с maker-входом: пол стопа для лимитного входа (stop_floor_pct)
     hz = ses.get("horizons") if isinstance(ses.get("horizons"), dict) else None
     ctx["horizons"] = {k: {kk: _num(v.get(kk)) for kk in ("max_stop_pct", "min_rr")} for k, v in hz.items() if k in SESSION_ORDER and isinstance(v, dict)} if hz else None
     # рамка плана дня (brief.day из state/control/day_limits.json): допустимые сетапы, монеты избегать, число новых планов, потолок размера
@@ -309,7 +375,54 @@ def entry_context(brief, event=None):
     ctx["day_max_new_plans"] = mnp if isinstance(mnp, int) and not isinstance(mnp, bool) else None
     ctx["day_size_mult"] = _num(day.get("size_mult"))
     ctx["max_horizon"] = day.get("max_horizon") if day.get("max_horizon") in SESSION_ORDER else None
+    sb = (brief.get("struct") or {}).get("s") if isinstance(brief.get("struct"), dict) else None
+    regs = [((sb or {}).get(s) or {}).get("reg") for s in ([sym] if sym else []) + ["BTC"]] if isinstance(sb, dict) else []
+    ctx["day_shift"] = regime_shift(day.get("regime"), day.get("bias"), regs)
+    ctx["off_plan_ok"] = off_plan_allowed(ctx)
     return ctx
+
+
+OFF_PLAN_FREE_LEVEL = 4         # с этого уровня риска план дня только сценарий: его рамку (сетапы, avoid, горизонт, число планов) можно нарушать всегда
+OFF_PLAN_SHIFT_LEVEL = 2        # уровни 2-3: рамку можно нарушать, когда рынок сменил режим/направление против утреннего сценария; уровень 1: рамка жёсткая
+_REG_CLASS = {"trend_up": ("trend", "long"), "trend_down": ("trend", "short"), "range": ("range", None), "storm": ("volatile", None)}
+
+
+def regime_shift(day_regime, day_bias, regs):
+    """Смена рынка против утреннего сценария по struct.reg монеты события и BTC -> reg или None.
+    Сдвиг: класс режима другой (trend/range/volatile; из unclear в тренд), или тренд против bias плана (long/short)."""
+    if day_regime not in ("trend", "range", "volatile", "unclear"):
+        return None
+    for r in regs:
+        cls = _REG_CLASS.get(r)
+        if not cls:
+            continue
+        if day_regime == "unclear":
+            if cls[0] == "trend":
+                return r
+        elif cls[0] != day_regime or (cls[1] and day_bias in ("long", "short") and cls[1] != day_bias):
+            return r
+    return None
+
+
+def off_plan_allowed(ctx):
+    """Можно ли нарушить рамку плана дня (план = один из сценариев, а не запрет): уровни 4-5 всегда, уровни 2-3 при смене режима (regime_shift)."""
+    lvl = ctx.get("risk_level") or 0
+    return lvl >= OFF_PLAN_FREE_LEVEL or (lvl >= OFF_PLAN_SHIFT_LEVEL and bool(ctx.get("day_shift")))
+
+
+def day_frame_breaks(o, ctx):
+    """Коды рамки плана дня, которые нарушает ответ entry/1 (размер дня сюда не входит: он жёсткий всегда)."""
+    out = []
+    if ctx.get("day_max_new_plans") == 0:
+        out.append("DAY_NO_PLANS")                           # план дня: новых планов нет
+    if ctx.get("day_setups") and o.get("setup") not in ctx["day_setups"]:
+        out.append("SETUP_NOT_ALLOWED")                      # сетап вне списка allowed_setups плана дня
+    if o.get("sym") in (ctx.get("day_avoid") or []):
+        out.append("SYM_AVOID")                              # монета в списке avoid плана дня
+    mh, h = ctx.get("max_horizon"), o.get("horizon")
+    if mh and h in SESSION_ORDER and SESSION_ORDER.index(h) > SESSION_ORDER.index(mh):
+        out.append("HORIZON_ABOVE_DAY")                      # план дня ограничил горизонт на сегодня
+    return out
 
 
 def _loose(ctx):
@@ -317,14 +430,33 @@ def _loose(ctx):
     return (ctx.get("risk_level") or 0) >= LOOSE_RISK_LEVEL
 
 
+def data_stale(ctx):
+    """Устарели ли данные монеты события: возраст цены сканера/фида (data_age_s) выше порога max_data_age_s (по умолчанию MAX_DATA_AGE_S),
+    или цены монеты нет ни в одном источнике (data_px=False). Нет метки времени при наличии цены = не устарели. Нет блока data в досье = проверки нет."""
+    ctx = ctx or {}
+    if ctx.get("data_px") is False:
+        return True
+    lim = _num(ctx.get("max_data_age_s"))
+    lim = MAX_DATA_AGE_S if lim is None or lim <= 0 else lim
+    age = ctx.get("data_age_s")
+    return age is not None and age > lim
+
+
 def entry_precheck(ctx):
     """Отказ entry/1 по данным досье ДО вызова модели (экономия токенов; те же коды, что дала бы смысловая проверка) -> код или None.
     WIDE_RANGE: диапазон 5м события шире максимального стопа типа сессии (для scalp любой range_5m-сигнал: по определению сканера диапазон >= 0.8%);
-    DAY_NO_PLANS: план дня запрещает новые планы; NO_SLOTS / ROOM_CLOSED / SYM_BUSY / PAUSE_*: как в _entry."""
+    DAY_NO_PLANS: план дня запрещает новые планы; NO_SLOTS / ROOM_CLOSED / SYM_BUSY / PAUSE_*: как в _entry;
+    STALE_DATA: цена монеты события у сканера/фида старше max_data_age_s (data_stale), проверяется сразу после NO_DATA."""
     ctx = ctx or {}
     if not ctx.get("has_brief"):
         return None
-    if ctx.get("day_max_new_plans") == 0:
+    if not ctx.get("session_type"):
+        return "NO_SESSION"                                  # сессии нет (день закрывается или не начат): входа не будет, модель не зовём (BEAM 2026-11-02: BAD_ENUM horizon)
+    if ctx.get("struct_missing") or ctx.get("data_ready") is False:
+        return "NO_DATA"                                     # нет структуры/уровней по монете события: без полного набора данных модель не зовём (UAI 2026-11-01)
+    if data_stale(ctx):
+        return "STALE_DATA"                                  # цена/данные сканера монеты события устарели (или их нет вовсе): модель не зовём (XPL 2026-11-02)
+    if ctx.get("day_max_new_plans") == 0 and not ctx.get("off_plan_ok"):
         return "DAY_NO_PLANS"
     r5, ms = ctx.get("range_5m_pct"), ctx.get("max_stop_pct")
     if r5 is not None and ms is not None and r5 > ms and not _loose(ctx):
@@ -439,6 +571,34 @@ def _pm(o, ctx):
     return errs[:8]
 
 
+def chase_impulse(ctx, sign):
+    """Событие экстремально импульсное и идёт в сторону sign: оборот 5м от CHASE_SURGE_X нормы И диапазон свечи от CHASE_RANGE_ATR ATR(5м), ret_5m в ту же сторону."""
+    surge, ret5, r5, a5 = ctx.get("surge_x"), ctx.get("ret_5m"), ctx.get("range_5m_pct"), ctx.get("a5_pct")
+    strong = surge is not None and surge >= CHASE_SURGE_X and r5 is not None and bool(a5) and r5 >= CHASE_RANGE_ATR * a5
+    return bool(strong and ret5 and ret5 * sign > 0)
+
+
+def chase_errors(o, ctx, sign):
+    """momentum_chase: уровень риска 4-5, импульс в сторону входа, вход без подтверждения (confirm none, зона у цены)."""
+    errs = []
+    if (ctx.get("risk_level") or 0) < CHASE_MIN_LEVEL:
+        errs.append("CHASE_LEVEL")                           # на уровнях 1-3 догонять свечу нельзя
+    if not chase_impulse(ctx, sign):
+        errs.append("CHASE_NO_IMPULSE")                      # нет сильного импульса по направлению входа
+    if o.get("confirm") != "none":
+        errs.append("CHASE_CONFIRM")                         # догоняют по рынку сейчас, свечу не ждут
+    return errs
+
+
+def exec_stop_pct(level, px, stop, entry_type=None):
+    """Ширина стопа так, как её мерит шлюз исполнителя (plan_schema.entry_ref: ref_price = цена при решении, у limit цена заявки), и не меньше, чем от уровня.
+    Цена ещё не дошла до уровня -> стоп от неё шире (PENDLE 2026-10-31: 0.89% от цены при 0.8% scalp, шлюз отклонил E_STOP_PCT)."""
+    d = abs(level - stop) / level * 100.0
+    if entry_type != "limit" and px:
+        d = max(d, abs(px - stop) / px * 100.0)
+    return d
+
+
 def _entry_rr(side, level, px, stop, tps):
     """Риск/прибыль по худшей цене входа (long: max(уровень, цена); short: min) и средней цене целей (равные доли) -> число или None."""
     ref = level if px is None else (max(level, px) if side == "long" else min(level, px))
@@ -488,6 +648,8 @@ def _entry(o, ctx):
         errs.append("NO_SLOTS")
     if ctx.get("room_allowed") is False:
         errs.append("ROOM_CLOSED")
+    if data_stale(ctx):
+        errs.append("STALE_DATA")                            # цена сканера/фида по монете старше порога: план по устаревшим данным не подаём
     sign = 1 if side == "long" else -1
     ordered = all((b - a) * sign > 0 for a, b in zip(tps, tps[1:]))
     if not ((lvl - stop) * sign > 0 and all((t - lvl) * sign > 0 for t in tps) and ordered):
@@ -503,6 +665,15 @@ def _entry(o, ctx):
         lvl_dist = abs(lvl - px) / px * 100.0
         if lvl_dist > lvl_max:
             errs += ["LEVEL_FAR", "LEVEL_DIST_PCT:%.1f_MAX:%.1f" % (lvl_dist, lvl_max)]      # числа в подсказке повтора: модель видит, что исправлять (только наши числа, не цитата ответа)
+    pool = ctx.get("level_pool") or []
+    if o.get("setup") != CHASE_SETUP:                        # momentum_chase входит по рынку у текущей цены, уровень ему не нужен
+        if ctx.get("struct_missing") and not pool:
+            errs.append("NO_LEVELS")                         # структуры и уровней по монете нет: уровень выдуман, вход только skip no_levels (UAI 2026-11-01)
+        elif pool:
+            near = min(pool, key=lambda p: abs(p - lvl))
+            tol = max(LEVEL_POOL_TOL_PCT, 0.5 * (ctx.get("a5_pct") or 0.0))
+            if abs(near - lvl) / lvl * 100.0 > tol:
+                errs += ["LEVEL_NOT_IN_STRUCT", "LEVEL:%.6g_NEAREST:%.6g" % (lvl, near)]      # уровень не из struct/levels/ideas досье: взять уровень кода, не свой
     rr = _entry_rr(side, lvl, px, stop, tps)
     dist = abs(lvl - stop) / lvl * 100.0
     min_rr, max_stop, cost = ctx.get("min_rr"), ctx.get("max_stop_pct"), ctx.get("cost_rt_pct")
@@ -514,9 +685,8 @@ def _entry(o, ctx):
             errs.append("HORIZON_UNKNOWN")
     elif ctx.get("session_type") in SESSION_ORDER and h != ctx["session_type"]:
         errs.append("HORIZON_MISMATCH")                      # сессия одного горизонта: план только этого горизонта (шлюз исполнителя отклонит иначе)
-    mh = ctx.get("max_horizon")
-    if mh and h in SESSION_ORDER and SESSION_ORDER.index(h) > SESSION_ORDER.index(mh):
-        errs.append("HORIZON_ABOVE_DAY")                     # план дня ограничил горизонт на сегодня
+    if not ctx.get("off_plan_ok"):
+        errs += day_frame_breaks(o, ctx)                     # рамка плана дня жёсткая только на уровне 1 и на 2-3 без смены режима (off_plan_allowed)
     if rr is None:
         errs.append("RR_LOW")
     elif min_rr is not None and cost is not None:
@@ -526,18 +696,29 @@ def _entry(o, ctx):
             errs += ["RR_LOW", "RR_NET:%.2f_NEED:%.2f" % (net, min_rr)]
     elif rr < ENTRY_MIN_RR - 1e-9:
         errs += ["RR_LOW", "RR_GROSS:%.2f_NEED:%.2f" % (rr, ENTRY_MIN_RR)]
-    floor = max(ENTRY_MIN_STOP_PCT, ctx.get("a5_pct") or 0.0, 3.0 * (ctx.get("spread_bps") or 0.0) / 100.0)
+    floor = stop_floor_pct(ctx, o.get("entry_type"))
     if dist < floor:
-        errs += ["STOP_TIGHT", "STOP_PCT:%.2f_MIN:%.2f" % (dist, floor)]      # стоп не вплотную: не ближе ATR(5м), трёх спредов и 0.1%
+        errs += ["STOP_TIGHT", "STOP_PCT:%.2f_MIN:%.2f" % (dist, floor)]      # стоп не вплотную: не ближе 1.5 ATR(5м), трёх спредов, двух издержек круга и 0.1%
+    surge, ret5 = ctx.get("surge_x"), ctx.get("ret_5m")
+    if o.get("setup") == CHASE_SETUP:
+        errs += chase_errors(o, ctx, sign)
+    if o.get("setup") in FADE_SETUPS and surge is not None and ret5 and surge >= FADE_SURGE_X and ret5 * sign < 0:
+        errs += ["FADE_IMPULSE", "SURGE_X:%.1f_MAX:%.1f" % (surge, FADE_SURGE_X)]      # фейд против импульса на всплеске оборота: пропускают или ждут отката/сетапа с реакцией
+    elif ret5 and ret5 * sign < 0 and o.get("setup") not in REACTION_SETUPS + (CHASE_SETUP,):
+        a5 = ctx.get("a5_pct")
+        imp = abs(ret5) / a5 if a5 else None
+        if (imp is not None and imp >= FADE_IMPULSE_ATR) or (imp is None and abs(ret5) >= 1.5):
+            errs += ["FADE_IMPULSE", "IMPULSE_ATR:%.1f_MAX:%.1f" % (imp if imp is not None else abs(ret5), FADE_IMPULSE_ATR)]      # вход против свечи события от 2 ATR без реакции (UAI 2026-11-01)
+    mood = ctx.get("crowd_mood")
+    if (mood == "panic" and sign > 0) or (mood == "euphoria" and sign < 0):
+        if o.get("setup") not in REACTION_SETUPS:
+            errs.append("CROWD_AGAINST")                     # против паники/эйфории толпы только сетапы после реакции цены (sweep_reject, level_reclaim)
+        if o.get("confirm") != "candle":
+            errs.append("CROWD_NO_CONFIRM")                  # и только со свечным подтверждением
     stop_max = max_stop if max_stop is not None else ENTRY_MAX_STOP_PCT
-    if dist > stop_max + 1e-9:
-        errs += ["STOP_WIDE", "STOP_PCT:%.2f_MAX:%.2f" % (dist, stop_max)]     # шире допустимого для типа сессии (guard отклонит так же): пропускают, а не сжимают
-    if ctx.get("day_max_new_plans") == 0:
-        errs.append("DAY_NO_PLANS")                          # план дня: новых планов нет
-    if ctx.get("day_setups") and o.get("setup") not in ctx["day_setups"]:
-        errs.append("SETUP_NOT_ALLOWED")                     # сетап вне списка allowed_setups плана дня
-    if sym in (ctx.get("day_avoid") or []):
-        errs.append("SYM_AVOID")                             # монета в списке avoid плана дня
+    wide = exec_stop_pct(lvl, px, stop, o.get("entry_type"))
+    if wide > stop_max + 1e-9:
+        errs += ["STOP_WIDE", "STOP_PCT:%.2f_MAX:%.2f" % (wide, stop_max)]     # шире допустимого для типа сессии (guard отклонит так же): пропускают, а не сжимают
     dsm = ctx.get("day_size_mult")
     if dsm is not None and dsm < 1.0 and not (isinstance(o.get("size_mult"), (int, float)) and o["size_mult"] <= dsm + 1e-9):
         errs.append("DAY_SIZE")                              # план дня ограничил размер: size_mult обязателен и не выше потолка дня
@@ -557,6 +738,8 @@ def _entry(o, ctx):
                 errs.append("BLACKOUT_TAG")
     elif "blackout" in tags:
         errs.append("TAG_MISMATCH:blackout")
+    if o.get("entry_type") == "limit" and o.get("confirm") != "candle":
+        errs.append("LIMIT_NEEDS_CANDLE")                    # лимит по уровню ставится после закрытия свечи за уровнем (цена на стороне отката, post_only не пересекает рынок)
     if o.get("confirm") == "none":
         cap = ENTRY_SIZE_MULT_MAX if ctx.get("no_confirm_max") is None else min(ENTRY_SIZE_MULT_MAX, ctx["no_confirm_max"])
         if ctx.get("no_confirm_allowed") is False:
@@ -668,6 +851,36 @@ def _audit(o, ctx):
         if items and q.get("item") not in items:
             errs.append("UNKNOWN_ITEM")
     return sorted(set(errs))[:8]
+
+
+def _codes(v, allowed, limit):
+    out = []
+    for x in v if isinstance(v, list) else []:
+        if x in allowed and x not in out:
+            out.append(x)
+    return out[:limit]
+
+
+def repair_casereview(o, ctx):
+    """Вывод ревьюера до проверки схемы: из списков кодов убираются значения вне перечня и признаки, которых по ситуации не было
+    (known_at_decision знает код, не модель: 2026-10-31/11-01 BAD_ENUM right[0] и KNOWN_FALSE:no_confirm съедали повторы), «none» в improve
+    вместе с другими кодами убирается, пустой improve = ["none"], неизвестное действие альтернативы = "none". -> новый объект."""
+    o = dict(o)
+    o["right"] = _codes(o.get("right"), CR_RIGHT, 5)
+    imp = _codes(o.get("improve"), CR_IMPROVE, 5)
+    if len(imp) > 1 and "none" in imp:
+        imp.remove("none")
+    o["improve"] = imp or ["none"]
+    known = (ctx or {}).get("known")
+    kn = _codes(o.get("known_at_decision"), CR_KNOWN, 8)
+    o["known_at_decision"] = [k for k in kn if known.get(k) is True] if isinstance(known, dict) else kn
+    alt = o.get("alternative")
+    if isinstance(alt, dict) and alt.get("action") not in CR_ALT:
+        o["alternative"] = dict(alt, action="none")
+    return o
+
+
+REPAIRS = {"casereview/1": repair_casereview}
 
 
 def _casereview(o, ctx):

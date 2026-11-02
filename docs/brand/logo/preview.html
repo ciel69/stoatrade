@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Знак Open Trader</title>
+<style>
+  :root {
+    --d-bg: #0b121a; --d-panel: #121c28; --d-line: #223142; --d-text: #e8eef4; --d-muted: #93a4b8; --d-accent: #4db3ff;
+    --l-bg: #eef2f6; --l-panel: #ffffff; --l-line: #d6dee7; --l-text: #0f1a26; --l-muted: #4a5b6f; --l-accent: #0b63b5;
+    --font: "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--d-bg); color: var(--d-text); font: 14px/1.5 var(--font); }
+  ::selection { background: #14304a; color: var(--d-text); }
+  main { max-width: 1120px; margin: 0 auto; padding: 40px 16px 64px; }
+  h1 { font-size: 26px; letter-spacing: -0.02em; margin: 0 0 6px; }
+  .lead { color: var(--d-muted); margin: 0 0 40px; max-width: 68ch; }
+  section { margin-bottom: 56px; }
+  h2 { font-size: 18px; letter-spacing: -0.01em; margin: 0 0 4px; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+  h2 .tag { font-size: 12px; font-weight: 600; color: var(--d-accent); border: 1px solid #31445a; border-radius: 999px; padding: 1px 9px; }
+  .about { color: var(--d-muted); margin: 0 0 16px; max-width: 72ch; }
+  .pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+  .board { border-radius: 14px; padding: 20px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 22px; }
+  .row > svg { max-width: 100%; height: auto; }
+  .dark  { background: var(--d-panel); border: 1px solid var(--d-line); color: var(--d-accent); --tx: var(--d-text); --mt: var(--d-muted); }
+  .light { background: var(--l-panel); border: 1px solid var(--l-line); color: var(--l-accent); --tx: var(--l-text); --mt: var(--l-muted); }
+  .sizes { display: flex; align-items: flex-end; gap: 22px; flex-wrap: wrap; }
+  .sizes figure { margin: 0; display: grid; justify-items: center; gap: 6px; }
+  figcaption { font-size: 11px; color: var(--mt); font-variant-numeric: tabular-nums; }
+  svg { display: block; }
+  .row { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+  .mono { color: var(--tx); }
+  .nav { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; background: color-mix(in srgb, var(--tx) 5%, transparent); width: max-content; }
+  .nav span { font-size: 15px; font-weight: 650; letter-spacing: -0.01em; color: var(--tx); }
+  .lock-split .word { color: var(--tx); }
+  .tabs { display: flex; gap: 6px; align-items: center; }
+  .tab { display: flex; align-items: center; gap: 6px; background: color-mix(in srgb, var(--tx) 8%, transparent); border-radius: 7px 7px 0 0; padding: 5px 10px; font-size: 12px; color: var(--tx); }
+  @media (max-width: 760px) { .pair { grid-template-columns: minmax(0, 1fr); } }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="c1" viewBox="0 0 32 32"><g fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round"><path d="M13.5 10A8.5 8.5 0 0 0 13.5 27"/><path d="M18.5 5A8.5 8.5 0 0 1 18.5 22"/></g></symbol>
+    <symbol id="c2" viewBox="0 0 32 32"><g fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round"><path d="M16 4.5V27.5"/><path d="M7.5 21H16"/><path d="M16 11H24.5"/></g></symbol>
+    <symbol id="c3" viewBox="0 0 32 32"><g fill="currentColor"><rect x="7.5" y="12" width="3" height="16" rx="1.5"/><rect x="4" y="15" width="10" height="9" rx="2"/><rect x="21" y="2" width="3" height="5" rx="1.5"/><rect x="21" y="21" width="3" height="6" rx="1.5"/><path fill-rule="evenodd" d="M19.5 6h6A2.5 2.5 0 0 1 28 8.5v11a2.5 2.5 0 0 1-2.5 2.5h-6A2.5 2.5 0 0 1 17 19.5v-11A2.5 2.5 0 0 1 19.5 6ZM21 9h3a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1h-3a1 1 0 0 1-1-1v-8a1 1 0 0 1 1-1Z"/></g></symbol>
+    <symbol id="word" viewBox="0 0 172 34"><g transform="translate(0 2)" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10.3" cy="15" r="9"/><path d="M25.1 13V30"/><circle cx="30.6" cy="18.5" r="5.5"/><path d="M41.9 18.5H52.9A5.5 5.5 0 1 0 51.61 22.04"/><path d="M58.7 13V24M58.7 18.5A5.5 5.5 0 0 1 69.7 18.5V24"/><path d="M83.7 6H97.7M90.7 6V24"/><path d="M102.2 13V24M102.2 18.5A5.5 5.5 0 0 1 107.7 13"/><circle cx="118.2" cy="18.5" r="5.5"/><path d="M123.7 13V24"/><circle cx="135" cy="18.5" r="5.5"/><path d="M140.5 6V24"/><path d="M146.3 18.5H157.3A5.5 5.5 0 1 0 156.01 22.04"/><path d="M163.1 13V24M163.1 18.5A5.5 5.5 0 0 1 168.6 13"/></g></symbol>
+  </defs>
+</svg>
+
+<main>
+  <h1>Знак Open Trader</h1>
+  <p class="lead">Три концепции знака и горизонтальные локапы. Цвет знака берётся из акцента дашборда (#4db3ff на тёмной теме, #0b63b5 на светлой), сам знак монохромный и рисуется через currentColor. Надпись в локапе нарисована контурами, шрифт для неё не нужен.</p>
+
+  <!-- Шаблон секции повторяется для c1..c3; c0 показан в конце для сравнения -->
+  <section>
+    <h2>1. Проём <span class="tag">рекомендую</span></h2>
+    <p class="about">Буква O разрезана пополам, правая половина сдвинута вверх и вправо. Проём в кольце отвечает за «Open», ступенька вверх читается как пробой уровня, то есть «Trader».</p>
+    <div class="pair">
+      <div class="board dark">
+        <div class="sizes">
+          <figure><svg width="16" height="16"><use href="#c1"/></svg><figcaption>16</figcaption></figure>
+          <figure><svg width="28" height="28"><use href="#c1"/></svg><figcaption>28</figcaption></figure>
+          <figure><svg width="64" height="64"><use href="#c1"/></svg><figcaption>64</figcaption></figure>
+          <figure><svg width="128" height="128"><use href="#c1"/></svg><figcaption>128</figcaption></figure>
+          <figure class="mono"><svg width="28" height="28"><use href="#c1"/></svg><figcaption>текст</figcaption></figure>
+        </div>
+        <div class="row">
+          <div class="tabs"><div class="tab"><svg width="16" height="16" viewBox="0 0 32 32"><rect width="32" height="32" rx="9" fill="#0b121a"/><g transform="translate(16 16) scale(0.84) translate(-16 -16)" color="#4db3ff"><use href="#c1"/></g></svg>open-trader</div></div>
+          <div class="nav"><svg width="30" height="30"><use href="#c1"/></svg><span>open-trader</span></div>
+        </div>
+        <div class="row"><svg width="214" height="34" viewBox="0 0 214 34" class="lock-split"><use href="#c1" x="0" y="1" width="32" height="32"/><use class="word" href="#word" x="42" y="0" width="172" height="34"/></svg></div>
+        <div class="row"><svg width="428" height="68" viewBox="0 0 214 34" style="max-width:100%;height:auto"><use href="#c1" x="0" y="1" width="32" height="32"/><use href="#word" x="42" y="0" width="172" height="34"/></svg></div>
+      </div>
+      <div class="board light">
+        <div class="sizes">
+          <figure><svg width="16" height="16"><use href="#c1"/></svg><figcaption>16</figcaption></figure>
+          <figure><svg width="28" height="28"><use href="#c1"/></svg><figcaption>28</figcaption></figure>
+          <figure><svg width="64" height="64"><use href="#c1"/></svg><figcaption>64</figcaption></figure>
+          <figure><svg width="128" height="128"><use href="#c1"/></svg><figcaption>128</figcaption></figure>
+          <figure class="mono"><svg width="28" height="28"><use href="#c1"/></svg><figcaption>текст</figcaption></figure>
+        </div>
+        <div class="row">
+          <div class="tabs"><div class="tab"><svg width="16" height="16" viewBox="0 0 32 32"><rect width="32" height="32" rx="9" fill="#0b121a"/><g transform="translate(16 16) scale(0.84) translate(-16 -16)" color="#4db3ff"><use href="#c1"/></g></svg>open-trader</div></div>
+          <div class="nav"><svg width="30" height="30"><use href="#c1"/></svg><span>open-trader</span></div>
+        </div>
+        <div class="row"><svg width="214" height="34" viewBox="0 0 214 34" class="lock-split"><use href="#c1" x="0" y="1" width="32" height="32"/><use class="word" href="#word" x="42" y="0" width="172" height="34"/></svg></div>
+        <div class="row"><svg width="428" height="68" viewBox="0 0 214 34" style="max-width:100%;height:auto"><use href="#c1" x="0" y="1" width="32" height="32"/><use href="#word" x="42" y="0" width="172" height="34"/></svg></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>2. Бар открытия</h2>
+    <p class="about">OHLC-бар из трёх штрихов: левая засечка — цена открытия (Open), правая — закрытия, она выше, бар растущий. Знак взят прямо из языка биржевого графика, и слово «Open» в нём буквальное.</p>
+    <div class="pair">
+      <div class="board dark">
+        <div class="sizes">
+          <figure><svg width="16" height="16"><use href="#c2"/></svg><figcaption>16</figcaption></figure>
+          <figure><svg width="28" height="28"><use href="#c2"/></svg><figcaption>28</figcaption></figure>
+          <figure><svg width="64" height="64"><use href="#c2"/></svg><figcaption>64</figcaption></figure>
+          <figure><svg width="128" height="128"><use href="#c2"/></svg><figcaption>128</figcaption></figure>
+          <figure class="mono"><svg width="28" height="28"><use href="#c2"/></svg><figcaption>текст</figcaption></figure>
+        </div>
+        <div class="row">
+          <div class="tabs"><div class="tab"><svg width="16" height="16" viewBox="0 0 32 32"><rect width="32" height="32" rx="9" fill="#0b121a"/><g transform="translate(16 16) scale(0.84) translate(-16 -16)" color="#4db3ff"><use href="#c2"/></g></svg>open-trader</div></div>
+          <div class="nav"><svg width="30" height="30"><use href="#c2"/></svg><span>open-trader</span></div>
+        </div>
+        <div class="row"><svg width="214" height="34" viewBox="0 0 214 34" class="lock-split"><use href="#c2" x="0" y="1" width="32" height="32"/><use class="word" href="#word" x="42" y="0" width="172" height="34"/></svg></div>
+        <div class="row"><svg width="428" height="68" viewBox="0 0 214 34" style="max-width:100%;height:auto"><use href="#c2" x="0" y="1" width="32" height="32"/><use href="#word" x="42" y="0" width="172" height="34"/></svg></div>
+      </div>
+      <div class="board light">
+        <div class="sizes">
+          <figure><svg width="16" height="16"><use href="#c2"/></svg><figcaption>16</figcaption></figure>
+          <figure><svg width="28" height="28"><use href="#c2"/></svg><figcaption>28</figcaption></figure>
+          <figure><svg width="64" height="64"><use href="#c2"/></svg><figcaption>64</figcaption></figure>
+          <figure><svg width="128" height="128"><use href="#c2"/></svg><figcaption>128</figcaption></figure>
+          <figure class="mono"><svg width="28" height="28"><use href="#c2"/></svg><figcaption>текст</figcaption></figure>
+        </div>
+        <div class="row">
+          <div class="tabs"><div class="tab"><svg width="16" height="16" viewBox="0 0 32 32"><rect width="32" height="32" rx="9" fill="#0b121a"/><g transform="translate(16 16) scale(0.84) translate(-16 -16)" color="#4db3ff"><use href="#c2"/></g></svg>open-trader</div></div>
+          <div class="nav"><svg width="30" height="30"><use href="#c2"/></svg><span>open-trader</span></div>
+        </div>
+        <div class="row"><svg width="214" height="34" viewBox="0 0 214 34" class="lock-split"><use href="#c2" x="0" y="1" width="32" height="32"/><use class="word" href="#word" x="42" y="0" width="172" height="34"/></svg></div>
+        <div class="row"><svg width="428" height="68" viewBox="0 0 214 34" style="max-width:100%;height:auto"><use href="#c2" x="0" y="1" width="32" height="32"/><use href="#word" x="42" y="0" width="172" height="34"/></svg></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>3. Полая свеча</h2>
+    <p class="about">Две свечи: малая сплошная и большая полая выше неё. На графике с полыми свечами полое тело означает рост, отсюда «open» в смысле «открытое тело». Это заливка, а не линия, поэтому знак самый плотный на 16 px.</p>
+    <div class="pair">
+      <div class="board dark">
+        <div class="sizes">
+          <figure><svg width="16" height="16"><use href="#c3"/></svg><figcaption>16</figcaption></figure>
+          <figure><svg width="28" height="28"><use href="#c3"/></svg><figcaption>28</figcaption></figure>
+          <figure><svg width="64" height="64"><use href="#c3"/></svg><figcaption>64</figcaption></figure>
+          <figure><svg width="128" height="128"><use href="#c3"/></svg><figcaption>128</figcaption></figure>
+          <figure class="mono"><svg width="28" height="28"><use href="#c3"/></svg><figcaption>текст</figcaption></figure>
+        </div>
+        <div class="row">
+          <div class="tabs"><div class="tab"><svg width="16" height="16" viewBox="0 0 32 32"><rect width="32" height="32" rx="9" fill="#0b121a"/><g transform="translate(16 16) scale(0.84) translate(-16 -16)" color="#4db3ff"><use href="#c3"/></g></svg>open-trader</div></div>
+          <div class="nav"><svg width="30" height="30"><use href="#c3"/></svg><span>open-trader</span></div>
+        </div>
+        <div class="row"><svg width="214" height="34" viewBox="0 0 214 34" class="lock-split"><use href="#c3" x="0" y="1" width="32" height="32"/><use class="word" href="#word" x="42" y="0" width="172" height="34"/></svg></div>
+        <div class="row"><svg width="428" height="68" viewBox="0 0 214 34" style="max-width:100%;height:auto"><use href="#c3" x="0" y="1" width="32" height="32"/><use href="#word" x="42" y="0" width="172" height="34"/></svg></div>
+      </div>
+      <div class="board light">
+        <div class="sizes">
+          <figure><svg width="16" height="16"><use href="#c3"/></svg><figcaption>16</figcaption></figure>
+          <figure><svg width="28" height="28"><use href="#c3"/></svg><figcaption>28</figcaption></figure>
+          <figure><svg width="64" height="64"><use href="#c3"/></svg><figcaption>64</figcaption></figure>
+          <figure><svg width="128" height="128"><use href="#c3"/></svg><figcaption>128</figcaption></figure>
+          <figure class="mono"><svg width="28" height="28"><use href="#c3"/></svg><figcaption>текст</figcaption></figure>
+        </div>
+        <div class="row">
+          <div class="tabs"><div class="tab"><svg width="16" height="16" viewBox="0 0 32 32"><rect width="32" height="32" rx="9" fill="#0b121a"/><g transform="translate(16 16) scale(0.84) translate(-16 -16)" color="#4db3ff"><use href="#c3"/></g></svg>open-trader</div></div>
+          <div class="nav"><svg width="30" height="30"><use href="#c3"/></svg><span>open-trader</span></div>
+        </div>
+        <div class="row"><svg width="214" height="34" viewBox="0 0 214 34" class="lock-split"><use href="#c3" x="0" y="1" width="32" height="32"/><use class="word" href="#word" x="42" y="0" width="172" height="34"/></svg></div>
+        <div class="row"><svg width="428" height="68" viewBox="0 0 214 34" style="max-width:100%;height:auto"><use href="#c3" x="0" y="1" width="32" height="32"/><use href="#word" x="42" y="0" width="172" height="34"/></svg></div>
+      </div>
+    </div>
+  </section>
+
+</main>
+</body>
+</html>

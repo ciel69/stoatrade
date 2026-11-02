@@ -16,8 +16,8 @@ class ConfigTest(W.Base):
             self.assertEqual(L3[k], 1.0)
         self.assertEqual(L3["min_net_rr_add"], 0.0)
         self.assertEqual(cfg["default_level"], 3)
-        self.assertEqual(cfg["confirmed_levels"], [3])
-        self.assertEqual(R.unconfirmed_levels(cfg), [1, 2, 4, 5])
+        self.assertEqual(cfg["confirmed_levels"], [3, 4, 5])                    # 4-5 подтверждены владельцем 2026-11-01 (эксперимент на агрессии)
+        self.assertEqual(R.unconfirmed_levels(cfg), [1, 2])
         base = self.prof()      # уровень 3 совпадает с базой risk_profile.json
         self.assertEqual(L3["risk_per_trade_frac"], base["risk_per_trade_frac"])
         self.assertEqual(L3["daily_loss_frac"], base["daily_loss_frac"])
@@ -25,7 +25,7 @@ class ConfigTest(W.Base):
 
     def test_ceilings_values_from_spec(self):
         ce = self.cfg()["ceilings"]
-        self.assertEqual((ce["risk_per_trade_frac"], ce["daily_loss_frac"], ce["max_open_positions"], ce["total_open_risk_frac"]), (0.05, 0.15, 3, 0.12))
+        self.assertEqual((ce["risk_per_trade_frac"], ce["daily_loss_frac"], ce["max_open_positions"], ce["total_open_risk_frac"]), (0.08, 0.20, 3, 0.15))      # подняты владельцем 2026-11-01
 
     def test_no_file_means_legacy(self):
         os.remove(os.path.join(self.root, "config", "risk_levels.json"))
@@ -49,9 +49,9 @@ class ConfigTest(W.Base):
         self.assertEqual(R.effective(self.prof(), self.root)["risk_level"]["level"], 1)
 
     def test_unconfirmed_level_warns(self):
-        self.sign_level(4)
+        self.sign_level(2)                                                       # уровни 1-2 не подтверждены (4-5 подтверждены 2026-11-01)
         cur = R.current_level(self.root)
-        self.assertEqual(cur["level"], 4)
+        self.assertEqual(cur["level"], 2)
         self.assertFalse(cur["confirmed"])
         self.assertTrue(any("не подтверждены" in w for w in cur["warnings"]))
         self.sign_level(3)
@@ -66,6 +66,20 @@ class EffectiveTest(W.Base):
         self.assertTrue(e["risk_level"]["identity"])
         self.assertFalse(R.level_changes_behavior(e))
 
+    def test_wider_stop_on_top_levels(self):
+        """max_stop_mult: уровень 5 = x1.5 (scalp 0.8% -> 1.2%), уровень 4 = x1.25, уровни 1-3 без изменений; множитель не выше ceilings.max_stop_mult."""
+        p = self.prof()
+        base = p["session_types"]["scalp"]["max_stop_pct"]
+        for lvl, m in ((1, 1.0), (2, 1.0), (3, 1.0), (4, 1.25), (5, 1.5)):
+            e = R.effective(p, self.root, level=lvl)
+            self.assertAlmostEqual(e["session_types"]["scalp"]["max_stop_pct"], round(base * m, 4), msg=lvl)
+            self.assertAlmostEqual(e["session_types"]["intraday"]["max_stop_pct"], round(p["session_types"]["intraday"]["max_stop_pct"] * m, 4), msg=lvl)
+        c = W.jload(os.path.join(W.ROOT, "config", "risk_levels.json"))
+        c["levels"]["5"]["max_stop_mult"] = 9.0
+        self.put_cfg(c)
+        self.assertAlmostEqual(R.effective(p, self.root, level=5)["session_types"]["scalp"]["max_stop_pct"], round(base * 1.5, 4))      # потолок 1.5
+        self.assertEqual(R.limits_summary(self.root, level=5)["max_stop_mult"], 1.5)
+
     def test_monotonic_levels(self):
         p = self.prof()
         rows = [R.effective(p, self.root, level=n) for n in range(1, 6)]
@@ -73,7 +87,9 @@ class EffectiveTest(W.Base):
             vals = [r[key] for r in rows]
             self.assertEqual(vals, sorted(vals), key)
         self.assertEqual(rows[0]["risk_per_trade_frac"], 0.01)
-        self.assertEqual(rows[4]["risk_per_trade_frac"], 0.05)
+        self.assertEqual(rows[4]["risk_per_trade_frac"], 0.075)
+        # маржа сделки по уровню (указание владельца 2026-11-01): 1-2 уже базы, 3 = база (0.2), 4-5 шире, не выше потолка 0.30
+        self.assertEqual([r["margin_per_trade_frac"] for r in rows], [0.10, 0.15, p["margin_per_trade_frac"], 0.25, 0.30])
         # плечо и RR уровней 1-2 строже базы, выше базы не бывает
         for r in rows:
             self.assertLessEqual(r["max_leverage"], p["max_leverage"])
@@ -105,14 +121,14 @@ class EffectiveTest(W.Base):
     def test_base_above_ceiling_clamped_even_at_identity(self):
         p = dict(self.prof(), risk_per_trade_frac=0.2)
         e = R.effective(p, self.root, level=3)
-        self.assertEqual(e["risk_per_trade_frac"], 0.05)
+        self.assertEqual(e["risk_per_trade_frac"], 0.08)
 
     def test_total_risk_cap_only_when_stricter(self):
         p = self.prof()
         self.assertNotIn("total_open_risk_cap_frac", R.effective(p, self.root, level=3))
         self.assertNotIn("total_open_risk_cap_frac", R.effective(p, self.root, level=1))
-        self.assertEqual(R.effective(p, self.root, level=4)["total_open_risk_cap_frac"], 0.09)
-        self.assertEqual(R.effective(p, self.root, level=5)["total_open_risk_cap_frac"], 0.12)
+        self.assertEqual(R.effective(p, self.root, level=4)["total_open_risk_cap_frac"], 0.12)
+        self.assertEqual(R.effective(p, self.root, level=5)["total_open_risk_cap_frac"], 0.15)
 
     def test_min_with_agent_limits_and_exec_limits(self):
         p = R.effective(self.prof(), self.root, level=5)
@@ -120,7 +136,7 @@ class EffectiveTest(W.Base):
         self.assertEqual(q["risk_per_trade_frac"], 0.02)
         self.assertEqual(cap, 0.7)
         q2, cap2 = R.apply_agent_limits(p, {"max_risk_pct": 9.0})      # агент мягче уровня: действует уровень
-        self.assertEqual(q2["risk_per_trade_frac"], 0.05)
+        self.assertEqual(q2["risk_per_trade_frac"], 0.075)
         self.assertIsNone(cap2)
         s = R.limits_summary(self.root, agent_limits={"max_risk_pct": 2.0, "max_risk_usdt": 0.7, "max_size_mult": 0.4, "allow_add": True}, equity=30.0, level=5)
         self.assertEqual(s["risk_per_trade_frac"], 0.02)
@@ -260,7 +276,8 @@ class SetLevelTest(W.Base):
         req = [w["id"] for w in ws if w["required"]]
         self.assertIn("W_CARRY", req)
         self.assertIn("W_TRADE_LOSS", req)
-        self.assertIn("W_UNCONFIRMED", req)
+        self.assertNotIn("W_UNCONFIRMED", req)                                   # уровень 4 подтверждён владельцем 2026-11-01
+        self.assertIn("W_UNCONFIRMED", [w["id"] for w in R.level_warnings(2, self.root)])
         r = R.set_level(4, "owner", self.root, accepted=req[:-1], phrase=self.phrase(4), ack=R.ACK_PHRASE)
         self.assertFalse(r["ok"])
         self.assertTrue(any("не приняты" in e for e in r["errors"]))

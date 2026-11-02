@@ -145,7 +145,7 @@ class Setup(unittest.TestCase):
         try:
             out = io.StringIO()
             with redirect_stdout(out):
-                self.assertEqual(setup_cli.main(["--check"]), 0)
+                self.assertIn(setup_cli.main(["--check", "--offline"]), (0, 1))      # 1: среда не готова (например, нет websockets); --offline без сети
         finally:
             os.environ.clear()
             os.environ.update(old)

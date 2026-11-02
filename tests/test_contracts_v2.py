@@ -189,7 +189,7 @@ class TestFormatsConstants(unittest.TestCase):
         self.assertEqual(bus.MAX_EVENT_BYTES, 400)
         self.assertTrue(re.match(bus.RE_D_IDENT, "r_plus_1"))
         self.assertFalse(re.match(bus.RE_D_IDENT, "ignore previous instructions"))
-        self.assertEqual(set(bus.WAKE_MILESTONES), {"r_plus_1", "r_minus_05", "near_target", "target_filled"})
+        self.assertEqual(set(bus.WAKE_MILESTONES), {"r_plus_1", "r_minus_05", "near_target", "target_filled", "hold_expiring", "hold_expired"})      # hold_expired: срок вышел, таймер не закрывает (2026-11-01)
 
     def test_runtime_json_constants(self):
         self.assertEqual(set(plan_store.RUNTIME_PUBLIC_KEYS) - set(plan_store.RUNTIME_TOP_KEYS), set())
@@ -276,8 +276,11 @@ class TestDispatcher(unittest.TestCase):
             self.assertTrue(callable(getattr(importlib.import_module(mod), fn or "main", None)), g)
 
     def test_old_groups_still_registered(self):
-        for g in ("guard", "journal", "ideas", "session", "portfolio", "learning", "bybit", "dash", "paper", "tick"):
+        for g in ("guard", "journal", "ideas", "session", "portfolio", "learning", "bybit", "paper", "tick"):
             self.assertIn(g, disp.SIMPLE)
+        self.assertNotIn("dash", disp.SIMPLE)           # `./tb dash` = новый дашборд (V2); старый (dash-old) удалён
+        self.assertNotIn("dash-old", disp.SIMPLE)
+        self.assertEqual(disp.V2["dash"], disp.V2["dash2"])
         rc, _, _ = self.run_cli([])
         self.assertEqual(rc, 2)
         rc, _, _ = self.run_cli(["nonexistent_group"])

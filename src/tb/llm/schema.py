@@ -162,11 +162,13 @@ def validate(schema, value, path="$", errs=None):
     return errs
 
 
-def check_text(text, schema, max_bytes=MAX_JSON_BYTES):
-    """Текст ответа -> (obj|None, [коды])."""
+def check_text(text, schema, max_bytes=MAX_JSON_BYTES, repair=None):
+    """Текст ответа -> (obj|None, [коды]). repair(obj) -> obj применяется до проверки схемы."""
     obj, code = extract_json(text, max_bytes)
     if code:
         return None, [code]
+    if repair is not None and isinstance(obj, dict):
+        obj = repair(obj)
     errs = validate(schema, obj)
     return (obj, []) if not errs else (None, errs)
 

@@ -1,0 +1,99 @@
+<script setup lang="ts">
+import { computed, ref } from 'vue'
+import { dirTone, filterNews, importance, markState, NEWS_DIR, NEWS_TYPE, useNewsStore, weightOf, type NewsFilter, type NewsItem } from '@/entities/headline'
+import { UiChip, UiSegment } from '@/shared/ui'
+import { ageText, useNow } from '@/shared/lib'
+
+/**
+ * Лента новостей в «Рынке»: очищенные заголовки с разметкой карантинного читателя (тип, важность, направление, монеты). Важность: пометка словом перед временем («важно» от 4, «заметно» 3), у важных жирнее заголовок и очень слабый фон строки (без цветных боковых полос). Монета в разметке
+ * выбирает её на карте; клик по заголовку открывает новость боковой панелью (её держит страница). Состояние источников, читателя и календаря показывает виджет news-status над лентой. Заголовки это текст третьих лиц: показываются как текст, мозгу не передаются, ссылок нет (только домен).
+ */
+const props = defineProps<{ coin: string | null; selected: string | null }>()
+const emit = defineEmits<{ selectCoin: [sym: string]; select: [ref: string] }>()
+const store = useNewsStore()
+const now = useNow()
+
+const filter = ref<NewsFilter>('all')
+const limit = ref(15)
+const snap = computed(() => store.snapshot)
+const all = computed(() => snap.value?.items ?? [])
+const options = computed(() => [
+  { value: 'all' as NewsFilter, label: `Все${snap.value ? ' ' + all.value.length : ''}` },
+  { value: 'important' as NewsFilter, label: `Важные ${filterNews(all.value, 'important', null).length}` },
+  ...(props.coin ? [{ value: 'coin' as NewsFilter, label: `${props.coin} ${filterNews(all.value, 'coin', props.coin).length}` }] : []),
+])
+const active = computed<NewsFilter>(() => (filter.value === 'coin' && !props.coin ? 'all' : filter.value))
+const rows = computed(() => filterNews(all.value, active.value, props.coin))
+const shown = computed(() => rows.value.slice(0, limit.value))
+
+const markText = (i: NewsItem): string => ({ ok: '', struct: 'структурно (факты)', waiting: 'ждёт читателя', susp: 'подозрение: текст модели не передавался', fail: 'формат разметки не принят', raw: 'без модели' })[markState(i)]
+const typeText = (i: NewsItem): string => (i.cls?.type ? (NEWS_TYPE[i.cls.type] ?? i.cls.type) : '')
+</script>
+
+<template>
+  <section class="news" aria-label="Новости">
+    <header class="top">
+      <h2 class="title">Новости</h2>
+      <UiSegment v-model="filter" :options="options" label="Фильтр новостей" />
+    </header>
+
+    <template v-if="snap">
+      <ul v-if="shown.length" class="list">
+        <li v-for="i in shown" :key="i.ref" class="item" :class="[`w-${weightOf(importance(i))}`, { sel: selected === i.ref }]">
+          <button type="button" class="hit" :aria-pressed="selected === i.ref" @click="emit('select', i.ref)">
+            <span class="meta"><template v-if="weightOf(importance(i)) === 'high'"><b class="flag high">важно</b></template><template v-else-if="weightOf(importance(i)) === 'mid'"><b class="flag mid">заметно</b></template>{{ ageText(i.ts, now) }} · {{ i.src }}</span>
+            <span class="head">{{ i.title }}</span>
+          </button>
+          <span class="chips">
+            <template v-if="markState(i) === 'ok' && i.cls">
+              <UiChip>{{ typeText(i) }}</UiChip>
+              <UiChip :tone="importance(i) >= 4 ? 'bad' : importance(i) >= 3 ? 'warn' : 'neutral'" :title="i.cls.ir !== i.cls.imp ? `читатель дал ${i.cls.ir}, понижено правилом подтверждения` : ''">важн. {{ importance(i) }}</UiChip>
+              <span v-if="i.cls.dir" class="dir" :class="dirTone(i.cls)">{{ NEWS_DIR[i.cls.dir] ?? i.cls.dir }}</span>
+              <button v-for="s in i.cls.syms" :key="s" type="button" class="sym" @click="emit('selectCoin', s)">{{ s }}</button>
+            </template>
+            <UiChip v-else-if="markState(i) === 'susp'" tone="bad">подозрение</UiChip>
+            <span v-else class="muted">{{ markText(i) }}</span>
+          </span>
+        </li>
+      </ul>
+      <p v-else class="empty">{{ all.length ? 'В этом фильтре заголовков нет.' : 'Заголовков пока нет: их собирает служба новостей, она ещё не запущена или ничего не нашла.' }}</p>
+      <button v-if="rows.length > limit" type="button" class="more" @click="limit += 20">Показать ещё {{ Math.min(20, rows.length - limit) }}</button>
+    </template>
+    <div v-else class="skel" aria-busy="true" />
+  </section>
+</template>
+
+<style scoped>
+.news { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--space-4); min-width: 0; display: grid; gap: var(--space-3); }
+.top { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-3); }
+.title { margin: 0; font-size: 14px; font-weight: 600; margin-right: auto; }
+.muted { color: var(--muted); }
+/* заголовки сеткой по 440 px (на широком экране 2-3 колонки); разделитель снизу, нижняя линия последнего ряда срезана clip-path */
+.list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(440px, 100%), 1fr)); column-gap: var(--space-5); clip-path: inset(0 0 1px 0); }
+.item { padding: var(--space-3); border-bottom: 1px solid var(--line); }
+.item.w-high { background: color-mix(in srgb, var(--neg) 6%, transparent); }
+.item.w-mid { background: color-mix(in srgb, var(--warn) 5%, transparent); }
+.item.w-high .head { font-weight: 600; }
+.flag { font-weight: 600; margin-right: 6px; }
+.flag.high { color: var(--neg); }
+.flag.mid { color: var(--warn); }
+.hit { display: grid; gap: 2px; width: 100%; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: var(--radius-sm); }
+.hit:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.meta { font-size: 11px; color: var(--muted); }
+.head { font-size: 14px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.chips { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-top: 6px; font-size: 12px; }
+.dir { color: var(--muted); }
+.dir.up { color: var(--pos); }
+.dir.down { color: var(--neg); }
+.sym { padding: 1px 8px; border: 1px solid var(--line2); border-radius: 99px; background: none; color: var(--text); font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; }
+.sym:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.item.sel { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.empty { margin: 0; font-size: 13px; color: var(--muted); max-width: 60ch; }
+.more { justify-self: start; padding: 6px 14px; border: 1px solid var(--line2); border-radius: var(--radius-sm); background: var(--panel2); color: var(--text); font: inherit; font-size: 12px; cursor: pointer; }
+.more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.skel { height: 120px; border-radius: var(--radius-sm); background: var(--panel2); }
+@media (hover: hover) and (pointer: fine) {
+  .hit:hover .head { color: var(--accent); }
+  .sym:hover, .more:hover { border-color: var(--accent); }
+}
+</style>

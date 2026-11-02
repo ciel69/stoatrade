@@ -12,6 +12,7 @@
 Режим «только защита» (`fallback.Health.protect`): не исполняются submit_plan/amend_plan/release_plan, LLM вызывается только пока есть допустимый профиль; позиции ведёт исполнитель.
 """
 import json
+import re
 import os
 import threading
 import time
@@ -25,8 +26,16 @@ from tb.llm import budget as budget_mod, schema as schema_mod, toolloop, usage a
 from tb.llm.gate import PriorityGate
 from tb.llm.types import LLMError, Req, assistant, user
 
+FLAKY_GEN_RETRIES = 2           # повторы того же профиля при разовом сбое разбора вывода модели (локальный сервер отвечает 400 «output does not match the expected format»)
 MAX_BRIEF_CHARS = 20000
+
+
+def _flaky_generation(e):
+    """Локальный сервер (LM Studio) вернул 400, потому что модель выдала вызов инструмента не в своём формате: запрос верный, помогает повтор."""
+    low = (e.msg or "").lower()
+    return e.code == "bad_request" and ("does not match the expected" in low or "failed to parse" in low)
 MAX_EVENTS = 20
+STRUCT_WAIT_MAX_S = 240.0       # сколько ждать структуру по монете события (поток структуры подтягивает свечи обычно за минуту); дальше NO_DATA без вызова модели
 PROTECT_BLOCKED = ("submit_plan", "amend_plan", "release_plan")
 DECISION_TOOLS = {"move_stop": "stop_plan", "close": "close_plan", "partial_close": "close_plan", "cancel": "cancel_plan", "amend": "amend_plan",
                   "hold_plan": "hold_plan", "release_plan": "release_plan"}
@@ -34,7 +43,8 @@ DECISION_TOOLS = {"move_stop": "stop_plan", "close": "close_plan", "partial_clos
 
 # Режим «действие вызовом инструмента, объяснение постфактум» для position_manager (не live): модель вызывает pm_*, платформа исполняет сразу, JSON с why приходит после.
 PM_REASONS = ("INVALIDATION", "REVERSAL", "PROFIT_LOCK", "STALLED", "RISK", "SESSION_END", "DATA_GAP", "NO_ACTION", "OTHER")
-_R = {"reason": {"type": "string", "enum": list(PM_REASONS), "description": "primary reason code"}}
+_R = {"reason": {"type": "string", "enum": list(PM_REASONS), "description": "primary reason code"},
+      "why": {"type": "string", "maxLength": 200, "description": "short reason in Russian: reason | fact with a number | risk"}}
 
 
 def _spec(name, desc, props=None, req=()):
@@ -44,6 +54,7 @@ def _spec(name, desc, props=None, req=()):
 
 
 PM_TOOL_DECISION = {"pm_hold": "hold", "pm_move_stop": "move_stop", "pm_partial_close": "partial_close", "pm_close": "close", "pm_cancel": "cancel", "pm_amend": "amend",
+                    "pm_extend_hold": "amend",
                     "pm_hold_plan": "hold_plan", "pm_release_plan": "release_plan", "pm_escalate": "escalate"}
 PM_TOOL_SPECS = [
     _spec("pm_hold", "Do nothing now (stops and rules work on their own)."),
@@ -52,14 +63,42 @@ PM_TOOL_SPECS = [
     _spec("pm_close", "Close the whole position at market."),
     _spec("pm_cancel", "Cancel the entry while there is no position."),
     _spec("pm_amend", "Patch the plan (tightening, targets, ttl; never size).", {"patch": {"type": "object"}}, ("patch",)),
+    _spec("pm_extend_hold", "Extend the planned holding time (on milestone hold_expiring / hold_expired). No timer closes the position: only you, the stop or the targets; "
+                            "pm_hold = keep. minutes: the new total max_hold_min (up to 2x; without stop at breakeven at most 240 for scalp, 1440 for intraday).",
+          {"minutes": {"type": "integer", "minimum": 1, "maximum": 43200}}, ("minutes",)),
     _spec("pm_hold_plan", "Pause your own plan."),
     _spec("pm_release_plan", "Lift your own pause."),
     _spec("pm_escalate", "Hand over to the owner.", {"reason_code": {"type": "string", "enum": ["SECRET_REQUEST", "NEED_OWNER", "DATA_GAP"]}}, ("reason_code",)),
 ]
-PM_TOOL_NOTE = ("\n\nTOOL MODE (this run). Act by calling exactly ONE tool: pm_hold, pm_move_stop, pm_partial_close, pm_close, pm_cancel, pm_amend, pm_hold_plan, pm_release_plan or pm_escalate "
-                "(reason is a code from the enum; plan and rev are filled in by the platform). The tool is executed immediately. AFTER the tool result write one short JSON object "
-                "{\"why\": \"reason | fact | risk\"} with numbers from the brief: it is only the record of what you did. Do not output the pm/1 JSON. If a call is rejected with codes, "
-                "fix it with another call. After one action succeeded do not call another action tool.")
+# entry_scout инструментами (оптимизация под слабые модели): модель выбирает кандидата по номеру из brief.cands, числа (уровень, стоп, цели, горизонт, размер, зона,
+# подтверждение, тип входа) код копирует из кандидата; без сборки JSON entry/1 из 15 полей.
+ES_TTL = {"scalp": 30, "intraday": 60, "swing": 240, "position": 240}
+ES_WHY = {"why": {"type": "string", "maxLength": 200, "description": "short reason in Russian: reason | fact with a number | risk"}}
+ES_FAIL_SKIP = {"stop_wide": "wide_stop", "range_gt_stop": "wide_stop"}
+
+
+def _es_spec(name, desc, props, req):
+    p = dict(props)
+    p.update(ES_WHY)
+    return {"name": name, "description": desc, "schema": {"type": "object", "properties": p, "required": list(req) + ["why"], "additionalProperties": False}}
+
+
+ES_TOOL_SPECS = [
+    _es_spec("es_take", "Enter: take candidate n from brief.cands. The platform copies level, stop, targets, horizon, size, zone, confirmation and entry type from it.",
+             {"candidate": {"type": "integer", "minimum": 1, "maximum": 10, "description": "the n of a brief.cands row with ok=true"},
+              "setup": {"type": "string", "enum": [s for s in validate.SETUPS if s != "none"], "description": "setup that fits (a momentum_chase row keeps its own)"},
+              "thesis": {"type": "string", "maxLength": 280, "description": "one sentence in Russian with the level and a number"}}, ("candidate", "setup")),
+    _es_spec("es_skip", "No entry.", {"code": {"type": "string", "enum": list(validate.ENTRY_SKIP_CODES)}}, ("code",)),
+    _es_spec("es_watch", "No entry now, but wait for the level of candidate n (an idea for 4 h: the scanner wakes you when the price reaches it).",
+             {"candidate": {"type": "integer", "minimum": 1, "maximum": 10}}, ("candidate",)),
+]
+ES_TOOL_NOTE = ("\n\nTOOL MODE (this run). Act by calling exactly ONE tool: es_take (enter: the n of a brief.cands row with ok=true), es_skip (no entry, with a code) or "
+                "es_watch (wait for the level of candidate n). Do not compute or write numbers and do not write the entry/1 JSON: the platform takes them from the candidate. "
+                "No ok candidate fits: es_skip or es_watch. If a call is rejected with codes, fix it with another call; after one action succeeded stop.")
+
+PM_TOOL_NOTE = ("\n\nTOOL MODE (this run). Act by calling exactly ONE tool: pm_hold, pm_move_stop, pm_partial_close, pm_close, pm_cancel, pm_amend, pm_extend_hold, pm_hold_plan, pm_release_plan or pm_escalate "
+                "(reason is a code from the enum, why is a short note with numbers from the brief; plan and rev are filled in by the platform). The tool is executed immediately and "
+                "the run ends. Do not output JSON. If a call is rejected with codes, fix it with another call.")
 
 
 class Deferred(Exception):
@@ -416,8 +455,11 @@ class Runner(object):
             out.update(outcome="no_action", code="DOSSIER")
             self._journal(job, role, agent_id, None, "skip", "DOSSIER", str(e)[:100], meta, None, meter, assign)
             return out
-        if role.output_schema == "entry/1" and ctx.get("struct_missing") and int(job.get("attempts") or 1) < int(self.conf.runtime.get("max_attempts") or 3):
-            raise Deferred("STRUCT", 45.0)                   # структуры по монете события ещё нет (свечи подтягиваются): ждём, а не пропускаем; последняя попытка идёт к модели
+        if role.output_schema == "entry/1" and ctx.get("struct_missing"):
+            age = self.clock() - float(job.get("ts_first") or self.clock())
+            if age < STRUCT_WAIT_MAX_S:
+                raise Deferred("STRUCT", 45.0)               # структуры по монете события ещё нет (свечи подтягиваются): ждём, а не пропускаем
+            # структура так и не пришла: модель НЕ зовём (UAI 2026-11-01: без данных она выдумала уровень); ниже entry_precheck даст NO_DATA
         if role.output_schema == "entry/1":                  # детерминированные отказы по данным досье ДО вызова модели: токены не тратятся
             pre = validate.entry_precheck(ctx)
             if pre:
@@ -433,7 +475,8 @@ class Runner(object):
                     self._no_action(role, job, agent_id, meta, llm, meter, assign)
                 return out
             if llm.get("executed"):                   # действие уже исполнено вызовом инструмента: остаётся записать объяснение постфактум
-                self._journal_why(job, role, agent_id, llm, meta, assign, meter)
+                if role.output_schema != "entry/1":       # entry_scout: why пришёл аргументом инструмента и уже в записи решения
+                    self._journal_why(job, role, agent_id, llm, meta, assign, meter)
                 res = llm["result"]
                 out.update(outcome=res["outcome"], code=res["code"], profile=llm["profile"], decision=llm["obj"].get("decision"))
                 return out
@@ -500,6 +543,8 @@ class Runner(object):
             ctx.update({k: v for k, v in validate.pm_context(b, job.get("plan"), info).items() if k != "plan"})
         elif role.output_schema == "entry/1":
             ctx.update(validate.entry_context(b, info))
+            ctx["max_data_age_s"] = (getattr(self.conf, "runtime", None) or {}).get("max_data_age_s")      # порог STALE_DATA (config/brain.json runtime; нет -> validate.MAX_DATA_AGE_S)
+            ctx["cands"] = [c for c in (b.get("cands") or []) if isinstance(c, dict)]        # es_take/es_watch берут числа отсюда (то же, что видела модель)
         bb = {k: v for k, v in b.items() if k not in ("ok", "status", "errors", "warnings")}
         braw = common.dumps(bb)
         if len(braw) > MAX_BRIEF_CHARS:
@@ -582,7 +627,14 @@ class Runner(object):
             m = dict(meta, profile=pid, fallback_from=fb_from)
             try:
                 with self._gate(p.provider).slot(self._job_prio(ctx), timeout=role.timeout_s * 2):      # очередь к провайдеру по срочности: позиция раньше поиска входа
-                    r = self._call_profile(role, p, pid, text, m, meter, ctx)
+                    for attempt in range(FLAKY_GEN_RETRIES + 1):
+                        try:
+                            r = self._call_profile(role, p, pid, text, m, meter, ctx)
+                            break
+                        except LLMError as e:
+                            if attempt < FLAKY_GEN_RETRIES and _flaky_generation(e):       # разовый сбой разбора вывода модели: повтор того же профиля, а не отказ профиля
+                                continue
+                            raise
             except JobBudget:
                 return {"obj": None, "code": "JOB_BUDGET", "profile": pid, "fallback_from": fb_from}
             except LLMError as e:
@@ -638,6 +690,8 @@ class Runner(object):
             return self._tools_mode(role, client, req, meta, deadline, sem, ctx)
         if role.output_schema == "pm/1" and fl["tools"] and ctx.get("_run") and swap.day_mode(self.root) != "live":
             return self._pm_tool_mode(role, client, req, meta, deadline, sem, ctx)
+        if role.output_schema == "entry/1" and fl["tools"] and ctx.get("_run"):
+            return self._entry_tool_mode(role, client, req, meta, deadline, sem, ctx)
         return self._json_loop(role, client, req, sem, deadline)
 
     def _json_loop(self, role, client, req, sem, deadline, msgs=None, first_attempt=0):
@@ -667,12 +721,113 @@ class Runner(object):
             msgs = msgs + [assistant((resp.text or "(пусто)")[:400]), user(schema_mod.hint(errs))]
         return {"obj": None, "code": "BAD_FORMAT", "errors": errs}
 
+    def _entry_obj(self, name, a, ctx):
+        """Вызов es_* -> (ответ entry/1, ошибки). Числа берутся из кандидата brief.cands по номеру; модель даёт только выбор, сетап, тезис и why."""
+        cands = ctx.get("cands") or []
+        why = validate.redact(str(a.get("why") or "").strip(), 200) or name
+        base = {"schema": "tb.entry/1", "event_seq": ctx.get("event_seq") or 0, "why": why, "conf": 0.6}
+        if name == "es_skip":
+            return dict(base, decision="skip", skip_code=a.get("code")), []
+        try:
+            n = int(a.get("candidate"))
+        except (TypeError, ValueError):
+            return None, ["RANGE:candidate"]
+        if not 1 <= n <= len(cands):
+            return None, ["NO_CANDIDATE:%d_OF:%d" % (n, len(cands))]
+        c = cands[n - 1]
+        if name == "es_watch":
+            fail = str(c.get("fail") or "")
+            code = ES_FAIL_SKIP.get(fail.split(":")[0], "rr_low" if fail.startswith("rr_low") else "no_confirm")
+            setup = c.get("setup") if c.get("setup") in validate.SETUPS else "none"
+            return dict(base, decision="skip", skip_code=code, watch={"side": c["side"], "level": c["level"], "stop": c["stop"], "tp": c["tp"][0], "setup": setup}), []
+        if c.get("fail"):
+            return None, ["CANDIDATE_FAILED:%s" % c["fail"]]                     # негодный кандидат: взять другой ok или es_watch
+        setup = c.get("setup") or a.get("setup")
+        if setup not in validate.SETUPS or setup == "none":
+            return None, ["SETUP_REQUIRED"]
+        hz = c.get("horizon")
+        hyp = re.sub(r"[^a-z0-9._-]+", "-", str(a.get("hypothesis") or setup).lower()).strip("-")[:40] or setup
+        thesis = validate.redact(str(a.get("thesis") or "").strip(), 280)
+        if len(thesis) < 10:
+            thesis = "%s %s от %s, стоп %s, цель %s" % (setup, c["side"], c["level"], c["stop"], c["tp"][0])
+        obj = dict(base, decision="propose", sym=ctx.get("sym"), side=c["side"], horizon=hz, level=c["level"], stop=c["stop"], tp=list(c["tp"]), setup=setup,
+                   hypothesis=hyp, ttl_min=ES_TTL.get(hz, 60), confirm=c.get("confirm") or "candle", thesis=thesis)
+        for k in ("zone", "size_mult", "tags", "entry_type"):
+            if c.get(k) is not None:
+                obj[k] = c[k]
+        return obj, []
+
+    def _entry_tool_mode(self, role, client, req, meta, deadline, sem, ctx):
+        """entry_scout: действие одним вызовом es_take / es_skip / es_watch, числа из кандидата; исполняется сразу (те же проверки validate и шлюз).
+        Без вызова инструмента ответ в старом формате entry/1 принимается как раньше. -> тот же словарь, что _call_profile, плюс executed/result."""
+        run = ctx["_run"]
+        state = {"done": None, "rej": []}
+        llm_info = {"profile": meta.get("profile"), "fallback_from": meta.get("fallback_from")}
+
+        def run_tool(name, a):
+            if name not in ("es_take", "es_skip", "es_watch"):
+                return {"ok": False, "error": "UNKNOWN_TOOL"}
+            if state["done"] is not None:
+                return {"ok": False, "error": "ALREADY_ACTED"}
+            obj, errs = self._entry_obj(name, a if isinstance(a, dict) else {}, ctx)
+            if not errs:
+                errs = schema_mod.validate(role.schema, obj) or sem(obj)
+            if errs:
+                state["rej"].append("%s:%s" % (name, errs[0]))
+                return {"ok": False, "errors": list(errs)[:6]}
+            res = self._execute(role, obj, run["job"], run["agent"], dict(meta), ctx, llm_info, run["meter"])
+            state["done"] = {"obj": obj, "result": res, "tool": name}
+            return {"ok": res["outcome"] in ("decision", "hold"), "outcome": res["outcome"], "code": res["code"]}
+        base = req
+        req = req.copy(system=(req.system or "") + ES_TOOL_NOTE, tools=[dict(t) for t in ES_TOOL_SPECS], tool_choice="auto")
+        lr = self._run_tools_once(client, req, run_tool, state, max_rounds=max(3, role.max_rounds),
+                                  should_stop=lambda: state["done"] is not None or self.clock() > deadline or self.stop_event.is_set())
+        if state["done"] is not None:
+            d = state["done"]
+            return {"obj": d["obj"], "code": "OK", "errors": [], "executed": True, "result": d["result"], "tool": d["tool"], "reason": None, "why_text": "", "rounds": lr.rounds}
+        if lr.status == "truncated":                       # текст обрезан лимитом без вызова инструмента: тот же вопрос с удвоенным лимитом, без подсказки по формату
+            note = getattr(client, "note_format_error", None)
+            if note and lr.resp is not None:
+                note(lr.resp, ["TRUNCATED"])
+            return self._json_loop(role, client, base.copy(max_tokens=min(int(base.max_tokens) * 2, TRUNC_MAX_TOKENS)), sem, deadline, first_attempt=1)
+        if lr.status not in ("ok",):
+            code = {"loop": "LOOP", "max_rounds": "MAX_ROUNDS", "empty": "EMPTY", "truncated": "TRUNCATED", "cancelled": "TIMEOUT"}.get(lr.status, "BAD_FORMAT")
+            return {"obj": None, "code": code, "errors": lr.errors or state["rej"][-4:]}
+        obj, errs = schema_mod.check_text(lr.text, role.schema)          # модель ответила старым JSON без вызова инструмента
+        if lr.resp is not None and lr.resp.finish == "length" and errs and errs[0] != "TRUNCATED":
+            errs = ["TRUNCATED"] + errs
+        if not errs:
+            errs = sem(obj)
+        if not errs:
+            return {"obj": obj, "code": "OK", "errors": [], "rounds": lr.rounds, "attempts": 1}
+        note = getattr(client, "note_format_error", None)
+        if note and lr.resp is not None:
+            note(lr.resp, errs)
+        if errs[0] == "TRUNCATED":
+            base = base.copy(max_tokens=min(int(base.max_tokens) * 2, TRUNC_MAX_TOKENS))
+            return self._json_loop(role, client, base, sem, deadline, first_attempt=1)
+        msgs = list(base.messages) + [assistant((lr.text or "(пусто)")[:400]), user(schema_mod.hint(errs))]
+        return self._json_loop(role, client, base, sem, deadline, msgs=msgs, first_attempt=1)
+
+    def _run_tools_once(self, client, req, run_tool, state, **kw):
+        """toolloop.run, после которого действие не повторяется: если инструмент уже исполнил действие, а следующий раунд модели упал (LM Studio 400
+        «output does not match the expected format», сеть), результат действия принимается, а не идёт повтором задания или запасным профилем
+        (иначе тот же partial_close или вход исполнился бы второй раз). -> LoopResult."""
+        try:
+            return toolloop.run(client, req, run_tool, **kw)
+        except LLMError:
+            if state.get("done") is None:
+                raise
+            lr = toolloop.LoopResult()
+            lr.status = "ok"
+            return lr
+
     def _pm_tool_mode(self, role, client, req, meta, deadline, sem, ctx):
         """position_manager: действие вызовом pm_* (исполняется сразу через те же проверки и шлюз), затем модель пишет короткий JSON с why: он только запись.
         Без вызова инструмента ответ в старом формате pm/1 принимается как раньше. -> тот же словарь, что _call_profile, плюс executed/result/why_text."""
         run = ctx["_run"]
         plan = ctx.get("plan") or run["job"].get("plan")
-        state = {"done": None, "tool": None}
+        state = {"done": None, "tool": None, "rej": []}
         llm_info = {"profile": meta.get("profile"), "fallback_from": meta.get("fallback_from")}
         protect = self.health.protect_on or bool(ctx.get("protect"))
 
@@ -688,9 +843,16 @@ class Runner(object):
                 try:
                     args["to"] = "be" if to.lower() == "be" else float(to)
                 except ValueError:
+                    state["rej"].append("%s:RANGE:args.to" % name)
                     return {"ok": False, "errors": ["RANGE:args.to"]}
             elif d == "partial_close":
                 args["frac"] = a.get("frac")
+            elif name == "pm_extend_hold":
+                try:
+                    args["patch"] = {"lifecycle": {"max_hold_min": int(a.get("minutes"))}}      # продление срока удержания: правка плана, границы проверяет шлюз (E_HOLD_EXTEND)
+                except (TypeError, ValueError):
+                    state["rej"].append("%s:RANGE:args.minutes" % name)
+                    return {"ok": False, "errors": ["RANGE:args.minutes"]}
             elif d == "amend":
                 args["patch"] = a.get("patch")
             elif d == "escalate":
@@ -698,23 +860,26 @@ class Runner(object):
             obj = {"schema": "tb.pm/1", "event_seq": ctx["event_seq"], "plan": plan, "rev": ctx.get("brief_rev") if ctx.get("brief_rev") is not None else 1, "decision": d,
                    "args": args, "why": "%s: %s" % (name, a.get("reason") or "OTHER"), "conf": 0.7, "next": "event"}
             errs = schema_mod.validate(role.schema, obj) or sem(obj)
+            if not errs and protect and DECISION_TOOLS.get(d) in PROTECT_BLOCKED:
+                errs = ["PROTECT_ONLY"]
             if errs:
+                state["rej"].append("%s:%s" % (name, errs[0]))
                 return {"ok": False, "errors": list(errs)[:6]}
-            if protect and DECISION_TOOLS.get(d) in PROTECT_BLOCKED:
-                return {"ok": False, "errors": ["PROTECT_ONLY"]}
             res = self._execute(role, obj, run["job"], run["agent"], dict(meta), ctx, llm_info, run["meter"])
-            state["done"] = {"decision": d, "obj": obj, "result": res, "tool": name, "reason": a.get("reason")}
+            state["done"] = {"decision": d, "obj": obj, "result": res, "tool": name, "reason": a.get("reason"), "why": a.get("why")}
             return {"ok": res["outcome"] in ("decision", "hold"), "outcome": res["outcome"], "code": res["code"]}
         tl = [dict(t) for t in PM_TOOL_SPECS]
         base = req
         req = req.copy(system=(req.system or "") + PM_TOOL_NOTE, tools=tl, tool_choice="auto")
-        lr = toolloop.run(client, req, run_tool, max_rounds=max(3, role.max_rounds), schema=None, should_stop=lambda: self.clock() > deadline or self.stop_event.is_set())
-        if state["done"] is not None:
+        lr = self._run_tools_once(client, req, run_tool, state, max_rounds=max(3, role.max_rounds), schema=None,
+                                  should_stop=lambda: state["done"] is not None or self.clock() > deadline or self.stop_event.is_set())
+        if state["done"] is not None:          # действие исполнено: объяснение пришло аргументом why, второго раунда нет
             d = state["done"]
-            return {"obj": d["obj"], "code": "OK", "errors": [], "executed": True, "result": d["result"], "tool": d["tool"], "reason": d["reason"], "why_text": lr.text or "", "rounds": lr.rounds}
+            why = d.get("why") if isinstance(d.get("why"), str) and d["why"].strip() else (lr.text or "")
+            return {"obj": d["obj"], "code": "OK", "errors": [], "executed": True, "result": d["result"], "tool": d["tool"], "reason": d["reason"], "why_text": why, "rounds": lr.rounds}
         if lr.status not in ("ok",):
             code = {"loop": "LOOP", "max_rounds": "MAX_ROUNDS", "empty": "EMPTY", "truncated": "TRUNCATED", "cancelled": "TIMEOUT"}.get(lr.status, "BAD_FORMAT")
-            return {"obj": None, "code": code, "errors": lr.errors}
+            return {"obj": None, "code": code, "errors": lr.errors or state["rej"][-4:]}
         obj, errs = schema_mod.check_text(lr.text, role.schema)          # модель ответила старым JSON без вызова инструмента
         if lr.resp is not None and lr.resp.finish == "length" and errs and errs[0] != "TRUNCATED":
             errs = ["TRUNCATED"] + errs
@@ -750,8 +915,9 @@ class Runner(object):
             if protect and name in PROTECT_BLOCKED:
                 return {"ok": False, "errors": [{"code": "PROTECT_ONLY", "msg": "режим только защита"}]}
             return self.gateway.call(agent, name, args, meta=meta)
+        fix = validate.REPAIRS.get(role.output_schema)
         lr = toolloop.run(client, req, run_tool, max_rounds=role.max_rounds, schema=role.schema, format_retries=role.retries_format,
-                          should_stop=lambda: self.clock() > deadline or self.stop_event.is_set(), check=sem)
+                          should_stop=lambda: self.clock() > deadline or self.stop_event.is_set(), check=sem, repair=(lambda o: fix(o, ctx)) if fix else None)
         if lr.status != "ok":
             code = {"format": "BAD_FORMAT", "loop": "LOOP", "max_rounds": "MAX_ROUNDS", "empty": "EMPTY", "truncated": "TRUNCATED", "cancelled": "TIMEOUT"}.get(lr.status, "BAD_FORMAT")
             return {"obj": None, "code": code, "errors": lr.errors}
@@ -807,12 +973,22 @@ class Runner(object):
         self._journal(job, role, agent_id, obj, "note" if ok is not False else "skip", code, why, meta, llm, meter, assign)
         return {"outcome": "decision" if ok is not False else "no_action", "code": code}
 
-    def _entry_block(self, agent_id, ctx):
-        """Жёсткие запреты entry_scout в коде (не зависят от ответа модели) -> код блокировки или None. NOT_PAPER: режим дня/платформы не paper, исполнитель не paper
-        или у агента команды есть право не только paper; PROTECT_ONLY: мозг в режиме только защита; KILL: активен KILL."""
+    def _entry_mode(self, agent_id, ctx):
+        """Режим входа entry_scout -> "paper"|"testnet"|"live" или None (вход запрещён). Режим задаёт день платформы (state/control/platform.json);
+        он должен быть торговым, входить в modes агента (agents.json) и совпадать с режимом исполнителя из досье. По умолчанию у агента api только paper:
+        live возможен лишь когда владелец добавил "live" в modes и включил торговый флаг дня (его проверяет шлюз: E_TRADING_*). Правила входа одинаковы."""
         ctx = ctx or {}
-        modes = (((self.agents.get(agent_id) or {}).get("limits") or {}).get("modes"))
-        if modes != ["paper"] or swap.day_mode(self.root) != "paper" or ctx.get("exec_mode") not in (None, "paper"):
+        modes = (((self.agents.get(agent_id) or {}).get("limits") or {}).get("modes")) or []
+        dm = swap.day_mode(self.root)
+        if dm not in entryplan.MODES or dm not in modes or ctx.get("exec_mode") not in (None, dm):
+            return None
+        return dm
+
+    def _entry_block(self, agent_id, ctx):
+        """Жёсткие запреты entry_scout в коде (не зависят от ответа модели) -> код блокировки или None. NOT_PAPER: режим дня не разрешён агенту (день не торговый,
+        режима нет в modes агента или исполнитель в другом режиме); PROTECT_ONLY: мозг в режиме только защита; KILL: активен KILL."""
+        ctx = ctx or {}
+        if self._entry_mode(agent_id, ctx) is None:
             return "NOT_PAPER"
         if self.health.protect_on or ctx.get("protect"):
             return "PROTECT_ONLY"
@@ -855,14 +1031,17 @@ class Runner(object):
                     return None
             note = "%s | пропуск %s" % (why, obj.get("skip_code") or "other")
             rec = ideas.add_idea(sym, w["side"], note[:300], level=w["level"], stop=w["stop"], tp=w["tp"], tag=w.get("setup") if w.get("setup") != "none" else None,
-                                 status="watching", src="entry_scout", root=self.root, now=self.clock(), ttl_h=self.WATCH_TTL_H, mode="paper")
+                                 status="watching", src="entry_scout", root=self.root, now=self.clock(), ttl_h=self.WATCH_TTL_H, mode=ctx.get("mode") or "paper")
             return rec["id"]
         except Exception:
             return None
 
     def _execute_entry(self, role, obj, job, agent_id, meta, ctx, llm, meter, assign):
-        """entry/1: skip -> запись; propose -> план tb.plan/1 (режим paper жёстко) через submit_plan шлюза. Размер/плечо считает исполнитель (guard), Gate отклонит лишнее."""
+        """entry/1: skip -> запись; propose -> план tb.plan/1 (режим ставит код: день платформы в границах modes агента) через submit_plan шлюза.
+        Размер/плечо считает исполнитель (guard), Gate отклонит лишнее, live дополнительно требует торгового флага дня (шлюз)."""
         why = validate.redact(obj["why"], 200)
+        mode = self._entry_mode(agent_id, ctx)
+        ctx = dict(ctx, mode=mode or "paper")
         if obj["decision"] == "skip":
             iid = self._watch_idea(obj, job, ctx, why)
             self._journal(job, role, agent_id, obj, "note", "SKIP", why + (" | идея %s" % iid if iid else ""), meta, llm, meter, assign)

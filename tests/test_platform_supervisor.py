@@ -168,6 +168,22 @@ class EnvTest(unittest.TestCase):
         self.assertEqual(S.service_cmd("scan", "paper", False, cfg, py="py"), ["py", "-m", "tb.platform.scansvc", "run"])
         self.assertNotIn("--profile", S.service_cmd("dispatch", "paper", False, cfg, py="py"))
 
+    def test_dash_is_new_dashboard_and_old_one_is_gone(self):
+        """`dash` = новый дашборд на 8765 (команда группы `dash` диспетчера -> tb.dash2); старый (`dash-old`, 8768) удалён 2026-11-02."""
+        cfg = S.load_cfg(None)
+        self.assertEqual(S.service_cmd("dash", "paper", False, cfg, py="py"), ["py", "-m", "tb.launcher", "dash", "--port", "8765"])
+        self.assertEqual(S.link_of("dash", cfg), "http://127.0.0.1:8765/")
+        self.assertNotIn("dash-old", S.ORDER)
+        self.assertNotIn("dash-old", cfg["svc"])
+        with self.assertRaises(S.ConfigError):
+            S.parse_services("dash-old,dash,exec")
+        self.assertEqual(S.stop_order(["exec", "dash"]), ["dash", "exec"])
+        from tb import __main__ as disp
+        self.assertEqual(disp.V2["dash"], "tb.dash2.server")
+        self.assertNotIn("dash-old", disp.SIMPLE)
+        from tb.dash2 import server as d2
+        self.assertEqual(d2.DEFAULT_PORT, cfg["svc"]["dash"]["port"])
+
     def test_service_selection(self):
         self.assertEqual(S.parse_services("dash,exec,scan"), ["exec", "scan", "dash"])
         with self.assertRaises(S.ConfigError):

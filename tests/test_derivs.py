@@ -61,7 +61,7 @@ class HeatAndBus(unittest.TestCase):
         rows = [row("A", turn_24h_musd=10.0), row("B", turn_24h_musd=500.0), row("C", turn_24h_musd=50.0, tradable=False)]
         h = H.build_heat(rows, "mainnet", NOW, n=2)
         self.assertEqual([r["sym"] for r in h["rows"]], ["B", "C"])
-        self.assertEqual(h["cols"], list(H.HEAT_COLS))
+        self.assertEqual(h["cols"], list(H.HEAT_COLS + H.HEAT_XCOLS))
         self.assertIn("oi_chg_15m_pct", h["rows"][0])
         self.assertFalse(h["rows"][1]["tradable"])
 

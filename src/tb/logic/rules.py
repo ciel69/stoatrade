@@ -118,6 +118,42 @@ def r_now(rt, price):
     return C.r_multiple(p, price) if p else None
 
 
+def chase_tolerance_bps(bps, when, view, px, limits):
+    """Допуск входа вдогонку (б.п.): не меньше базового, не меньше entry.chase_atr_frac ATR(5м) монеты (15 б.п. для альта с ATR 0.5-1% меньше шума)
+    и для входа зоной (price_in_zone: momentum_chase и вход без подтверждения) не меньше половины ширины зоны."""
+    out = bps
+    frac = _f(_lim(limits, "entry", "chase_atr_frac", 0.0)) or 0.0
+    book = getattr(view, "book", None)
+    if frac > 0 and px and book is not None:
+        try:
+            a5 = _f(book.atr(5))
+        except Exception:
+            a5 = None
+        if a5:
+            out = max(out, frac * a5 / px * 1e4)
+    if isinstance(when, dict) and when.get("kind") == "price_in_zone":
+        lo, hi = _f(when.get("low")), _f(when.get("high"))
+        if lo and hi and hi > lo:
+            out = max(out, (hi - lo) / 2.0 / ((hi + lo) / 2.0) * 1e4)
+    return out
+
+
+def chase_rr_ok(plan, px, side, limits):
+    """Цена ушла дальше допуска, но сделка всё ещё выгодна: цена не за стопом, первая цель не достигнута, RR от текущей цены по средней цели
+    после издержек круга не ниже entry.chase_rr_floor -> входить без ожидания отката. Нет порога (0) -> только допуск."""
+    need = _f(_lim(limits, "entry", "chase_rr_floor", 0.0)) or 0.0
+    stop = _f((plan.get("stop") or {}).get("price"))
+    tps = [_f(t.get("price")) for t in plan.get("targets") or [] if isinstance(t, dict) and _f(t.get("price"))]
+    if need <= 0 or not stop or not tps or not px:
+        return False
+    risk = side * (px - stop)
+    if risk <= 0 or side * (tps[0] - px) <= 0:
+        return False
+    reward = side * (sum(tps) / len(tps) - px)
+    cost = float((limits or {}).get("round_trip_fee_bps", DEFAULT_BE_ROUND_TRIP_BPS)) / 1e4 * px      # издержки круга в цене
+    return (reward - cost) / (risk + cost) >= need - _EPS
+
+
 def _first_level(cond):
     """Первый встретившийся уровень в дереве условия (опорная цена для chase)."""
     if not isinstance(cond, dict):
@@ -188,9 +224,9 @@ def evaluate_entry(plan, rt, view, now, limits):
             ref = _f(entry.get("ref_price")) or _f(ent.get("ref_px")) or _first_level(when)
             cap = float(_lim(limits, "entry", "max_chase_bps", 15))
             mine = _f((entry.get("valid") or {}).get("max_chase_bps"))
-            bps = min(cap, mine) if mine is not None else cap
+            bps = chase_tolerance_bps(min(cap, mine) if mine is not None else cap, when, view, px, limits)
             side = _side(plan)
-            if ref and ref > 0 and side is not None and side * (px - ref) / ref * 1e4 > bps + _EPS:
+            if ref and ref > 0 and side is not None and side * (px - ref) / ref * 1e4 > bps + _EPS and not chase_rr_ok(plan, px, side, limits):
                 blocked = "CHASE"
     res["blocked"] = blocked
     res["fire"] = blocked is None
@@ -268,10 +304,8 @@ def evaluate_lifecycle(plan, rt, view, now, limits):
             return [_act("close", "LIFECYCLE:INVALIDATION", frac=1.0, reason="invalidation")]
         if lc.get("flatten_at_session_end") and session_end is not None and now >= session_end - lead:
             return [_act("close", "LIFECYCLE:SESSION_END", frac=1.0, reason="session_end")]
-        mh = _f(lc.get("max_hold_min"))
-        ent_ts = _f(((rt or {}).get("ts") or {}).get("entered"))
-        if mh and ent_ts is not None and now - ent_ts >= mh * 60.0 - _EPS:
-            return [_act("close", "LIFECYCLE:MAX_HOLD", frac=1.0, reason="timeout")]
+        # max_hold_min позицию НЕ закрывает (указание владельца 2026-11-01: выход только по стопу, целям или решению мозга; BTC 01.11 закрылся таймером
+        # после pm_hold и pm_escalate). Срок даёт вехи hold_expiring / hold_expired (_events): мозг решает закрыть, продлить или держать.
     return []
 
 
@@ -287,6 +321,27 @@ def _be_offset_bps(rt, limits):
             notional += q * px
     base = 2.0 * fee / notional * 1e4 if notional > 0 and fee > 0 else float((limits or {}).get("round_trip_fee_bps", DEFAULT_BE_ROUND_TRIP_BPS))
     return base + BE_EXTRA_BPS
+
+
+PROFIT_MIN_R = 0.2           # стоп, перенесённый в прибыль, гарантирует не меньше 0.2R чистыми (auto_protect.min_profit_r)
+STOP_SLIP_BPS = 5.0          # проскальзывание рыночного исполнения стопа (auto_protect.stop_slip_bps)
+
+
+def profit_floor(rt, limits, s):
+    """Пол переноса стопа в прибыль: вход + издержки круга + проскальзывание стопа + min_profit_r R. -> цена или None.
+    Указание владельца 2026-11-01: безубыток только в плюс (выше безубытка), иначе ждать с исходным стопом
+    (EVAA, LIT, BTC закрылись по «безубытку» в минус: комиссии и проскальзывание больше зафиксированного хода).
+    Без секции auto_protect в limits (тесты, старые конфиги) пола нет."""
+    ap = (limits or {}).get("auto_protect")
+    pos = _pos(rt) or {}
+    avg = _f(pos.get("avg"))
+    if not isinstance(ap, dict) or not avg:
+        return None
+    ru = _f(pos.get("r_unit")) or abs(avg - (_f(pos.get("initial_stop")) or avg))
+    slip = _f(ap.get("stop_slip_bps"))
+    mr = _f(ap.get("min_profit_r"))
+    bps = (_be_offset_bps(rt, limits) - BE_EXTRA_BPS) + (STOP_SLIP_BPS if slip is None else slip)
+    return avg * (1 + s * bps / 1e4) + s * (PROFIT_MIN_R if mr is None else mr) * (ru or 0.0)
 
 
 def trail_candidate(rule, plan, rt, view):
@@ -388,7 +443,9 @@ def _mode_of(do):
 
 def _auto_rules(limits):
     """Правила автозащиты прибыли (exec_limits.auto_protect), действуют у каждой позиции независимо от plan.manage: безубыток с комиссиями при be_r,
-    затем стоп удерживает trail_lock_frac максимальной прибыли после trail_activate_r. Без секции в limits (тесты, старые конфиги) пусто."""
+    затем стоп удерживает trail_lock_frac максимальной прибыли после trail_activate_r. Без секции в limits (тесты, старые конфиги) пусто.
+    Контрфакт 2026-11-01 по минутным свечам (31 paper-сделка): безубыток при 0.7R лучше, чем при 1.0R или после первой цели (ZAMA, LIT, SOPH после
+    безубытка вернулись к стопу); порог не поднимать без новой выборки."""
     ap = (limits or {}).get("auto_protect")
     if not isinstance(ap, dict) or not ap.get("enabled"):
         return []
@@ -497,6 +554,15 @@ def evaluate_manage(plan, rt, view, now, limits):
             if to is None or to <= 0:
                 skip(rid, "NO_DATA")
                 continue
+            if (act == "move_stop" and do.get("to") == "breakeven") or (act == "trail" and do.get("mode") == "mfe_lock"):
+                fl = profit_floor(rt, limits, s)
+                if fl is not None:
+                    if act == "move_stop":
+                        to = max(to, fl) if s == 1 else min(to, fl)             # безубыток не ниже пола прибыли
+                        if s * (last - to) < last * gap:
+                            continue                                              # до пола цена ещё не дошла: ждём с прежним стопом, без записи
+                    elif s * (to - fl) < 0:
+                        continue                                                  # трейл ниже пола прибыли стоп не двигает
             if act == "trail":
                 to = min(to, last * (1 - gap)) if s == 1 else max(to, last * (1 + gap))   # не ближе зазора к цене
             elif s * (last - to) < last * gap:
@@ -592,6 +658,11 @@ def _fmt_r(x):
     return ("%g" % abs(x)).replace(".", "_")
 
 
+HOLD_WAKE_FRAC = 0.2          # будить мозг за 20% срока удержания до MAX_HOLD (scalp 60 мин: за 12 мин), не раньше 30 и не позже 5 мин до срока
+HOLD_WAKE_MIN_S = 300.0
+HOLD_WAKE_MAX_S = 1800.0
+
+
 def _events(plan, rt, view, now, limits, pos):
     """-> (events, milestones_patch). Вехи один раз: r_plus_N / r_minus_N (events.wake_r), near_target:<id> (events.near_target_frac)."""
     done = (((rt or {}).get("counters") or {}).get("milestones")) or {}
@@ -607,6 +678,24 @@ def _events(plan, rt, view, now, limits, pos):
             if name not in done and ((thr > 0 and r >= thr - _EPS) or (thr < 0 and r <= thr + _EPS)):
                 ms[name] = now
                 events.append({"name": name, "r": round(r, 4), "px": last, "ts": now})
+    lc = (plan or {}).get("lifecycle") if isinstance((plan or {}).get("lifecycle"), dict) else {}
+    mh, ent = _f(lc.get("max_hold_min")), _f(((rt or {}).get("ts") or {}).get("entered"))
+    key = "hold_expiring:%d" % int(mh) if mh else None          # ключ со сроком: после продления будильник сработает снова перед новым сроком
+    if mh and ent is not None and key not in done:
+        lead = min(HOLD_WAKE_MAX_S, max(HOLD_WAKE_MIN_S, HOLD_WAKE_FRAC * mh * 60.0))
+        if now >= ent + mh * 60.0 - lead - _EPS:
+            ms[key] = now
+            ev = {"name": "hold_expiring", "hold": int(mh), "px": last, "ts": now}
+            if r is not None:
+                ev["r"] = round(r, 4)
+            events.append(ev)
+    key2 = "hold_expired:%d" % int(mh) if mh else None          # срок вышел: таймер позицию не закрывает (2026-11-01), мозг решает закрыть/продлить/держать
+    if mh and ent is not None and key2 not in done and now >= ent + mh * 60.0 - _EPS:
+        ms[key2] = now
+        ev = {"name": "hold_expired", "hold": int(mh), "px": last, "ts": now}
+        if r is not None:
+            ev["r"] = round(r, 4)
+        events.append(ev)
     frac = _f(_lim(limits, "events", "near_target_frac", 0.8))
     avg = _f(pos.get("avg"))
     if last and avg and frac:

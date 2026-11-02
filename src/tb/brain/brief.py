@@ -20,6 +20,7 @@ import sys
 import time
 
 from tb import paths
+from tb.brain import cands as cands_mod
 from tb.brain import common
 from tb.core import blackout
 from tb.core import bus
@@ -27,6 +28,8 @@ from tb.core import exec_cfg
 from tb.core import ideas as ideas_core
 from tb.core import portfolio
 from tb.core import plan_schema
+from tb.core import tradectx
+from tb.core.stops import loss_stop
 
 DEFAULT_BUDGET = 2500
 EVENT_BUDGET = 900
@@ -51,7 +54,7 @@ _LEVEL_NUMS = ("px", "atr_5m", "vol_med_5m")
 _LEVEL_ALIAS = {"px": "price", "atr_5m": "atr_5m_14", "vol_med_5m": "vol_med_5m_20"}        # так ключи называет logic/levels.key_levels (исполнитель пишет их в levels.json)
 STRUCT_FRESH_S = 300.0
 STRUCT_BUDGET = 600           # токенов на блок struct при scope=start (цель WP «данные мозга»: не больше +600)
-STRUCT_EVENT_BUDGET = 260
+STRUCT_EVENT_BUDGET = 420     # монета события и BTC без подрезки уровней и вторичных чисел: мозгу нужен полный контекст для входа (указание владельца 2026-10-31)
 STRUCT_MAX_SYMS = 8
 _STRUCT_NUMS = ("a5_pct", "a1h_pct", "r1h", "r4h", "r24h", "vx", "te", "dpos", "dx", "tx", "t24_musd")
 _STRUCT_REG = ("trend_up", "trend_down", "range", "storm", "unknown")
@@ -157,7 +160,7 @@ def _b_account(c):
     closed_today = [t for t in live if t["status"] == "closed" and str(t.get("ts_close") or "").startswith(c.today)]
     streak = 0
     for t in sorted(closed_today, key=lambda x: str(x.get("ts_close") or ""), reverse=True):
-        if t.get("reason") == "sl":
+        if loss_stop(t):
             streak += 1
         else:
             break
@@ -165,7 +168,7 @@ def _b_account(c):
     out = {"equity": _r(portfolio.total(c.port)), "free": _r(sum(common.num(v.get("free"), 0.0) for v in venues.values() if isinstance(v, dict))),
            "dd_pct": _r(100.0 * portfolio.drawdown(c.port), 1),
            "day_pnl": _r(sum(t.get("pnl_usdt") or 0.0 for t in closed_today)),
-           "stops_today": sum(1 for t in closed_today if t.get("reason") == "sl"), "stop_streak": streak,
+           "stops_today": sum(1 for t in closed_today if loss_stop(t)), "stop_streak": streak,
            "day_trades": sum(1 for t in live if str(t.get("ts_open") or "").startswith(c.today))}
     try:
         out["dd_mult"] = _r(portfolio.dd_mult(c.port, c.prof), 2)
@@ -223,6 +226,22 @@ def _b_economics(c):
     out = {"llm_usd_day": _r(usd, 4)}
     for m, v in pnl.items():
         out["pnl_%s_day" % m], out["net_%s_day" % m] = _r(v, 4), _r(v - usd, 4)
+    try:                                         # квоты выживания по уровню риска (risk_levels.json): минимум входов за сутки и минимум чистой прибыли за сутки
+        from tb.core import risklevels
+        eq = portfolio.total(c.port)
+        ls = risklevels.limits_summary(c.root, equity=eq if common.num(eq) and eq > 0 else None)
+        need = int(ls.get("min_trades_day") or 0)
+        need_usd = ls.get("min_net_day_usdt")
+    except (KeyError, TypeError, ValueError, OSError):
+        need, need_usd = 0, None
+    if need:
+        done = sum(1 for t in c.trades if t.get("mode") in ("paper", "live") and str(t.get("ts_open") or "").startswith(c.today))
+        out.update(min_trades_day=need, trades_day=done, trades_left=max(0, need - done))
+    if common.num(need_usd) and need_usd > 0:   # квота прибыли дня по режиму дня (paper или live): сколько ещё нужно заработать чистыми
+        mode = "paper" if _is_paper(c) else "live"
+        net = out.get("net_%s_day" % mode)
+        net = (pnl.get(mode, 0.0) - usd) if net is None else net
+        out.update(min_net_day_usdt=_r(need_usd, 4), net_left_usdt=_r(max(0.0, need_usd - net), 4))
     return out
 
 
@@ -252,7 +271,9 @@ def _b_experiments(c):
     return {"min_n": expstats.MIN_N, "confirmed": conf[:EXPERIMENTS_TOP], "open": opn[:EXPERIMENTS_TOP]}
 
 
-_DAY_SETUPS = ("level_reclaim", "level_reject", "sweep_reject", "breakout_retest", "range_fade", "trend_pullback", "none")   # как validate.SETUPS (проверяет тест)
+_DAY_SETUPS = ("level_reclaim", "level_reject", "sweep_reject", "breakout_retest", "range_fade", "trend_pullback", "momentum_chase", "none")   # как validate.SETUPS (проверяет тест)
+_DAY_REGIMES = ("trend", "range", "volatile", "unclear")
+_DAY_BIASES = ("long", "short", "neutral")
 DAY_LIMITS_MAX_AGE_S = 36 * 3600.0     # план дня старше полутора суток не действует (файл остаётся от прошлого дня)
 
 
@@ -269,7 +290,8 @@ def _b_day(c):
     avoid = [x for x in (d.get("avoid") or []) if _sym(x)] if isinstance(d.get("avoid"), list) else []
     syms = [x for x in (d.get("symbols") or []) if _sym(x)] if isinstance(d.get("symbols"), list) else []
     mnp = d.get("max_new_plans")
-    return _drop_none({"id": common.ident(d.get("day_id")), "setups": setups, "avoid": avoid or None, "symbols": syms or None,
+    return _drop_none({"id": common.ident(d.get("day_id")), "regime": d.get("regime") if d.get("regime") in _DAY_REGIMES else None,
+                       "bias": d.get("bias") if d.get("bias") in _DAY_BIASES else None, "setups": setups, "avoid": avoid or None, "symbols": syms or None,
                        "max_new_plans": mnp if isinstance(mnp, int) and not isinstance(mnp, bool) else None,
                        "max_horizon": d.get("max_horizon") if d.get("max_horizon") in _HORIZONS else None,
                        "max_risk_usdt": _r(common.num(d.get("max_risk_usdt"))), "size_mult": _r(common.num(d.get("size_mult")), 2)})
@@ -286,7 +308,7 @@ def _b_pause(c, syms):
     left = {}
     for t in closed:
         ts = common.parse_ts(t.get("ts_close"))
-        if ts is None or t.get("reason") != "sl":
+        if ts is None or not loss_stop(t):
             continue
         sym = _sym(t.get("sym"))
         mn = PAUSE_SYM_MIN - (c.now - ts) / 60.0
@@ -294,7 +316,7 @@ def _b_pause(c, syms):
             left[sym] = max(left.get(sym, 0), int(math.ceil(mn)))
     streak, last_ts = 0, None
     for t in reversed(closed):
-        if t.get("reason") != "sl":
+        if not loss_stop(t) or not str(t.get("ts_close") or "").startswith(c.today):      # серия только за сегодня (как account.stop_streak и guard): без сделок вчерашние стопы не держат паузу всю ночь
             break
         streak += 1
         last_ts = last_ts or common.parse_ts(t.get("ts_close"))
@@ -365,11 +387,17 @@ def _b_session(c):
     if not c.active:
         return None
     v = _model().session_view(c.active, c.trades, c.prof, c.now)
-    types = c.prof.get("session_types") if isinstance(c.prof.get("session_types"), dict) else {}
+    prof = c.prof
+    try:
+        from tb.core import risklevels
+        prof = risklevels.effective(c.prof, c.root)      # пороги горизонтов выбранного уровня риска (max_stop_mult, min_rr), как у guard и шлюза исполнителя
+    except Exception:
+        prof = c.prof
+    types = prof.get("session_types") if isinstance(prof.get("session_types"), dict) else {}
     out = {"id": common.ident(v["id"]), "type": common.ident(v["type"]),
            "min_left": None if v["left_s"] is None else int(v["left_s"] // 60), "budget": _r(v["budget_usdt"]),
            "realized": _r(v["realized"]), "open_risk": _r(v["open_risk"]), "trades": v["trades"], "max_trades": v["max_trades"],
-           "cost_rt_pct": _cost_rt_pct(c)}
+           "cost_rt_pct": _cost_rt_pct(c), "cost_rt_maker_pct": _cost_rt_pct(c, maker=True)}
     if v["type"] == _DAY:
         # сессия-день: горизонт выбирает агент в каждом плане; пороги каждого горизонта (те же, что у guard) для выбора и смысловой проверки entry/1
         out["horizons"] = {t: _drop_none({"max_stop_pct": _r(common.num(cfg.get("max_stop_pct"))), "min_rr": _r(common.num(cfg.get("min_rr"))),
@@ -386,8 +414,9 @@ _DAY = "day"
 _HORIZONS = ("scalp", "intraday", "swing", "position")
 
 
-def _cost_rt_pct(c):
-    """Издержки круга (вход + выход по рынку) в % номинала по площадке активной сессии: 2 x (fee + slip) из risk_profile.costs, как guard.round_trip_cost_pct."""
+def _cost_rt_pct(c, maker=False):
+    """Издержки круга (вход + выход по рынку) в % номинала по площадке активной сессии: 2 x (fee + slip) из risk_profile.costs, как guard.round_trip_cost_pct.
+    maker=True: вход лимитом post-only (maker_fee площадки), выход по стопу рынком; нет maker_fee -> None (валидатор берёт обычные издержки)."""
     venue = (c.active or {}).get("venue") if isinstance(c.active, dict) else None
     costs = c.prof.get("costs") if isinstance(c.prof.get("costs"), dict) else {}
     cc = costs.get(venue) if isinstance(costs.get(venue), dict) else None
@@ -396,7 +425,11 @@ def _cost_rt_pct(c):
         cc = {"fee": fee, "slip": 0.0005} if fee is not None else None
     if cc is None or common.num(cc.get("fee")) is None:
         return None
-    return _r(2.0 * (cc["fee"] + (common.num(cc.get("slip")) or 0.0)) * 100.0)
+    slip = common.num(cc.get("slip")) or 0.0
+    if maker:
+        mf = common.num(cc.get("maker_fee"))
+        return None if mf is None else _r((mf + cc["fee"] + 2.0 * slip) * 100.0)
+    return _r(2.0 * (cc["fee"] + slip) * 100.0)
 
 
 def _is_paper(c):
@@ -462,6 +495,8 @@ def _plan_position(c, it, snap):
     px = c.price(sym)["price"]
     r_now = _r_of(sign, px, avg, unit)
     ent = common.parse_ts((rt.get("ts") or {}).get("entered"))
+    mh = common.num((spec.get("lifecycle") or {}).get("max_hold_min")) if isinstance(spec.get("lifecycle"), dict) else None      # плановый срок удержания: по его истечении мозг решает (таймер позицию не закрывает, 2026-11-01)
+    mh = int(mh) if mh is not None else None
     targets = []
     for tid, t in sorted((rt.get("targets") or {}).items()) if isinstance(rt.get("targets"), dict) else []:
         if isinstance(t, dict) and common.ident(tid):
@@ -475,6 +510,7 @@ def _plan_position(c, it, snap):
         "avg": _p(avg), "px": _p(px), "sl": _p(pos.get("cur_stop")), "liq": _p((snap.get(sym) or {}).get("liq")),
         "r": _r(r_now), "mae_r": _r(_r_of(sign, common.num(pos.get("worst_px")), avg, unit)),
         "mfe_r": _r(_r_of(sign, common.num(pos.get("best_px")), avg, unit)), "age_min": None if ent is None else int((c.now - ent) // 60),
+        "horizon": common.ident(spec.get("session_type")), "hold_min": mh, "hold_left_min": None if (mh is None or ent is None) else max(0, int(mh - (c.now - ent) / 60.0)),
         "targets": targets, "rules": rules})
 
 
@@ -696,7 +732,11 @@ def intel_block(root, now, syms=()):
     for sym in want:
         r = der.get(sym)
         if isinstance(r, dict):
-            row = _drop_none({"fund_pct": common.num(r.get("funding_pct")), "oi24_pct": _r(r.get("oi_chg_24h_pct"), 1), "ls": _r(r.get("ls_ratio"), 2)})
+            x = r.get("x") if isinstance(r.get("x"), dict) else {}
+            row = _drop_none({"fund_pct": common.num(r.get("funding_pct")), "oi24_pct": _r(r.get("oi_chg_24h_pct"), 1), "ls": _r(r.get("ls_ratio"), 2),
+                              # другие биржи (Binance, OKX, Bitget) в тот же момент: средний фандинг, цена Bybit против них в бп, доля Bybit в обороте, лидер оборота
+                              "xfund_pct": common.num(x.get("xfund_pct")), "basis_bps": _r(x.get("basis_bps"), 1), "bybit_vol_pct": _r(x.get("bybit_vol_pct"), 0),
+                              "lead": x.get("lead") if isinstance(x.get("lead"), str) and x.get("lead").isalnum() else None})
             if row:
                 dd[sym] = row
     if dd:
@@ -792,6 +832,11 @@ def _blackout_mode(b, c):
     """market.blackout.mode = warn|block: правило окна новостей, чтобы модель знала режим. warn только при режиме исполнителя paper и paper.blackout_mode=warn
     (tb.core.blackout.policy); live/testnet/нет данных = block."""
     mk = b.get("market")
+    if isinstance(mk, dict):                  # news_mode: как трактовать новость важностью 3 (paper: предупреждение, остальное: блок); окно календаря ниже
+        try:
+            mk["news_mode"] = blackout.policy(c.root, common.ident(c.health["data"].get("mode")))["mode"]
+        except Exception:
+            mk["news_mode"] = "block"
     bo = mk.get("blackout") if isinstance(mk, dict) else None
     if isinstance(bo, dict):
         try:
@@ -911,6 +956,85 @@ def _b_struct(c, wanted, limit=STRUCT_MAX_SYMS, budget=STRUCT_BUDGET, base_first
             if not step():
                 break
     return out if rows else None
+
+
+def _b_deriv(root, now, sym):
+    """Деривативы монеты события из runtime/intel/facts.json (intel_block: fund_pct, oi24_pct, ls, xfund_pct, basis_bps, bybit_vol_pct, lead) -> строка по монете | None."""
+    blk = intel_block(root, now, [sym]) or {}      # только facts.json: монеты позиций, планов и запросов структуры сервис intel включает в свой список сам (store.symbols_now)
+    row = (blk.get("deriv") or {}).get(sym) if isinstance(blk.get("deriv"), dict) else None
+    if not isinstance(row, dict) or not row:
+        return None
+    return dict(row, stale_s=blk["stale_s"]) if blk.get("stale_s") is not None else row
+
+
+def _b_crowd(root, now, b, sym, sd):
+    """Блок `crowd` (brain/crowd.py) из уже собранных блоков досье: структура монеты, событие сканера (sd), деривативы, ордерфлоу, индекс страха из intel."""
+    from tb.brain import crowd as crowd_mod
+    st = ((b.get("struct") or {}).get("s") or {}).get(sym) if isinstance(b.get("struct"), dict) else None
+    sent = (intel_block(root, now, []) or {}).get("sentiment") or {}
+    fng = (sent.get("fng") or {}).get("v") if isinstance(sent.get("fng"), dict) else None
+    return crowd_mod.build(st=st, ev=sd, der=b.get("deriv"), flow=b.get("flow"), fng=fng)
+
+
+def _px_age(c, sym):
+    """Возраст самой свежей цены монеты у сканера/фида -> (есть ли цена, возраст в секундах | None).
+    Источники: runtime/market.json (возраст файла + age_s монеты), runtime/prices.json и runtime/hot.json (ts_epoch файла) - те же, что берёт снимок входа (core/tradectx).
+    Цена есть, а метки времени нет -> (True, None): данные не считаются устаревшими. Монеты нет ни в одном источнике -> (False, None)."""
+    ages, have = [], False
+    m = (c.mkt.get("symbols") or {}).get(sym) if isinstance(c.mkt.get("symbols"), dict) else None
+    if isinstance(m, dict) and common.num(m.get("price")):
+        have = True
+        if c.mkt.get("age_s") is not None:
+            ages.append(float(c.mkt["age_s"]) + (common.num(m.get("age_s")) or 0.0))
+    for key in ("scan", "hot"):
+        d = c.sp.get(key) or {}
+        if sym in (d.get("prices") or {}):
+            have = True
+            if d.get("age_s") is not None:
+                ages.append(float(d["age_s"]))
+    return have, (int(min(ages)) if ages else None)
+
+
+def _b_data(b, sym, c=None):
+    """Полнота данных по монете события: struct (структура 5м/1ч), levels (число известных уровней), cands (кандидатов входа), flow, deriv, hot,
+    px (есть ли цена монеты у сканера/фида), px_age_s (возраст самой свежей из них, с; _px_age).
+    ready=false, когда нет структуры или уровней: entry_scout обязан ответить skip no_data, валидатор отклонит propose (NO_LEVELS / NO_DATA).
+    Возраст цены выше порога предпроверка мозга превращает в STALE_DATA без вызова модели (validate.entry_precheck)."""
+    from tb.brain import validate as V
+    st = ((b.get("struct") or {}).get("s") or {}).get(sym) if isinstance(b.get("struct"), dict) else None
+    pool = V.level_pool(b, sym)
+    out = {"struct": isinstance(st, dict), "levels": len(pool), "cands": len([x for x in (b.get("cands") or []) if isinstance(x, dict) and x.get("ok")]),
+           "flow": isinstance(b.get("flow"), dict), "deriv": isinstance(b.get("deriv"), dict),
+           "hot": any(isinstance(e, dict) and e.get("sym") == sym and isinstance(e.get("d"), dict) for e in (b.get("recent") or []))}
+    if c is not None:
+        out["px"], age = _px_age(c, sym)
+        if age is not None:
+            out["px_age_s"] = age
+    out["ready"] = bool(out["struct"] and out["levels"] > 0)
+    miss = [k for k in ("struct", "flow", "deriv") if not out[k]] + (["levels"] if out["levels"] == 0 else [])
+    if miss:
+        out["missing"] = miss
+    return out
+
+
+def _b_trend(c, sym):
+    """Блок `trend` досье события: тренд монеты события и BTC по закрытым свечам из runtime/structure.json (core/tradectx.trend_of):
+    {dir: up|down|flat, ret_1h_pct, ret_4h_pct, ret_24h_pct, btc: {то же} | null}. dir: |ret_24h| >= 2.5 ATR(1ч) -> знак ret_24h, иначе |ret_4h| >= 1 ATR(1ч) -> знак ret_4h, иначе flat.
+    Нет structure.json или записи ни по монете, ни по BTC -> None (блока нет); нет записи по монете -> поля монеты null. Ничего не выдумывается."""
+    d = _struct_doc(c)
+    if d is None:
+        return None
+    body = d["symbols"]
+    own = tradectx.trend_of(body.get(sym))
+    btc = tradectx.trend_of(body.get("BTC")) if sym != "BTC" else None
+    if own is None and btc is None:
+        return None
+    out = dict(own or {"dir": None, "ret_1h_pct": None, "ret_4h_pct": None, "ret_24h_pct": None})
+    out["btc"] = btc
+    age = c.now - common.num(d.get("ts_epoch"))
+    if age > STRUCT_FRESH_S:
+        out["stale_s"] = int(age)
+    return out
 
 
 def _struct_missing(c, syms, root, now):
@@ -1174,9 +1298,9 @@ def _trim_struct(b):
 
 
 TRIM_STEPS = (
-    ("lessons", _drop("lessons")), ("missing", _drop("missing")), ("memory", _drop("memory")), ("playbook", _drop("playbook")), ("flow", _drop("flow")), ("since_last", _drop("since_last")), ("paper_history", _drop("paper_history")), ("checklist_text", _checklist_ids), ("recent>5", _trim_recent(5)),
+    ("lessons", _drop("lessons")), ("missing", _drop("missing")), ("memory", _drop("memory")), ("playbook", _drop("playbook")), ("deriv", _drop("deriv")), ("flow", _drop("flow")), ("since_last", _drop("since_last")), ("paper_history", _drop("paper_history")), ("checklist_text", _checklist_ids), ("recent>5", _trim_recent(5)),
     ("hot>3", _trim_hot(3)), ("ideas>4", _trim_ideas(4)), ("struct>3", _trim_struct), ("levels", _trim_levels), ("recent>3", _trim_recent(3)), ("pending", _drop("pending")),
-    ("hot", _drop("hot")), ("ideas", _drop("ideas")), ("experiments", _drop("experiments")), ("struct", _drop("struct")), ("news_digest", _drop("news_digest")), ("intel", _drop("intel")), ("recent>1", _trim_recent(1)), ("checklist", _drop("checklist")), ("market", _drop("market")),
+    ("hot", _drop("hot")), ("ideas", _drop("ideas")), ("experiments", _drop("experiments")), ("cands", _drop("cands")), ("struct", _drop("struct")), ("news_digest", _drop("news_digest")), ("intel", _drop("intel")), ("recent>1", _trim_recent(1)), ("checklist", _drop("checklist")), ("market", _drop("market")),
     ("recent", _drop("recent")),
 )
 
@@ -1296,6 +1420,12 @@ def build(scope="start", since=None, budget_tokens=None, root=None, now=None, co
         _merge_blackout({"intel": _safe("intel", lambda: intel_block(root, now), missing), "market": mk})
         b["market"] = mk or None
         b["playbook"] = _safe("playbook", lambda: _b_playbook(c, b, job_sym), missing) if (job_sym and not involved) else None      # только поиск входа: у событий планов карточки не нужны
+        b["cands"] = _safe("cands", lambda: cands_mod.candidates(b, job_sym), missing) if (job_sym and not involved) else None      # предрасчёт входов (уровень, стоп, цели, RR, горизонт): модель выбирает, а не считает
+        if job_sym:
+            b["deriv"] = _safe("deriv", lambda: _b_deriv(root, now, job_sym), missing)          # деривативы монеты события: funding, OI за сутки, лонг/шорт, базис к другим биржам
+            b["crowd"] = _safe("crowd", lambda: _b_crowd(root, now, b, job_sym, sd), missing)   # настроение толпы: флаги, mood, сторона давления (crowd.py)
+            b["trend"] = _safe("trend", lambda: _b_trend(c, job_sym), missing)                  # тренд монеты и BTC по закрытым свечам 1ч/5м (structure.json): данные, не запрет
+            b["data"] = _safe("data", lambda: _b_data(b, job_sym, c), missing)                  # полнота данных по монете события: без структуры и уровней входа нет; возраст цены (STALE_DATA)
     else:
         pid = scope_plan.group(1)
         full = _safe("plan", lambda: _b_plan_full(c, pid), missing)
@@ -1317,7 +1447,10 @@ def build(scope="start", since=None, budget_tokens=None, root=None, now=None, co
         budget_tokens += tokens(b["memory"])          # блок памяти имеет собственный лимит (<= 450) и не вытесняет остальное досье из бюджета по умолчанию
     if own_budget and b.get("struct"):
         budget_tokens += tokens(b["struct"])          # struct (структура рынка) тоже со своим лимитом (STRUCT_BUDGET / STRUCT_EVENT_BUDGET): не вытесняет остальное досье
-    return fit(b, budget_tokens)
+    b = fit(b, budget_tokens)
+    if isinstance(b.get("data"), dict) and any(x in (b.get("cut") or []) for x in ("struct", "cands")):
+        b["data"] = dict(b["data"], ready=False, missing=sorted(set(b["data"].get("missing") or []) | {"struct_cut"}))      # бюджет срезал структуру/кандидатов: модель данных не видит, входа нет
+    return b
 
 
 def save(brief, root=None, now=None):

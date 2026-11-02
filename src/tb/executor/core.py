@@ -69,6 +69,9 @@ def new_runtime(now):
 MIN_SIZE_TTL_S = exec_cfg.MIN_SIZE_TTL_S
 
 
+QUIET_STOP_DENY = ("STOP_STEP", "STOP_INTERVAL", "STOP_RATE", "NOT_TIGHTER")      # отказы хода стопа по правилу, которые не пишутся в журнал на каждом тике
+SILENT_STOP_DENY = ("STOP_STEP", "STOP_INTERVAL", "NOT_TIGHTER")                   # из них не пишутся вообще (трейлу пока нечего двигать); STOP_RATE раз в 10 мин
+
 class Executor(object):
     def __init__(self, port, root=None, clock=time.time, sleep=None, profile="testnet", observe=False, cfg=None, keep_entries=False, venue_id="bybit"):
         self.port = port
@@ -742,7 +745,10 @@ class Executor(object):
         spec, rt = p["spec"], p["rt"]
         key = (spec["id"], what, vd.code)
         now = self.clock()
-        if now - self.alerts.get(key, 0.0) >= 30.0 or vd.code in ("INVARIANT_VIOLATION",):
+        if what == "set_stop" and vd.code in SILENT_STOP_DENY:
+            return                                                      # «шаг мал / рано / не лучше» у трейла: обычное «пока нечего двигать», не отказ, в ленту не пишем
+        quiet = what == "set_stop" and vd.code in QUIET_STOP_DENY      # лимит ходов за час: полезный сигнал, но в ленту раз в 10 мин, а не раз в 30 с
+        if now - self.alerts.get(key, 0.0) >= (600.0 if quiet else 30.0) or vd.code in ("INVARIANT_VIOLATION",):
             self.alerts[key] = now
             self.decide("skip", what, plan=spec["id"], res={"ok": False, "code": vd.code}, why=("DENY:%s %s" % (vd.code, vd.detail))[:200])
             if (vd.code in G.WAKE_CODES and not entry) or vd.code == "E_BLACKOUT":      # E_BLACKOUT будит мозг и на входе (раз в 30 с на план)
@@ -1032,18 +1038,65 @@ class Executor(object):
         if self._watch_position(p, view, now) or patch or res.get("actions"):
             self.save(p)
 
+    WATCH_CTX_EVERY_S = 5.0        # данные рынка для сторожа (структура, новости, толпа) собираются не чаще раз в 5 с на позицию
+
+    def _watch_ctx(self, sym, view, now, flow):
+        """Данные рынка для кодов надзора сторожа (logic/watch.py): структура монеты (runtime/structure.json), свежие новости (intel/flash), стены стакана (flow),
+        настроение толпы (brain/crowd.py по структуре, деривативам из кеша intel и потоку). Любой сбой источника = его просто нет в ctx."""
+        ctx = {"last": view.last}
+        try:
+            path = paths.runtime("structure.json", root=self.root)
+            mt = os.path.getmtime(path)
+            if getattr(self, "_struct_mt", None) != mt:
+                with open(path, encoding="utf-8") as f:
+                    self._struct_doc, self._struct_mt = json.load(f), mt
+            row = ((self._struct_doc or {}).get("symbols") or {}).get(sym) or {}
+        except (OSError, ValueError, AttributeError):
+            row = {}
+        if isinstance(row, dict):
+            ctx.update({"a5_pct": row.get("a5_pct"), "reg": row.get("reg"), "tx": row.get("tx"),
+                        "sup": [x.get("px") for x in (row.get("sup") or []) if isinstance(x, dict)], "res": [x.get("px") for x in (row.get("res") or []) if isinstance(x, dict)]})
+        if isinstance(flow, dict):
+            ctx["walls"] = list(flow.get("walls") or [])
+        liq_side = None
+        try:                                              # кросс-биржевой поток по сокетам (runtime/intel/xflow.json через core.flowdoc): стены других бирж, ликвидации за 5 минут
+            from tb.core import flowdoc
+            xl = flowdoc.xlive_for(self.root, sym, now)
+            if xl:
+                ctx["walls"] = ctx.get("walls", []) + [w for w in xl.get("walls") or [] if isinstance(w, dict)]
+                lo, sh = float(xl.get("liq5_long_usd") or 0), float(xl.get("liq5_short_usd") or 0)
+                if max(lo, sh) >= 100000.0 and max(lo, sh) >= 3 * max(min(lo, sh), 1.0):
+                    liq_side = "long" if lo > sh else "short"
+                ctx["xlive"] = xl
+        except Exception:
+            pass
+        try:
+            from tb.core import newsflash
+            rows = [r for r in newsflash.read_rows(self.root) if r.get("ev") == "flash" and r.get("sym") == sym and r.get("emitted", True)]
+            ctx["news"] = [{"id": r.get("id"), "age_s": now - float(r.get("ts") or 0)} for r in rows if isinstance(r.get("id"), str)]
+        except Exception:
+            pass
+        try:
+            from tb.brain import crowd as crowd_mod
+            from tb.core import flowdoc
+            der = flowdoc.deriv_for(self.root, sym, now)        # деривативы монеты из facts.json сервиса intel (позиции и планы входят в его список монет)
+            ev = {"liq_side": liq_side} if liq_side else None
+            ctx["crowd"] = crowd_mod.build(st=row if isinstance(row, dict) else None, ev=ev, der=der, flow=flow if isinstance(flow, dict) else None)
+        except Exception:
+            pass
+        return ctx
+
     def _watch_position(self, p, view, now):
-        """Сторож позиции (logic/watch.py): при боковике с плюсом или развороте ордерфлоу будит мозг событием brain_wake_request. -> True, если состояние изменилось."""
+        """Сторож позиции (logic/watch.py): любое заметное изменение рынка по монете в позиции (новости, резкий ход, пробой уровня, разворот толпы, стена, оборот,
+        смена режима, разворот потока, боковик с плюсом) будит мозг событием brain_wake_request. -> True, если состояние изменилось."""
         wc = self.cfg.get("position_watch") or {}
         spec, rt = p["spec"], p["rt"]
         if not wc.get("enabled") or rt.get("status") != "managing" or not rt.get("pos"):
             return False
-        if wc.get("paper_only", True) and not (spec.get("mode") == "paper" or self.port.env == "paper"):
+        if wc.get("paper_only", False) and not (spec.get("mode") == "paper" or self.port.env == "paper"):
             return False
         last = view.last
         r = rules.r_now(rt, last) if last else None
-        if r is None:
-            return False
         sgn = 1 if spec.get("side") == "long" else -1
         try:
             from tb.core import flowdoc
@@ -1051,10 +1104,16 @@ class Executor(object):
         except Exception:
             flow = None
         st = rt.setdefault("counters", {}).setdefault("watch", {})
-        code = watch.evaluate(st, sgn, r, flow, now, wc)
+        ctx = None
+        if last and now - float(st.get("ctx_ts") or 0) >= self.WATCH_CTX_EVERY_S:
+            st["ctx_ts"] = now
+            ctx = self._watch_ctx(spec["symbol"], view, now, flow)
+        if r is None and ctx is None:
+            return False
+        code = watch.evaluate(st, sgn, r, flow, now, wc, ctx)
         if code:
             self.emit("brain_wake_request", {"code": code, "plan": spec["id"]}, plan=spec["id"], sym=spec["symbol"])
-            self.decide("event", "watch_wake", plan=spec["id"], args={"code": code, "r": round(r, 2)}, why="WATCH:%s" % code, res={"ok": True})
+            self.decide("event", "watch_wake", plan=spec["id"], args={"code": code, "r": round(r, 2) if r is not None else None}, why="WATCH:%s" % code, res={"ok": True})
         return code is not None
 
     def _milestone(self, p, ev):
@@ -1063,6 +1122,8 @@ class Executor(object):
         d = {"name": name, "r": ev.get("r"), "px": ev.get("px")}
         if ev.get("target"):
             d["target"] = ev["target"]
+        if ev.get("hold") is not None:
+            d["hold"] = ev["hold"]
         self.emit("milestone", {k: v for k, v in d.items() if v is not None}, plan=p["spec"]["id"], sym=p["spec"]["symbol"])
 
     def _eval_touch(self, p, view):
@@ -1103,8 +1164,13 @@ class Executor(object):
                 return True
             return False
         if typ == "move_stop":
+            sm = self.cfg["stop_moves"]
+            hist = [t for t in (rt.get("counters") or {}).get("stop_moves_1h", []) if self.clock() - float(t) < 3600.0]
+            if len(hist) >= int(sm["max_moves_per_hour"]):
+                return None                                     # лимит ходов за час исчерпан: правило ждёт окно, не стучится каждый тик
             kind, info = self.act.move_stop(p, float(a["to"]), by="rule", why=why, price=view.last)
-            self.decide("rule", "move_stop", plan=pid, args={"to": a["to"]}, why=why, res={"ok": kind in ("ok", "unchanged"), "code": info.get("code", "OK")})
+            if not (kind == "denied" and info.get("code") in QUIET_STOP_DENY):          # «шаг мал/рано/лимит» в журнал только через _gate_denied (раз в 30 с)
+                self.decide("rule", "move_stop", plan=pid, args={"to": a["to"]}, why=why, res={"ok": kind in ("ok", "unchanged"), "code": info.get("code", "OK")})
             if kind == "denied":
                 self._gate_denied(p, "set_stop", G.deny(info.get("code", "STOP_NOT_TIGHTER"), info.get("detail", "")))
             elif kind == "gone":

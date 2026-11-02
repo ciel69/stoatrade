@@ -7,7 +7,7 @@ from unittest import mock
 import _bootstrap  # noqa: F401
 import _lc
 from test_lifecycle_close import audit, auditor, policy
-from tb.control import ctlstate, lifecycle
+from tb.control import ctlstate, handlers, lifecycle
 from tb.core import exec_cfg, session
 from tb.lifecycle import api, days
 
@@ -67,12 +67,6 @@ class TestAmberStartViaCtl(Base):
         exec_cfg.set_kill(False, "t", self.e.root)
         r = self.e.confirmed(self.c, "day.start", dict(self.BASE, allow_amber=True))
         self.assertEqual(r["code"], "E_GATE")
-
-    def test_dash_js_sends_allow_amber(self):
-        st = os.path.join(os.path.dirname(__file__), "..", "src", "tb", "dash", "static")
-        js = "".join(open(os.path.join(st, n), encoding="utf-8").read() for n in ("v-control.js", "x-dialog.js"))
-        for k in ("allow_amber", "pre_amber", "Запустить с предупреждениями", "Жёсткие условия не выполнены"):
-            self.assertIn(k, js)
 
 
 class TestRealLifecycleViaCtl(Base):
@@ -164,6 +158,7 @@ class TestRealLifecycleViaCtl(Base):
         self.assertEqual(self.e.ex.ops("close"), [("close", "PL-1-SOL-01")])
 
     def test_watch_auto_stop_by_time(self):
+        self.c.cfg["auto_roll_paper"] = False                                       # без автостарта следующего дня: платформа остаётся остановленной
         self.e.w("config/lifecycle.json", {"preflight": {"require_supervisor": False}, "max_day_hours": 1})
         day = self.start()
         self.e.brain.avail = False
@@ -174,6 +169,70 @@ class TestRealLifecycleViaCtl(Base):
         self.e.advance_t(3)
         self.c.watch()
         self.assertEqual(self.plat()["state"], "stopped")
+
+    def test_paper_day_rolls_over_after_auto_stop(self):
+        """Paper: день закрылся сам (max_day_hours) -> следующий стартует тем же путём, что «Старт» (без дыры между днями: 2026-10-30 01:05-04:37 NO_SESSION)."""
+        self.e.w("config/lifecycle.json", {"preflight": {"require_supervisor": False}, "max_day_hours": 1})
+        day = self.start()
+        self.e.brain.avail = False
+        self.e.advance_t(3700)
+        self.e.ready()                                                              # живой исполнитель и свежие данные к старту следующего дня
+        self.c.watch()
+        api._LAST_CLOSE.clear()
+        self.e.advance_t(3)
+        self.c.watch()
+        p = self.plat()
+        self.assertEqual((p["state"], p["mode"]), ("running", "paper"), p)
+        self.assertNotEqual(p["day_id"], day)
+        self.assertEqual(self.e.r("state/days/%s/day.json" % day)["state"], "stopped")
+        self.assertEqual(self.c.last[0]["action"], "day.start")
+
+    def test_paper_roll_rejected_shows_banner(self):
+        """Автостарт отклонён проверками (исполнитель молчит): платформа остановлена, баннер просит запустить день вручную."""
+        self.e.w("config/lifecycle.json", {"preflight": {"require_supervisor": False}, "max_day_hours": 1})
+        self.start()
+        self.e.brain.avail = False
+        self.e.advance_t(3700)
+        self.c.watch()
+        api._LAST_CLOSE.clear()
+        self.e.advance_t(3)
+        self.c.watch()
+        self.assertEqual(self.plat()["state"], "stopped")
+        self.assertIn("Автостарт", (self.c.banner or {}).get("text", ""))
+        pend = self.e.r("state/control/auto_roll.json")                            # ждём старта: повтор переживает перезапуск ctl
+        self.assertEqual((pend["args"]["mode"], pend["args"]["allow_amber"], pend["tries"]), ("paper", True, 1))
+        self.assertAlmostEqual(pend["next"] - self.e.t[0], handlers.roll_retry_s(0), delta=5.0)   # первый повтор быстрый (90 с): фид после рестарта прогревается за секунды
+        self.e.advance_t(60)
+        self.e.ready()
+        self.c.watch()
+        self.assertEqual(self.plat()["state"], "stopped")                           # до первого повтора ещё ~30 с
+        self.e.advance_t(40)
+        self.e.ready()
+        self.c.watch()
+        self.assertEqual((self.plat()["state"], self.plat()["mode"]), ("running", "paper"))
+        self.c.watch()
+        self.assertFalse(self.e.exists("state/control/auto_roll.json"))             # день идёт: ожидание снято
+
+    def test_paper_roll_retry_backoff_grows(self):
+        """Повторы автостарта: 90, 180, 300 с, затем 10 мин; каждая неудача пишет tries+1 и следующую паузу."""
+        self.assertEqual([handlers.roll_retry_s(i) for i in range(5)], [90, 180, 300, 600, 600])
+        self.e.w("config/lifecycle.json", {"preflight": {"require_supervisor": False}, "max_day_hours": 1})
+        self.start()
+        self.e.brain.avail = False
+        self.e.advance_t(3700)
+        self.c.watch()
+        api._LAST_CLOSE.clear()
+        self.e.advance_t(3)
+        self.c.watch()
+        for i in range(1, 4):
+            pend = self.e.r("state/control/auto_roll.json")
+            self.assertEqual(pend["tries"], i)
+            self.e.advance_t(handlers.roll_retry_s(i - 1) + 1)
+            self.c.watch()
+            self.assertEqual(self.plat()["state"], "stopped")
+        pend = self.e.r("state/control/auto_roll.json")
+        self.assertEqual(pend["tries"], 4)
+        self.assertAlmostEqual(pend["next"] - self.e.t[0], 600, delta=5.0)
 
     def test_kill_halts_day_and_writes_emergency_report(self):
         day = self.start()

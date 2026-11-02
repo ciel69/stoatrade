@@ -9,7 +9,8 @@ core/          journal, session, portfolio, guard, pending (ждущие лим�
 venues/        base.Venue (open/close/positions/balance) и реализации: bybit.py (BybitVenue + CLI), bybit_limit.py (ждущие лимитные входы), bybit_stream.py (watch)
 marketdata/    feed, wsclient, features, history, funding_history, watch, context, data, collect, patterns (чистые функции фигур/уровней), patterns_scan (`./tb patterns scan`), hotscan (сканер горячих монет по всему рынку Bybit, `./tb bybit read scan`; вывод runtime/hot.json и runtime/prices.json)
 research/      research_*.py (в т.ч. research_patterns: `./tb research patterns`), compare_venues, backtest, paper_donchian (не торгуют)
-dash/          локальный дашборд (`./tb dash`): model.py (чтение файлов и расчёты), server.py (http.server), static/ (HTML+CSS+JS по частям)
+dash2/         дашборд по умолчанию (`./tb dash`, порт 8765): server.py (статика `frontend/dist` и WebSocket `/ws`), topics.py (темы), ctlbridge.py (мост команд в ctl); фронт Vue в `frontend/`
+dash/          слой чтения и управления для dash2 (старый веб-интерфейс удалён 2026-11-02): model.py и model2.py (чтение файлов и расчёты), ctlweb.py (проверки и очередь ctl, база моста), keyweb.py (запись ключей LLM), server.py (только `api_payload` и реестр `EXT_API` без HTTP)
 legacy_engine/ signals, risk, state, tick, sizing: старый автоматический движок, живой торговлей не используется
 paths.py       ЕДИНСТВЕННОЕ место с путями: корень от расположения файла или TB_ROOT
 launcher.py    платформенная логика входа: env-файл ключа Bybit, снятие прокси, UTF-8 консоль; fsutil.py: os.replace с повторами для Windows
@@ -71,12 +72,16 @@ python3 -m unittest discover -s tests -p "test_guard.py"
 Правила для нового кода: пути через `paths`/`os.path`, `open(..., encoding="utf-8")`, замена файла через `fsutil.replace`, без `fcntl`/`os.fork`/`sh`.
 
 ## Дашборд (`./tb dash [--port 8765] [--open] [--max-seconds N]`)
-Только чтение. `http.server` на `127.0.0.1` (адрес не настраивается; чужой заголовок Host даёт 403, любой не-GET даёт 405), страница без CDN и сборки (`dash/static/`:
-index.html, app.css, app.js), опрос `/api/state` раз в 3 с. Данные ТОЛЬКО из файлов проекта: `state/{trades,sessions}.jsonl`, `portfolio.json`, `learning.json`,
-`runtime/{market,context,hot,health}.json`, `events.jsonl`, `config/risk_profile.json`. Биржу и ключи не трогает (тест `test_dash.py` проверяет исходники и ответы на секреты;
+С 2026-11-02 по умолчанию новый дашборд (`src/tb/dash2/`, `docs/FRONTEND_PLAN.md`). Один порт на `127.0.0.1`: статика собранного фронта Vue (`frontend/dist`, лежит в репозитории, запуск без Node; пересборка `npm --prefix frontend ci && npm --prefix frontend run build`) и WebSocket `/ws`.
+Сервер сам собирает темы из файлов проекта и шлёт клиенту снимок при подключении, дальше только изменившиеся темы (опроса нет; при обрыве клиент переподключается сам). Проверяются Host и Origin, число сокетов ограничено. Команды управления идут тем же сокетом через мост `ctlbridge` в сервис `ctl` (подписанные файлы, аудит; права и флаги `auth.dash2_full`, `allow_*_from_dash`: `docs/CONTROL.md`). Ключей и биржи дашборд не касается.
+Платформа поднимает его сервисом `dash` (порт `svc.dash.port`, 8765). Старый дашборд (`dash-old`, порт 8768, `http.server` и статика `dash/static/`) удалён 2026-11-02 по указанию владельца.
+
+### Слой чтения `tb.dash.model` (общий для dash2)
+Только чтение. Данные ТОЛЬКО из файлов проекта: `state/{trades,sessions}.jsonl`, `portfolio.json`, `learning.json`,
+`runtime/{market,context,hot,health}.json`, `events.jsonl`, `config/risk_profile.json`. Биржу и ключи не трогает (тест `test_dash.py` проверяет исходники и ответы `api_payload` на секреты;
 `model.scrub` вырезает поля `*key*/*secret*/*token*/*passw*`).
 - Проценты сделки (`model.trade_pcts`, `live_calc`): `move_pct` = движение цены монеты с учётом стороны (long: цена/вход-1, short: 1-цена/вход), без плеча и комиссий; `pnl_pct_margin` = PnL после комиссий / маржа (у открытой: после комиссии входа, плюс `pnl_pct_margin_est` с оценкой комиссии выхода taker). В истории колонки «Цена %», «К марже %», «PnL USDT»; сводка `metrics`: `avg_move_pct`, `avg_margin_pct`, `best/worst_margin_pct`. Нет выхода или маржи -> `null`, на странице «—».
-- API: `/api/state?mode=live|paper|testnet|all&venue=all|platform|bybit` (всё сразу), `/api/market`, `/api/hot`, `/api/health`, `/api/trades`, `/api/ping`. По умолчанию mode=live.
+- `server.api_payload` (без HTTP): `/api/state?mode=live|paper|testnet|all&venue=all|platform|bybit` (всё сразу), `/api/market`, `/api/hot`, `/api/health`, `/api/trades`, `/api/ping`. По умолчанию mode=live.
 - Журнал разбирается устойчиво: повторный open при открытой записи заменяет её, open после close = новая запись, повторный close правит запись (как поправки по факту биржи),
   close без open и битые строки пропускаются и считаются в предупреждениях, старые записи без полей достраиваются.
 - Нереализованный PnL = знак * (цена/вход - 1) * номинал - fee_open (если fee_open нет, оценка 0.09% номинала, помечается). Цена (`model.resolve_price`, для
@@ -85,9 +90,7 @@ index.html, app.css, app.js), опрос `/api/state` раз в 3 с. Данны
   (market <= 60 с, prices/hot <= 150 с), иначе самая свежая с пометкой «устарела»; в API `price_src`, `price_age_s`, `price_feed` (сканер жив или нет, подсказка `scan --watch`). Нет цены нигде: «нет цены», PnL не считается.
   Формат цен: значащие цифры по величине (`model.fmt_price` = `price()` в app.js, держать одинаковыми). R сейчас = PnL / risk_usdt. Ликвидация показана ОЦЕНКОЙ
   (`entry * (1 -/+ (1/плечо - mm))`, mm из `maintenance_margin_pct`), реальная цена ликвидации биржи в журнал не пишется.
-- Фронт (`dash/static/`, без сборки, список файлов `server.SCRIPTS`): `theme.js` (тема до отрисовки), `core.js` (DOM, форматтеры, подсказки MAE/MFE/R/PF, «тикающие» возрасты, хэш URL + localStorage, `syncList` обновление по ключам, раскрываемые строки `rowGroup`), `charts.js` (кривая PnL, столбики, распределения), `v-overview|trades|ideas|market|system.js` (по вкладке), `app.js` (вкладки, опрос раз в 4 с, пауза при скрытой вкладке, индикатор состояния, настройки/тема).
-  Вкладки: Обзор (капитал, PnL сегодня/всего, просадка, позиции, ждущие лимиты, кривая, 5 последних сделок), Сделки (сводка, графики, причины выхода и теги ошибок, история с раскрытием, разрезы), Идеи (Взято/Наблюдаем/Идеи/Пропущено/Авто-история), Рынок (горячие и отслеживаемые монеты), Система (узлы, предупреждения, сессия и лимиты, источники, события). Вкладка и фильтры: `#trades?res=loss&bd=tag`, плюс `tbdash.ui` в localStorage. Режим/площадка/тема в окне настроек. Новые агрегаты API: `summary` (PnL сегодня по локальным суткам и всего), `status` (единый индикатор: сканер, фид, контекст, сессия), `breakdown.err` (теги ошибок).
-- Графики: SVG чистым JS; текст из данных вставляется через `textContent`. Тесты: `tests/test_dash.py`, `tests/test_launcher.py`.
+- Показ: фронт Vue (`frontend/`), темы dash2 (`src/tb/dash2/topics.py`) берут числа из `model`/`model2`. Тесты: `tests/test_dash.py`, `tests/test_dash_v2.py`, `tests/test_dash2*.py`, `tests/test_launcher.py`.
 
 ## Шлюз инструментов и MCP (WP11-A, `docs/GATEWAY.md`)
 `src/tb/gateway/` (каталог из 22 инструментов поверх brain/core, реестр агентов `config/agents.json` с хэшами токенов, аудит `state/gateway_audit.jsonl`, `gateway.call(agent, tool, args)`) и

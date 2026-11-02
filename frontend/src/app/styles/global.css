@@ -1,0 +1,16 @@
+*, *::before, *::after { box-sizing: border-box; }
+html { background: var(--bg); }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+button { font: inherit; }
+/* Каркас страницы: один потолок ширины (--page-max) для всех страниц; колонки и интервалы страницы переопределяют в своих стилях. */
+.page { width: 100%; max-width: var(--page-max); margin: 0 auto; padding: var(--space-5); display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); }
+.page > * { min-width: 0; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

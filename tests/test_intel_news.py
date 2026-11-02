@@ -92,15 +92,7 @@ class TestDashApi(RCase):
         code, obj = server.api_payload("/api/intel/news", {}, self.root, self.now + 60)
         self.assertEqual(code, 200)
         self.assertEqual(len(obj["items"]), 3)
-        self.assertIn("v-intel.js", server.ext_scripts())
         self.assertIn("tb.intel.dashapi", server.EXT_API)
-
-    def test_static_tab_script_is_safe(self):
-        with open(os.path.join(SRC, "dash", "static", "v-intel.js"), encoding="utf-8") as f:
-            js = f.read()
-        self.assertIn('registerTab("intel"', js)
-        for bad in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function", "href", "srcdoc"):
-            self.assertNotIn(bad, js)
 
 
 class TestBriefBlock(RCase):

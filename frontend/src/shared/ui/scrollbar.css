@@ -1,0 +1,39 @@
+/* Единый скролл проекта: тонкий, в цветах темы, без стрелок; применяется ко всем прокручиваемым областям, отдельные стили на панели не нужны.
+   WebKit/Chromium/Edge: псевдоэлементы (круглый бегунок, подсветка при наведении). Firefox: стандартные scrollbar-width/scrollbar-color. */
+:root {
+  --scroll-thumb: color-mix(in srgb, var(--muted) 38%, transparent);
+  --scroll-thumb-hover: color-mix(in srgb, var(--muted) 70%, transparent);
+}
+
+@supports selector(::-webkit-scrollbar) {
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  *::-webkit-scrollbar-track,
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: var(--scroll-thumb);
+    border: 3px solid transparent;
+    background-clip: content-box;
+    border-radius: 99px;
+    transition: background-color 150ms ease;
+  }
+  *::-webkit-scrollbar-thumb:hover,
+  *::-webkit-scrollbar-thumb:active {
+    background: var(--scroll-thumb-hover);
+    background-clip: content-box;
+  }
+  *::-webkit-scrollbar-button {
+    display: none;
+  }
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scroll-thumb) transparent;
+  }
+}

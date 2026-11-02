@@ -1,271 +1,184 @@
-# open-trader
+<p align="center">
+  <img src="docs/brand/stoa/concept-2b-favicon.svg" alt="Stoa mark" width="88">
+</p>
 
-[Русская версия](README.ru.md) | License: MIT
+<h1 align="center">Stoa</h1>
+<p align="center"><i>agentic trading</i></p>
 
-> ## DISCLAIMER (read first)
-> - **Experimental software. Not financial advice.** Nothing here is a recommendation to buy, sell or hold anything.
-> - **Profitability is NOT proven.** The research in this repository (`docs/RESEARCH.md`) tested rule-based strategies and found no edge that survives costs and robustness checks.
-> - **Real money is at risk.** Perpetual futures with leverage can lose your whole deposit quickly. Use the `paper` profile first and never trade money you cannot afford to lose.
-> - **Provided "as is", without warranty** (see `LICENSE`). You are solely responsible for your keys, your configuration and your trades.
-> - Windows support has had limited real-machine testing (the maintainer runs it on Windows 11); macOS is better covered. Some data sources (news, macro) are **not verified**.
+**Open-source platform for trading through agentic systems (agentic trading).**
 
-## What it is
+[Русская версия](README.ru.md) | License: MIT | Roadmap: [docs/ROADMAP.md](docs/ROADMAP.md)
 
-An autonomous trading platform for USDT-margined perpetual futures on Bybit, with two parts:
+Stoa gives one or more LLM agents (the "brain") fixed roles: `entry_scout`, `position_manager`, `reviewer`, `day_auditor`, `morning_analyst`, `news_reader`. The platform feeds them market data, metrics and a fixed set of exchange tools. A deterministic executor is the only holder of the trading key and checks every plan against hard limits (guard, Gate, KILL). After each trading day a review is written, and a case memory accumulates experience for the next days. It runs on Bybit USDT perpetual futures; the default profile is **paper**.
 
-1. A **deterministic executor** that holds the only trading key, checks every plan against hard limits, places orders with a stop and a take-profit, and watches positions on a one-second scale.
-2. An **LLM "brain"** that reads a compact briefing, proposes plans and manages open positions, but only through a fixed **tool gateway**. The brain proposes, the code verifies.
+> **Disclaimer.** Experimental software, not financial advice. **Profitability is not proven**: our own research (`docs/RESEARCH.md`) found no rule-based edge that survives costs and robustness checks. Leveraged perpetual futures can lose a whole deposit quickly. Paper is the default; live trading is an explicit, gated owner decision. Provided "as is", without warranty (`LICENSE`). Full text at the end.
 
-The default profile is `paper`: it trades on paper against real public Bybit prices. Live trading is an explicit, gated owner decision.
+## How it works
 
-Risk levels 1-5 set size and limits in code. At levels 4-5 the brain is told to take valid setups instead of skipping out of caution (all hard rules and limits stay), and the scanner patrols the day's coins on a schedule so the entry scout hunts for setups on its own (long and short, up to swing horizons) instead of waiting for a spike. The brain also sees what its own work costs (tokens per day against the day's result) and a ledger of paper experiments, so it can repeat hypotheses that held up on paper.
-
-## Safety principles
-
-- The brain **never sees keys or files**. It gets a fixed catalog of 22 tools (`docs/GATEWAY.md`) with per-agent rights and limits; there are no shell, network, filesystem or direct-order tools.
-- **Guard and risk levels live outside the LLM.** Size, leverage and margin are computed by code from capital and a risk level (1-5); an agent never sets them.
-- **A stop can only be tightened**, never widened. No averaging down, no martingale.
-- **KILL switch**: `state/KILL` halts trading; only a human can clear it (`./tb exec resume`).
-- **Paper first**: the default profile is paper; live needs explicit gates in the control plane (`docs/CONTROL.md`).
-- **Third-party text is data, not instructions.** News and headlines are read only by a **quarantined reader** (a separate cheap model call that can only answer with strict JSON); the trading brain never sees raw news (`docs/NEWS.md`).
-- Dashboard listens on `127.0.0.1` only; control actions are signed and audited; paper needs no login, dangerous (live) actions need the control token once per browser.
-- Everything is logged (decisions, gateway audit, events) so each action can be explained afterwards.
-
-## Architecture
-
+```mermaid
+flowchart TD
+    D["Market data and news<br/>news is read in quarantine"] --> B["Brief<br/>exactly what the brain sees"]
+    B --> R["Brain: LLM roles<br/>entry_scout, position_manager, reviewer, ..."]
+    R -- "tool calls only:<br/>no keys, no files" --> G["Gateway<br/>fixed tools, per-agent rights, audit"]
+    G -- "plans" --> E["Executor, deterministic<br/>guard, risk level, Gate, KILL<br/>the only holder of the trading key"]
+    E --> X["Paper by default<br/>Bybit testnet or live"]
+    X --> V["After the day<br/>day review and trade reviews"]
+    V --> M["Case memory and lessons"]
+    M -. "feeds the next briefs" .-> B
 ```
- news/RSS --> intel --> [quarantined reader] --> digest (numbers/ids only)
-                                                   |
- Bybit public WS --> feed/scan --> events bus -----+--> briefing (dossier)
-                                                   |
-                         +-------------------------v-------------------+
-                         |  BRAIN (LLM roles: entry_scout,             |
-                         |  morning_analyst, position_manager,         |
-                         |  reviewer, day_auditor)                     |
-                         |  chat agent (Claude via MCP) / API daemon   |
-                         +-------------------------+-------------------+
-                                  tool calls only  |  (no keys, no files)
-                         +-------------------------v-------------------+
-                         |  GATEWAY: 22 tools, rights, limits, audit    |
-                         +-------------------------+-------------------+
-                                       plans (inbox/outbox)
-                         +-------------------------v-------------------+
-                         |  EXECUTOR (deterministic): guard + risk      |
-                         |  levels + KILL + protections; only holder    |
-                         |  of the trading key                          |
-                         +------------+------------------+--------------+
-                                      |                  |
-                              paper port (default)   live/testnet port
-                                                      Bybit REST/WS
- supervisor (`./tb up`) runs the services; dashboard + control plane on 127.0.0.1
-```
-Details: `docs/ARCHITECTURE.md`, `docs/DESIGN_V2.md`, `docs/SPEC_V2.md`.
 
-## Status and honest limitations
+- **Agents.** Each role is an LLM call with its own prompt, schema, budget and fallback model. Any provider: DeepSeek and Anthropic natively, OpenAI-compatible APIs (OpenAI, Gemini, Groq, Mistral, OpenRouter) and local models (LM Studio, Ollama). Details: `docs/ROLES.md`, `docs/BRAIN.md`, `docs/PROVIDERS.md`.
+- **Executor.** Places every order with a stop and a take-profit, watches positions on a one-second scale, computes size, leverage and margin in code from capital and the owner's risk level (1-5). A stop can only be tightened. No averaging down, no martingale. `state/KILL` halts trading and only a human clears it. Details: `docs/ARCHITECTURE.md`, `docs/RISK_LEVELS.md`, `docs/CONTROL.md`.
+- **Tools, not access.** The brain never sees keys, files or the shell: only the tool gateway with per-agent rights (`docs/GATEWAY.md`). Third-party text (news, headlines) is data, never instructions (`docs/NEWS.md`).
+- **Memory and measurement.** Every trade lands in the journal; hypotheses are counted as experiments (n, mean R, multiple-comparison correction); cases and lessons feed later briefings. Where this is going: `docs/ROADMAP.md`.
 
-- Experimental. Autonomous LLM entries have only run on paper (the entry scout is paper-only by design); the owner has made a few small live trades by hand. A live LLM brain has not been validated in production (prompts and response formats were tested on a fake LLM; the live evaluation is the owner's job).
-- **No proven edge.** Our own research (`docs/RESEARCH.md`) tested minute trend rules, hourly breakout, pairs, daily momentum, funding contrarian, nine candle/level hypotheses and volume-after-impulse. None passed. The value of the system is risk discipline and measurement of hypotheses, not a promise of income.
-- News sources are unverified until you run `./tb intel verify`; the news reader has not been tested on live text.
-- Slow market data (derivatives, macro) is optional and not started by default.
-- Windows (`tb.cmd`, `tb.ps1`, `docs/WINDOWS.md`) is used by the maintainer on Windows 11 but is less tested than macOS; process stop/restart is the weak spot. macOS is the best-tested platform.
-- Documentation is mostly in Russian; the README, SECURITY, CONTRIBUTING are in English.
+## Quick start
 
-## Requirements
-
-- **Python 3.9 or newer** (`python3 --version`; developed on 3.14, 3.9 is not re-tested). No external dependencies: standard library only, no `pip install`.
-- macOS or Linux (tested on macOS). Windows: `tb.cmd` / `tb.ps1` work for the maintainer on Windows 11 but are less tested (`docs/WINDOWS.md`).
-- Internet access: the paper profile trades on paper against **real public Bybit prices** (WebSocket and REST, public endpoints). No Bybit account or key is needed for paper.
-- An LLM provider key is **optional**: the platform, dashboard and paper work without a live brain. The brain needs a provider (see below).
-
-## Quick start (paper)
-
-**Paper** means simulated trading: orders are filled by a local paper executor at real market prices; no exchange key is used and no money moves. Run everything in a terminal from the repository root. On Windows use `.\tb.cmd` instead of `./tb` (PowerShell or cmd); Windows variants are shown below each step.
-
-**1. Get the code**
+One command per OS. It checks the environment, offers to install what is missing (Python included), sets up paper mode and an optional LLM provider, then starts the platform and the dashboard. Nothing is installed without an explicit `[Y/n]` and the exact command shown first.
 
 ```bash
-git clone https://github.com/ciel69/open-trader.git
-cd open-trader
-```
-
-From a zip archive the executable bit may be lost: run `chmod +x tb` (macOS/Linux).
-
-**2. Check that it runs** (needs Python 3.9+)
-
-```bash
-./tb help
-./tb setup --check
+git clone https://github.com/ciel69/stoatrade.git
+cd stoatrade
+./tb setup            # macOS, Linux, WSL
 ```
 
 ```powershell
-.\tb.cmd help
-.\tb.cmd setup --check
+git clone https://github.com/ciel69/stoatrade.git
+cd stoatrade
+.\tb.cmd setup        # Windows (cmd or PowerShell)
 ```
 
-`setup --check` is optional: it prints what is still missing. `./tb setup` asks for keys with hidden input.
+Then open **http://127.0.0.1:8765/** (local only) and press **«Начать торговлю»** at the top of the sidebar, mode `paper`. Later starts: `./tb start`, `./tb stop`, `./tb status` (Windows: `.\tb.cmd ...`).
 
-**3. Start the platform**
+What `setup` checks and does, and the flags `--check`, `--yes`, `--dry-run`, `--no-start`: [docs/QUICKSTART.md](docs/QUICKSTART.md) (Russian). Requirements in short: Python 3.9+ (installed for you if missing), the `websockets` package for the dashboard (offered via pip), internet access to public Bybit endpoints. Node.js is **not** needed: the built dashboard (`frontend/dist`) is in the repository. No exchange key is needed for paper; an LLM key is optional.
 
-```bash
-./tb start
-./tb status
-```
+## Screenshots
 
-```powershell
-.\tb.cmd start
-.\tb.cmd status
-```
+Demo data, not a real account (`frontend/e2e/lib/demo.mjs`; how to regenerate: `docs/images/README.md`). The UI is in Russian. Screenshots follow your GitHub theme (dark or light).
 
-`./tb start` runs everything in the background (profile paper), creates the signing key and the dashboard token on first run (the token is printed once; keep it) and prints the dashboard link and next steps.
+### Overview
 
-**4. Open the dashboard and start a trading day**
+Money strip, room to the limits, open positions with stop and take, cumulative PnL, what the brain is doing, limit orders, plans in work.
 
-1. Open **http://127.0.0.1:8765/** (local only; paper needs no login, the token is asked once, only for dangerous actions and for changing settings).
-2. Click the blue **Start trading** button at the top of the left sidebar, right under the logo (see the screenshot below). Pick the mode `paper` and confirm. A trading day has no time limit: it runs until you stop it (the same button then reads **Finish day**). The start goes through steps S1-S9 (tab **Day**). The same action is also under **System -> Control -> Start day**.
-3. No button? It appears only while the control service answers, and on a narrow window (under 1100 px) it shrinks to a play icon. Check that the platform is running (`./tb status`, `./tb logs ctl`).
-4. The brain is **off** until you connect an LLM provider (next section). Until then `./tb start` prints one line `мозг выключен: <reason> (как включить: ...)` and everything else works: dashboard, scanner, plans, paper executor, journal.
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/overview-light.png">
+  <img src="docs/images/overview-dark.png" alt="Overview" width="100%">
+</picture>
 
-**Stop, restart, emergency**
+### Brain → Decisions
 
-```bash
-./tb stop
-./tb restart
-```
+Every decision of the roles and the executor, rejects with reasons, result per model against its LLM cost.
 
-```bash
-./tb exec halt --flatten
-```
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/brain-decisions-light.png">
+  <img src="docs/images/brain-decisions-dark.png" alt="Brain decisions" width="100%">
+</picture>
 
-If you pressed Ctrl+Z in the terminal that started the supervisor, `./tb start|stop|restart` resume it by themselves.
+### System → Control
 
-**Another dashboard port**: put this into `config/local/platform.json`, then `./tb restart`:
+Platform state, risk level, nodes, session with loss budget, room to each limit, capital.
 
-```json
-{"svc": {"dash": {"port": 8780}}}
-```
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/control-light.png">
+  <img src="docs/images/control-dark.png" alt="Control" width="100%">
+</picture>
 
-**Self-check** on a temporary root with a fake LLM (uses public Bybit data, touches nothing of yours):
+<details>
+<summary><b>More screens</b> (8)</summary>
 
-```bash
-./tb smoke
-```
+### Trading → Plans
 
-Full guide: `docs/QUICKSTART.md` (Russian); operations: `docs/RUNBOOK.md`.
+Waiting for entry, far, in trade, closed; distance to the trigger.
 
-## Connect an LLM provider
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/plans-light.png">
+  <img src="docs/images/plans-dark.png" alt="Plans" width="100%">
+</picture>
 
-Details, table of templates and troubleshooting: **[docs/PROVIDERS.md](docs/PROVIDERS.md)** ([RU](docs/PROVIDERS.ru.md)). Shortest path for a provider that is already in the registry (DeepSeek; Anthropic works the same way with `anthropic` and profile `an-sonnet`):
+### Trading → Trades
 
-```bash
-./tb llm presets
-./tb llm key set deepseek
-./tb brain enable
-./tb llm check --provider deepseek
-./tb restart
-```
+Cumulative PnL, history, PnL per trade, exit reasons, error tags from reviews.
 
-What each line does: `presets` lists templates (anthropic, deepseek, openai, gemini, groq, mistral, openrouter, local, lmstudio); `key set` asks for the key with hidden input and stores it in `~/.config/traider-bot/deepseek.env` (outside the repo); `brain enable` turns the brain subscriber on (writes `config/local/`, prints what is still missing); `check` is an offline config check (add `--live` for one tiny paid request); `restart` applies it (`./tb brain status` shows the assignments).
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/trades-light.png">
+  <img src="docs/images/trades-dark.png" alt="Trades" width="100%">
+</picture>
 
-Another vendor (here Gemini):
+### Trading → Day
 
-```bash
-./tb llm provider add gemini --preset gemini
-./tb llm key set gemini
-./tb llm provider enable gemini
-./tb brain profile set gem-flash --provider gemini --model flash
-./tb brain use all gem-flash
-```
+Start steps of the trading day, day plan, carried positions, previous days with results.
 
-Any OpenAI-compatible URL and local models (Ollama, LM Studio) are covered in `docs/PROVIDERS.md`. **All templates are unverified with a live key; only Anthropic and DeepSeek have native adapters.** Keep to paper and small budgets (`config/brain.json` -> `budget`). The same screens exist in the dashboard (**System -> Settings**).
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/day-light.png">
+  <img src="docs/images/day-dark.png" alt="Day" width="100%">
+</picture>
 
-## Connect an exchange (Bybit)
+### Trading → Experiments
 
-Paper needs no exchange key. A key is needed only for `testnet` and `live`.
+Hypotheses with n, mean R, win rate and "too little data" flags.
 
-**Only Bybit is implemented and tested** (USDT-margined perpetuals: paper, testnet and a few small live trades by the maintainer). The registry lists okx and binance as placeholders: they have no adapter, are disabled and cannot be enabled. How to add another exchange is described in `docs/EXCHANGES.md`.
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/experiments-light.png">
+  <img src="docs/images/experiments-dark.png" alt="Experiments" width="100%">
+</picture>
 
-1. On Bybit create an API key. Never give it the Withdraw permission. `read`: read-only. `trade`: contract trading only, restricted to your IP if Bybit allows. `testnet`: a separate account on testnet.bybit.com.
-2. Save the key with the setup script. Input is hidden, nothing is printed, the file is written outside the repository (owner-only permissions where the OS supports them), an existing file is never overwritten without a "yes":
+### Brain → Brief
 
-```bash
-./tb setup bybit --profile read
-./tb setup bybit --profile trade
-./tb setup bybit --profile testnet
-```
+Exactly what the brain sees: account, room, positions, plans, market, limits, LLM cost of the day, hot coins, levels, lessons.
 
-```powershell
-.\tb.cmd setup bybit --profile read
-```
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/brief-light.png">
+  <img src="docs/images/brief-dark.png" alt="Brief" width="100%">
+</picture>
 
-3. Check that the files are in place (values are never read or printed), then check the connection:
+### System → Settings
 
-```bash
-./tb setup --check
-./tb bybit read balance
-```
+Which model serves which role, providers and exchange, LLM spend and ceilings.
 
-Profiles and files: `read` -> `bybit_mainnet.env` (balance, capital sync), `trade` -> `bybit_mainnet_trade.env` (live trading), `testnet` -> `bybit_testnet.env`, all in `~/.config/traider-bot/` (Windows: `%USERPROFILE%\.config\traider-bot\`, another folder: `TB_KEYS_DIR`). Plain `./tb setup` offers the same as one step of its wizard. Keys are read only by the launcher and the executor; the brain and the dashboard never see them, and exchange keys are never entered in the dashboard.
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/settings-light.png">
+  <img src="docs/images/settings-dark.png" alt="Settings" width="100%">
+</picture>
 
-Order of enabling: paper, then testnet (`./tb up --profile testnet`), then live, only after a paper history and with the owner's gates (dashboard: **Start trading** -> mode **Real money** -> accept the warnings -> confirm).
+### Market
 
-## What you will see
+Map of coins.
 
-All screenshots below are synthetic fixture data (`tests/fixtures_v2/gen.py`), not a real account. The dashboard UI language is Russian. How to regenerate: `docs/images/README.md`.
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/market-light.png">
+  <img src="docs/images/market-dark.png" alt="Market" width="100%">
+</picture>
 
-| | |
-|---|---|
-| ![Overview](docs/images/overview.png) | **Now**: capital, risk, open position with stop/take, plans in work, limits headroom, events. The blue **Start trading** button is top-left in the sidebar |
-| ![Brain decisions](docs/images/brain-decisions.png) | **Brain -> Decisions**: brain status card and the log of every decision (who, what, why, result) |
-| ![Plans](docs/images/plans.png) | **Brain -> Plans**: board of plans (waiting / watching / in trade / closed), entry conditions, nearest trigger |
-| ![Trades](docs/images/trades.png) | **Trades**: statistics, cumulative PnL, exit reasons, history |
-| ![Settings](docs/images/settings.png) | **System -> Settings**: which model serves which role (with fallbacks), AI connections: add a provider from a template, enter a key (write-only), enable, check |
+### Event panel
 
-## Troubleshooting
+Live events from the bus.
 
-| problem | what to do |
-|---|---|
-| `./tb: Permission denied` or `command not found: python3` | `chmod +x tb`; install Python 3.9+; or run `python3 -m tb.launcher help` with `PYTHONPATH=src` |
-| Port 8765 is busy / dashboard does not open | `./tb status`, `./tb logs dash`; change the port in `config/local/platform.json` (see Quick start) and `./tb restart` |
-| `./tb status` shows the platform "frozen" or `start`/`stop` hangs | the supervisor was suspended by Ctrl+Z (state T). `./tb start`, `stop`, `restart` and `down` send it SIGCONT themselves; if they cannot, they print the manual `kill -CONT <pid>; kill -TERM <pid>` |
-| `мозг выключен: ...` / brain does nothing | no subscriber `api`, no provider key, provider disabled or no profile: the line says which; follow `docs/PROVIDERS.md` section 6 |
-| `E_ELEVATE` or a token prompt in the dashboard | the action is "dangerous" (live, changing settings, keys): enter the dashboard token once; lost: `./tb control token new` |
-| Commands fail with network/DNS errors, WebSocket never connects | a sandbox, VPN or firewall blocks outbound access; run in a plain terminal. Service proxies are disabled on purpose for exchange traffic (`docs/WINDOWS.md`, `docs/RUNBOOK.md`) |
-| Windows | less tested than macOS; follow `docs/WINDOWS.md` and please report what breaks (`./tb stop` waits up to 90 s there) |
-| Something else | `./tb status`, `./tb logs [exec|scan|feed|dispatch|ctl|dash|brain]`, `./tb day status`, `./tb setup --check`; `./tb smoke` checks the whole chain on a temporary root |
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/events-light.png">
+  <img src="docs/images/events-dark.png" alt="Events" width="100%">
+</picture>
 
-## Repository layout
-
-```
-src/tb/        the package (stdlib only): core, executor, gateway, mcp, brain, llm, control, lifecycle, intel, memory, logic, marketdata, venues, platform, dash, research, audit, legacy_engine
-config/        settings (no secrets); examples with neutral values: examples/config/
-docs/          documentation (index: docs/INDEX.md), design notes: docs/spec_v2/
-tests/         unit and scenario tests (fixtures are synthetic)
-tb, tb.cmd, tb.ps1   entry points (macOS/Linux, Windows cmd, PowerShell)
-state/ runtime/ data/   created at run time; private, never committed
-```
-Your keys live outside the repository, in `~/.config/traider-bot/`.
+</details>
 
 ## Documentation
 
-Start with `docs/INDEX.md`. Key pages: `PROVIDERS` (connect an LLM), `QUICKSTART`, `RUNBOOK`, `ARCHITECTURE`, `GATEWAY`, `CONTROL`, `BRAIN`, `ROLES`, `RISK_LEVELS`, `LIFECYCLE`, `NEWS`, `RESEARCH`, `LESSONS`, `PERMISSIONS`, `WINDOWS`.
+| | |
+|---|---|
+| [docs/QUICKSTART.md](docs/QUICKSTART.md) | first run, `setup`, start, dashboard, stop, troubleshooting |
+| [docs/PROVIDERS.md](docs/PROVIDERS.md) | connect an LLM provider (cloud or local), profiles, roles, budgets |
+| [docs/EXCHANGES.md](docs/EXCHANGES.md) | exchange keys (Bybit only), testnet, live gates |
+| [docs/WINDOWS.md](docs/WINDOWS.md) | Windows specifics |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | development direction: the learning brain, stages 0-6 |
+| [docs/INDEX.md](docs/INDEX.md) | everything else: architecture, gateway, control plane, risk levels, lifecycle, research |
 
-## Tests
+Tests: `./tb test` (unittest, no network, no real keys). Contributing: `CONTRIBUTING.md`; security: `SECURITY.md`; before publishing a fork: `./tb audit-public`. Most documents are in Russian.
 
-```bash
-./tb test
-```
+## Disclaimer
 
-The whole suite: unittest, no network, no real keys. A single file:
-
-```bash
-python3 -m unittest discover -s tests -p 'test_layering.py'
-```
-
-## Contributing
-
-See `CONTRIBUTING.md` (rules: stdlib only, cross-platform, no real keys in tests, do not write to the real `state/`, keep the layers, do not add trading tools to the gateway without discussion). Security issues: `SECURITY.md`. Conduct: `CODE_OF_CONDUCT.md`.
-Before publishing a fork, run `./tb audit-public`.
-
-## License
+- **Experimental software. Not financial advice.** Nothing here is a recommendation to buy, sell or hold anything.
+- **Profitability is NOT proven.** The research in this repository (`docs/RESEARCH.md`) tested rule-based strategies and found no edge that survives costs and robustness checks. A live LLM brain has not been validated in production. The value of the system is risk discipline and measurement of hypotheses, not a promise of income.
+- **Real money is at risk.** Perpetual futures with leverage can lose your whole deposit quickly. Use the `paper` profile first and never trade money you cannot afford to lose.
+- **Provided "as is", without warranty** (see `LICENSE`). You are solely responsible for your keys, your configuration and your trades.
+- Windows has had limited real-machine testing; macOS is better covered. Some data sources (news, macro) are **not verified**.
 
 MIT, see `LICENSE`.

@@ -76,7 +76,11 @@ def levels(ex):
         try:
             out[sym] = L.key_levels(book, now_ms)
         except Exception:
-            pass
+            continue
+        last = book.last_closed(5, 1)
+        if last:                                   # последняя закрытая свеча 5м: карточка плана показывает прокол уровня, закрывшийся обратно
+            c = last[-1]
+            out[sym]["bar_5m"] = {"start": int(c.start // 1000), "h": c.h, "l": c.l, "c": c.c}
     return out
 
 

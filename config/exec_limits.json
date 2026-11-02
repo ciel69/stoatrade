@@ -11,6 +11,7 @@
  "stop_moves": {
   "min_interval_s": 5,
   "min_step_ticks": 2,
+  "min_step_r": 0.1,
   "min_gap_bps_from_price": 8,
   "max_moves_per_hour": 30
  },
@@ -18,15 +19,24 @@
   "enabled": true,
   "be_r": 0.7,
   "trail_activate_r": 1.0,
-  "trail_lock_frac": 0.5
+  "trail_lock_frac": 0.5,
+  "min_profit_r": 0.2,
+  "stop_slip_bps": 5
  },
  "position_watch": {
   "enabled": true,
-  "paper_only": true,
+  "paper_only": false,
   "stalled_min": 15,
   "stalled_min_r": 0.5,
   "flow_turn_s": 30,
-  "max_wakes_per_hour": 3
+  "max_wakes_per_hour": 12,
+  "fast_move_atr": 2.0,
+  "fast_move_s": 60,
+  "struct_break_s": 30,
+  "struct_break_buf_pct": 0.1,
+  "wall_atr": 1.5,
+  "vol_spike_x": 3.0,
+  "news_max_age_s": 180
  },
  "ws_trade": {
   "enabled": false,
@@ -36,6 +46,8 @@
  "entry": {
   "max_price_age_s": 3,
   "max_chase_bps": 15,
+  "chase_atr_frac": 0.3,
+  "chase_rr_floor": 1.5,
   "no_confirm_max_size_mult": 0.5,
   "blocked_attempts_max": 3,
   "retry_after_s": 15,

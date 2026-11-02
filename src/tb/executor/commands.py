@@ -109,6 +109,8 @@ def _ctx(ex, plan, now):
         import json
         from tb import paths
         prof = _load_json(paths.config("risk_profile.json", root=ex.root))
+        from tb.core import risklevels
+        prof = risklevels.effective(prof, ex.root)          # пороги стопа/RR/плеча выбранного уровня риска, как у guard и досье мозга
     except Exception:
         pass
     ctx = {"now": now, "limits": ex.cfg, "instrument": ins and dict(ins, qty_step=ins.get("qty_step"), min_qty=ins.get("min_qty")), "price": price,

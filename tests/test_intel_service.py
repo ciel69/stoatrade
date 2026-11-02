@@ -630,8 +630,8 @@ class TestVerify(SvcCase):
         self.assertEqual(rc, 0, out)
         self.assertIn("источник", out)
         self.assertEqual(out.count("ПРОБЛЕМА"), 0)
-        self.assertEqual(len(net.calls), 15)                                  # по одному GET на источник/семейство (BTC)
-        self.assertEqual(len({(c["url"], tuple(sorted(c["params"].items()))) for c in net.calls}), 15)
+        self.assertEqual(len(net.calls), 19)                                  # по одному GET на источник/семейство (BTC)
+        self.assertEqual(len({(c["url"], tuple(sorted(c["params"].items()))) for c in net.calls}), 19)
 
     def test_does_not_write_cache_or_facts(self):
         self.run_verify([])

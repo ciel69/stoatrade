@@ -23,7 +23,8 @@ ROUTES = [
     ("announcements/index", "bybit_ann.json"), ("market/time", "bybit_time.json"), ("market/tickers", "bybit_tickers.json"),
     ("open-interest", "bybit_oi.json"), ("account-ratio", "bybit_ls.json"), ("alternative.me", "fng.json"), ("deribit", "dvol.json"),
     ("coingecko", "btc_dom.json"), ("coindesk", "rss_coindesk.xml"), ("theblock", "rss_theblock.xml"), ("decrypt.co", "atom_decrypt.xml"),
-    ("cointelegraph", "rss_theblock.xml"), ("bls.gov", "bls.ics"), ("federalreserve", "fomc.html"),
+    ("cointelegraph", "rss_theblock.xml"), ("crypto.news", "rss_theblock.xml"), ("ambcrypto", "rss_theblock.xml"), ("investing.com", "rss_theblock.xml"),
+    ("dowjones", "rss_theblock.xml"), ("bls.gov", "bls.ics"), ("federalreserve", "fomc.html"),
 ]
 
 

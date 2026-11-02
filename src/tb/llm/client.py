@@ -41,7 +41,7 @@ class LLMClient(object):
         try:
             resp = self.adapter.complete(req)
         except LLMError as e:
-            self._log(req, None, ok=False, err=e.code, lat=(time.time() - t0) * 1000, retries=e.retries)
+            self._log(req, None, ok=False, err=e.code, lat=(time.time() - t0) * 1000, retries=e.retries, err_msg=e.msg)
             raise
         resp.usd = usage_mod.price_usd(m.price, resp.usage, self.clock())
         self._log(req, resp, ok=True, err=None, lat=resp.latency_ms, retries=resp.retries)
@@ -50,14 +50,14 @@ class LLMClient(object):
         self.budget.after_call(p.id)
         return resp
 
-    def _log(self, req, resp, ok, err, lat, retries):
+    def _log(self, req, resp, ok, err, lat, retries, err_msg=None):
         if not self.record:
             return
         meta = dict(req.meta)
         if "prompt_hash" not in meta:
             meta["prompt_hash"] = usage_mod.prompt_hash(req.system)
         usage_mod.record(meta, self.provider.id, self.model.key, resp.usage if resp else None, resp.usd if resp else 0.0, lat, ok, err, retries,
-                         resp.finish if resp else None, root=self.root, now=self.clock())
+                         resp.finish if resp else None, root=self.root, now=self.clock(), err_msg=err_msg)
         self._last_meta = meta
 
     def note_format_error(self, resp, codes):

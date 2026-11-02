@@ -1,0 +1,35 @@
+{
+  "name": "stoa-dashboard",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Новый дашборд Stoa: Vue 3 + Pinia + TypeScript, архитектура FSD, только WebSocket. План: docs/FRONTEND_PLAN.md",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "typecheck": "vue-tsc --noEmit",
+    "test": "vitest run",
+    "lint:fsd": "steiger ./src",
+    "screenshots": "npm --prefix e2e run screenshots --"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "pinia": "^4.1.0",
+    "vue": "^3.5.44",
+    "vue-router": "^5.4.0"
+  },
+  "devDependencies": {
+    "@feature-sliced/steiger-plugin": "^0.8.1",
+    "@types/node": "^26.6.6",
+    "@vitejs/plugin-vue": "^6.0.10",
+    "@vue/test-utils": "^2.5.1",
+    "jsdom": "^29.1.1",
+    "steiger": "^0.6.0",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5",
+    "vue-tsc": "^3.3.14"
+  }
+}

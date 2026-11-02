@@ -31,6 +31,7 @@ CODE_SIDE_MISMATCH = "SIDE_MISMATCH"
 CODE_NO_QUOTE = "NO_QUOTE"
 CODE_MARGIN = "110007"
 KLINE_KEEP = 1000
+QUOTE_MAX_AGE_S = 60.0       # котировка старше этого не годится ни для проверки плана, ни для бумажного исполнения
 
 
 def _rej(code, msg):
@@ -148,9 +149,7 @@ class PaperPort(VenuePort):
         return dict(DEFAULT_INSTRUMENT)
 
     def quote(self, sym):
-        q = self.state.q.get(sym)
-        if not q:
-            raise PortError(KIND_NETWORK, "нет котировки %s (тики не поступали)" % sym, code=CODE_NO_QUOTE)
+        q = self._need_quote(sym)
         return (q["bid"], q["ask"], q["last"])
 
     def klines(self, sym, tf_min, limit=200):
@@ -178,9 +177,14 @@ class PaperPort(VenuePort):
         return q
 
     def _need_quote(self, sym):
+        """Котировка не старше QUOTE_MAX_AGE_S: котировки сохраняются в paper_port.json и переживают перезапуск, а по монете без подписки тиков нет
+        (2026-10-31: шлюз сверял план SOL с ценой 100.34 двухдневной давности при рынке 95.8, RSR исполнился по цене выше максимума свечи). Старая -> NO_QUOTE."""
         q = self.state.q.get(sym)
         if not q:
             raise PortError(KIND_NETWORK, "нет котировки %s (тики не поступали)" % sym, code=CODE_NO_QUOTE)
+        ts = q.get("ts")
+        if isinstance(ts, (int, float)) and self.clock() - ts > QUOTE_MAX_AGE_S:
+            raise PortError(KIND_NETWORK, "котировка %s устарела (%.0f с)" % (sym, self.clock() - ts), code=CODE_NO_QUOTE)
         return q
 
     def _dup(self, link_id):

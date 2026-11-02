@@ -145,6 +145,31 @@ class TestEconomics(Base):
             self.assertEqual([x["hyp"] for x in ex["open"]], ["probe-x"])
             self.assertEqual(ex["min_n"], 30)
 
+    def test_min_trades_quota(self):
+        """Квота входов за сутки по уровню риска (min_trades_day): сколько вошли сегодня и сколько ещё нужно; без квоты полей нет."""
+        from unittest import mock
+        from tb.core import risklevels
+        with mock.patch.object(risklevels, "limits_summary", return_value={"min_trades_day": 5}):
+            base = self.build("event")["economics"]["trades_day"]          # сделки фикстуры Base
+            with open(self.R("state", "trades.jsonl"), "a", encoding="utf-8") as f:
+                f.write("".join(json.dumps(r) + "\n" for r in self.trade(0, "q", 1.0, 0.2, iso(NOW - 600)) + self.trade(1, "q", 1.0, 0.2, iso(NOW - 86400))))
+            eco = self.build("event")["economics"]
+        self.assertEqual((eco["min_trades_day"], eco["trades_day"], eco["trades_left"]), (5, base + 1, max(0, 4 - base)))      # вчерашний вход не считается
+        with mock.patch.object(risklevels, "limits_summary", return_value={"min_trades_day": 0}):
+            self.assertNotIn("trades_left", self.build("event")["economics"])
+
+    def test_min_net_quota(self):
+        """Квота прибыли дня по уровню риска (min_net_day_usdt): сколько ещё нужно заработать чистыми в режиме дня; без квоты полей нет."""
+        from unittest import mock
+        from tb.core import risklevels
+        with mock.patch.object(risklevels, "limits_summary", return_value={"min_trades_day": 0, "min_net_day_usdt": 5.0}):
+            eco = self.build("event")["economics"]
+            self.assertEqual(eco["min_net_day_usdt"], 5.0)
+            net = eco.get("net_paper_day", eco.get("net_live_day", -eco["llm_usd_day"]))
+            self.assertAlmostEqual(eco["net_left_usdt"], max(0.0, 5.0 - net), places=3)
+        with mock.patch.object(risklevels, "limits_summary", return_value={"min_trades_day": 0}):
+            self.assertNotIn("net_left_usdt", self.build("event")["economics"])
+
     def test_no_hypotheses_no_block(self):
         self.assertNotIn("experiments", self.build())
 
@@ -511,6 +536,25 @@ class TestEventJobContext(Base):
         s0 = bus.emit("scanner_signal", {"kind": "range_5m", "px": 3.0, "wake": True}, sym="ZZZ", root=self.root, now=NOW - 20)
         b = self.build("event", since=0, seqs=[s0], sym="ZZZ")
         self.assertEqual(b["struct_missing"][0], "ZZZ")
+        self.assertEqual((b["data"]["struct"], b["data"]["levels"], b["data"]["ready"]), (False, 0, False))      # полнота данных: входа нет
+        self.assertIn("struct", b["data"]["missing"])
+
+    def test_data_and_crowd_blocks_for_job_symbol(self):
+        """Монета события с структурой: data.ready, crowd из структуры (r24h, импульс свечи) и события; только числа и enum."""
+        self.structure(["XPL", "BTC"])
+        d = json.load(open(self.R("runtime", "structure.json"), encoding="utf-8"))
+        d["symbols"]["XPL"].update(r24h=-30.0, a5_pct=1.0, res=[{"px": 1.5, "d_pct": 1.0, "d_atr": 0.5, "t": "dh"}], sup=[{"px": 0.8, "d_pct": 1.0, "d_atr": 0.5, "t": "dl"}])      # уровни как в реальном файле
+        w(self.R("runtime", "structure.json"), d)
+        s0 = bus.emit("scanner_signal", {"kind": "range_5m", "px": 1.0, "ret_5m_pct": -2.5, "range_5m_pct": 3.0, "turn_surge_5m": 0.5, "wake": True}, sym="XPL", root=self.root, now=NOW - 20)
+        b = self.build("event", since=0, seqs=[s0], sym="XPL")
+        self.assertTrue(b["data"]["ready"])
+        self.assertEqual(b["data"]["struct"], True)
+        self.assertGreaterEqual(b["data"]["levels"], 2)
+        c = b["crowd"]
+        self.assertEqual((c["mood"], c["bias"]), ("panic", "short"))
+        self.assertIn("dump_24h", c["flags"])
+        self.assertIn("thin_dump", c["warn"])
+        self.assertNotIn("deriv", b)                                                              # facts.json в фикстуре нет: блока деривативов нет, досье не падает
 
     def test_session_block_carries_guard_thresholds(self):
         b = self.build("event", since=0)
