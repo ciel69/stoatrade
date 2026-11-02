@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { roomFill, roomText, useSystemStore } from '@/entities/system'
 import { UiChip, UiMeter } from '@/shared/ui'
-import { countdown, fixed, humanize, sessionName, signed, thesisText, useNow } from '@/shared/lib'
+import { PAPER_LIMITS_CHIP, PAPER_LIMITS_NOTE, countdown, fixed, humanize, sessionName, signed, thesisText, useNow } from '@/shared/lib'
 
 /**
  * Три ответа на вопрос «сколько ещё можно»: сессия (идёт ли, входы разрешены, сделки и бюджет убытка), запас до каждого лимита шкалами и капитал (просадка от пика, свободные средства).
@@ -12,6 +12,7 @@ const sys = useSystemStore()
 const now = useNow()
 const s = computed(() => sys.snapshot)
 const sess = computed(() => s.value?.session ?? null)
+const paper = computed(() => s.value?.room.paper === true)
 const left = computed(() => (sess.value?.expires_at != null ? sess.value.expires_at - now.value : null))
 const budgetFill = computed(() => (sess.value?.budget_usdt ? Math.max(0, 1 - (sess.value.budget_used ?? 0) / sess.value.budget_usdt) : 0))
 const venues = computed(() => Object.entries(s.value?.account.venues ?? {}).filter(([, v]) => (v.equity ?? 0) > 0))
@@ -26,8 +27,13 @@ const say = (list: string[]): string => list.map((t) => humanize({ kind: 'text',
     <article class="card">
       <h3 class="cap">Сессия</h3>
       <template v-if="sess">
-        <p class="big">{{ sessionName(sess.type) }} <UiChip :tone="sess.entries_allowed ? 'ok' : 'warn'">{{ sess.entries_allowed ? 'новые сделки разрешены' : 'новые сделки закрыты' }}</UiChip></p>
-        <p v-if="sess.block_reasons.length" class="muted">Почему закрыты: {{ say(sess.block_reasons) }}.</p>
+        <p class="big">{{ sessionName(sess.type) }}
+          <UiChip v-if="sess.entries_allowed" tone="ok">новые сделки разрешены</UiChip>
+          <UiChip v-else-if="paper">лимиты исчерпаны, {{ PAPER_LIMITS_CHIP }}</UiChip>
+          <UiChip v-else tone="warn">новые сделки закрыты</UiChip>
+        </p>
+        <p v-if="sess.block_reasons.length && paper" class="muted">Исчерпано: {{ say(sess.block_reasons) }}. {{ PAPER_LIMITS_NOTE }}</p>
+        <p v-else-if="sess.block_reasons.length" class="muted">Почему закрыты: {{ say(sess.block_reasons) }}.</p>
         <div class="kv">
           <span>Сделок</span><b>{{ sess.trades ?? '–' }}<template v-if="sess.max_trades"> из {{ sess.max_trades }}</template></b>
           <span>Результат</span><b :class="tone(sess.realized)">{{ signed(sess.realized, 2) }} USDT</b>
@@ -42,7 +48,7 @@ const say = (list: string[]): string => list.map((t) => humanize({ kind: 'text',
     </article>
 
     <article class="card">
-      <h3 class="cap">Запас до лимитов<UiChip v-if="s.room.allowed === false" tone="bad">новые сделки закрыты</UiChip></h3>
+      <h3 class="cap">Запас до лимитов<UiChip v-if="s.room.allowed === false && paper">справочно: {{ PAPER_LIMITS_CHIP }}</UiChip><UiChip v-else-if="s.room.allowed === false" tone="bad">новые сделки закрыты</UiChip></h3>
       <ul v-if="s.room.rows.length" class="rows">
         <li v-for="r in s.room.rows" :key="r.id">
           <span class="top"><span>{{ roomLabel(r.label) }}</span><b>{{ roomText(r) }}</b></span>
@@ -50,7 +56,8 @@ const say = (list: string[]): string => list.map((t) => humanize({ kind: 'text',
         </li>
       </ul>
       <p v-else class="muted">Данные о лимитах риска пока не загружены.</p>
-      <p v-if="s.room.reasons.length" class="muted">Почему новые сделки закрыты: {{ say(s.room.reasons) }}.</p>
+      <p v-if="s.room.reasons.length && paper" class="muted">Исчерпано: {{ say(s.room.reasons) }}. {{ PAPER_LIMITS_NOTE }}</p>
+      <p v-else-if="s.room.reasons.length" class="muted">Почему новые сделки закрыты: {{ say(s.room.reasons) }}.</p>
     </article>
 
     <article class="card">

@@ -23,6 +23,13 @@ export const actionName = (a: string | null | undefined): string => (a ? (ACTION
 const SESSION: Record<string, string> = { day: 'торговый день', scalp: 'скальпинг', intraday: 'внутридневная', swing: 'свинг', position: 'позиционная' }
 export const sessionName = (t: string | null | undefined): string => (t ? (SESSION[t] ?? 'торговая сессия') : 'торговая сессия')
 
+/** На бумаге лимиты сессии, дня и слотов справочные: исполнитель их не применяет (guard, режим paper), брифинг мозга тоже говорит «вход открыт». Одна формулировка на все страницы. */
+export const PAPER_LIMITS_NOTE = 'На бумаге лимиты не останавливают сделки, на реальных деньгах остановили бы.'
+/** Сервер пускает ограниченное число вкладок дашборда; сверх лимита соединение отклоняется. Показывается вместо «Нет связи с платформой», когда платформа жива. */
+export const TABS_FULL_TITLE = 'Открыто слишком много вкладок дашборда'
+export const TABS_FULL_TEXT = 'Закройте лишние, страница подключится сама.'
+export const PAPER_LIMITS_CHIP = 'на бумаге не останавливает'
+
 const STATUS: Record<string, string> = { done: 'выполнено', rejected: 'отклонено', failed: 'не выполнено', expired: 'устарело', ok: 'выполнено' }
 export const commandStatus = (s: string | null | undefined): string => (s ? (STATUS[s] ?? '') : '')
 

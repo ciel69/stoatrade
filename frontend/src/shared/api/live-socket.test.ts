@@ -119,3 +119,65 @@ describe('LiveSocket', () => {
     expect(defaultSocketUrl({ protocol: 'https:', host: 'h' })).toBe('wss://h/ws')
   })
 })
+
+describe('LiveSocket: отказ по числу вкладок', () => {
+  beforeEach(() => {
+    FakeWS.all = []
+    vi.useFakeTimers()
+  })
+  afterEach(() => vi.useRealTimers())
+
+  const withProbe = (probe: () => Promise<{ clients: number; max: number } | null>) =>
+    new LiveSocket({ url: 'ws://x/ws', factory: (u) => new FakeWS(u) as unknown as WebSocket, random: () => 0.5, silenceMs: 4000, probe })
+
+  it('после неудачного подключения один раз спрашивает сервер: лимит занят -> full, переподключение идёт дальше', async () => {
+    const probe = vi.fn().mockResolvedValue({ clients: 12, max: 12 })
+    const s = withProbe(probe)
+    const seen: boolean[] = []
+    s.onRefusal((v) => seen.push(v))
+    s.start()
+    FakeWS.all[0].close()      // сокет ни разу не открывался: 503
+    await vi.advanceTimersByTimeAsync(0)
+    expect(probe).toHaveBeenCalledTimes(1)
+    expect(s.full).toBe(true)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(FakeWS.all).toHaveLength(2)      // пауза нарастает, попытки продолжаются
+    FakeWS.all[1].close()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(probe).toHaveBeenCalledTimes(1)      // ответ получен: повторных запросов нет
+    await vi.advanceTimersByTimeAsync(5000)
+    FakeWS.all[2].open()
+    expect(s.full).toBe(false)
+    expect(seen).toEqual([false, true, false])
+  })
+
+  it('сервер ответил, что места есть: это обрыв сети, не отказ', async () => {
+    const s = withProbe(vi.fn().mockResolvedValue({ clients: 2, max: 12 }))
+    s.start()
+    FakeWS.all[0].close()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(s.full).toBe(false)
+  })
+
+  it('нет ответа на запрос (платформа лежит): не больше трёх запросов за обрыв', async () => {
+    const probe = vi.fn().mockRejectedValue(new Error('net'))
+    const s = withProbe(probe)
+    s.start()
+    for (let i = 0; i < 6; i++) {
+      FakeWS.all[i].close()
+      await vi.advanceTimersByTimeAsync(20000)
+    }
+    expect(probe).toHaveBeenCalledTimes(3)
+    expect(s.full).toBe(false)
+  })
+
+  it('обрыв после успешного подключения запроса не делает', async () => {
+    const probe = vi.fn().mockResolvedValue({ clients: 12, max: 12 })
+    const s = withProbe(probe)
+    s.start()
+    FakeWS.all[0].open()
+    FakeWS.all[0].close()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(probe).not.toHaveBeenCalled()
+  })
+})

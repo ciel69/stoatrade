@@ -1,4 +1,4 @@
-import { ageText, duration, gateName, humanize, isPlain, modeOn, nodeLabel, nodeStops, nodeValue, readerWord, type Human, type Tone } from '@/shared/lib'
+import { ageText, duration, gateName, humanize, isPlain, modeOn, nodeLabel, nodeStops, nodeValue, readerWord, TABS_FULL_TEXT, TABS_FULL_TITLE, type Human, type Tone } from '@/shared/lib'
 import { dayNeeds, dayWaitText } from '@/entities/day'
 import { blackoutView, downSources, eventViews } from '@/entities/headline'
 import { roleLabel } from '@/entities/role'
@@ -88,6 +88,7 @@ export function buildRows(inp: StatusInput): StatusRow[] {
   // связь страницы с платформой
   if (link === 'open') rows.push(okRow('link', 'link', 'Связь с платформой', 'есть'))
   else if (link === 'connecting') rows.push(fromHuman('link', 'link', say('Подключаемся к платформе…', 'Данные появятся через несколько секунд.', '', 'Действий не требуется.', 'warn', 'link: connecting'), { brief: 'Подключаемся к платформе…' }))
+  else if (inp.full) rows.push(fromHuman('link', 'link', say(TABS_FULL_TITLE, 'Платформа работает, но сервер дашборда не пускает больше вкладок. Эта страница данные не получает.', 'Сервер дашборда держит ограниченное число открытых вкладок.', TABS_FULL_TEXT, 'bad', 'link: refused 503'), { brief: TABS_FULL_TITLE }))
   else rows.push(fromHuman('link', 'link', say('Нет связи с платформой', 'Страница не получает данные, показанное может быть устаревшим. Платформа могла продолжить торговать сама: защитные стопы стоят на бирже.', 'Соединение потеряно.', 'Страница переподключится сама. Если не получается, проверьте, что платформа запущена.', 'bad', 'link: closed'), { brief: 'Нет связи с платформой' }))
 
   // платформа: состояние и режим
@@ -129,8 +130,9 @@ export function buildRows(inp: StatusInput): StatusRow[] {
   const wait = dayWaitText(dayNeeds(inp.day))
   if (wait) rows.push({ id: 'day-wait', group: 'platform', label: 'Ждёт вашего ответа', level: 'warn', value: '', note: `Нужно ваше участие: ${wait}.`, brief: 'Ждёт вашего ответа', stops: false, raw: null, human: null, href: '/trading/day' })
   const allowed = system?.room.allowed ?? home?.allowed ?? null
+  const paperLimits = (system ? system.room.paper === true : home?.limits_paper === true)      // на бумаге лимиты справочные: входы они не закрывают
   if (allowed !== null) {
-    if (allowed) rows.push(okRow('platform', 'entries', 'Новые сделки', 'разрешены'))
+    if (allowed || paperLimits) rows.push(okRow('platform', 'entries', 'Новые сделки', allowed ? 'разрешены' : 'разрешены (лимиты на бумаге справочные)'))
     else {
       const reasons = system?.room.reasons.length ? system.room.reasons : system?.session?.block_reasons ?? []
       const hs = reasons.map((x) => humanize({ kind: 'text', level: 'warn', text: x }, ctx))

@@ -2,14 +2,14 @@
 import { computed } from 'vue'
 import { expHeadline, tradesText, useExperimentStore } from '@/entities/experiment'
 import { useLive } from '@/shared/api'
-import { fixed, signed } from '@/shared/lib'
+import { TABS_FULL_TEXT, TABS_FULL_TITLE, fixed, signed } from '@/shared/lib'
 
 /**
  * Начало страницы «Эксперименты»: главный вывод одной строкой («Подтверждённых гипотез: N» или «пока нет»), список подтверждённых и три фразы о том, как читать цифры
  * (что такое гипотеза и эксперимент, почему мало сделок ничего не доказывают, зачем поправка на число сравнений). Подтверждение считается на бумаге по правилу досье мозга и не зависит от выбранного разреза.
  */
 const store = useExperimentStore()
-const { link } = useLive()
+const { link, full } = useLive()
 const d = computed(() => store.detail)
 const head = computed(() => expHeadline(d.value))
 const confirmed = computed(() => d.value?.confirmed ?? [])
@@ -25,11 +25,12 @@ const pct = (x: number | null): string => (typeof x === 'number' ? `${Math.round
       <div class="txt">
         <h2 id="ei-h" class="title" role="status">
           <template v-if="head">{{ head.text }}</template>
-          <template v-else-if="offline">Нет связи с платформой</template>
+          <template v-else-if="offline">{{ full ? TABS_FULL_TITLE : 'Нет связи с платформой' }}</template>
           <template v-else-if="failed">Не удалось собрать статистику</template>
           <template v-else>Считаем статистику</template>
         </h2>
         <p v-if="head" class="detail">{{ head.detail }}</p>
+        <p v-else-if="offline && full" class="detail">Платформа работает, но данные о сделках сюда не приходят. {{ TABS_FULL_TEXT }}</p>
         <p v-else-if="offline" class="detail">Данные о сделках не приходят. Страница переподключится сама; если не получается, проверьте, что платформа запущена.</p>
         <p v-else-if="failed" class="detail">Журнал сделок не прочитался. Попробуйте другой разрез или зайдите позже: ничего не потеряно.</p>
       </div>

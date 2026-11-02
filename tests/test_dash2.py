@@ -306,6 +306,26 @@ class ServerTest(Fx, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(a["level"], "ok")                                   # общий уровень считается по узлам с поправкой, а не по исходному strip.level
         self.assertEqual((a["exec"]["consumers"]["api"]["unacked"], a["room"]["rows"][0]["room"], a["account"]["venues"]["bybit"]), (2, 4.0, {"equity": 39.5, "free": 39.0}))
 
+    def test_system_topic_paper_session_limits_are_reference_not_warning(self):
+        def state(root, mode, now):
+            return {"status": {"level": "warn", "items": [{"id": "session", "level": "warn", "text": "входы запрещены: бюджет убытка исчерпан, лимит сделок"}]},
+                    "v2": {"strip": {"items": [], "exec": {"present": True, "env": "paper"}, "backlog": {}}}, "health": {},
+                    "session": {"id": "s1", "type": "day", "budget_usdt": 1.78, "budget_used": 1.81, "trades": 6, "max_trades": 6, "entries_allowed": False, "block_reasons": ["бюджет убытка исчерпан", "лимит сделок"]},
+                    "risk_room": {"allowed": False, "paper": True, "reasons": ["бюджет убытка сессии исчерпан"], "rows": []},
+                    "account": {}, "sessions": [], "warnings": [{"level": "warn", "text": "Сессия: входы запрещены (бюджет убытка исчерпан)"}, {"level": "warn", "text": "другое"}]}
+        orig = topics._state
+        topics._state = state
+        try:
+            t = topics.system(None, 1000.0)
+            h = topics.home(None, 1000.0, "paper")
+        finally:
+            topics._state = orig
+        self.assertTrue(t["room"]["paper"])
+        self.assertEqual([w["text"] for w in t["warnings"]], ["другое"])
+        self.assertEqual(next(n for n in t["nodes"] if n["id"] == "session")["level"], "ok")
+        self.assertTrue(h["limits_paper"])
+        self.assertEqual(next(i for i in h["platform"]["items"] if i["id"] == "session")["level"], "ok")
+
     def test_settings_topic_roles_with_day_quality_and_no_secrets(self):
         from tb.llm import dashapi
         model = {"id": "lm", "provider": "local", "model_name": "gpt", "provider_enabled": True, "live_ok": False, "params": {"temperature": 0.1, "max_out_tok": 1500, "thinking": "low"}, "api_key": "SECRET"}
@@ -434,6 +454,28 @@ class ServerTest(Fx, unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(Exception):
                 async with connect("ws://127.0.0.1:%d/ws" % self.port):
                     pass
+
+    async def test_client_limit_is_12_and_ping_frees_slots_quickly(self):
+        self.assertEqual(S.MAX_CLIENTS, 12)
+        self.assertLessEqual(S.PING_INTERVAL_S + S.PING_TIMEOUT_S, 20)           # оборванный сокет держит слот не дольше 20 с
+
+    async def test_api_link_reports_slots_without_platform_data_and_checks_host(self):
+        async def get(path, host):
+            r, wr = await asyncio.open_connection("127.0.0.1", self.port)
+            wr.write(("GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n" % (path, host)).encode())
+            await wr.drain()
+            data = await asyncio.wait_for(r.read(), 3)
+            wr.close()
+            return data.decode("utf-8", "replace")
+        empty = await get("/api/link", "127.0.0.1:%d" % self.port)
+        self.assertIn("200 OK", empty.split("\r\n")[0])
+        self.assertEqual(json.loads(empty.split("\r\n\r\n", 1)[1]), {"clients": 0, "max": self.hub.max_clients})
+        self.assertNotIn("access-control", empty.lower())                        # CORS не открываем
+        async with connect("ws://127.0.0.1:%d/ws" % self.port) as a:
+            await self.recv(a)
+            one = await get("/api/link", "localhost:%d" % self.port)
+            self.assertEqual(json.loads(one.split("\r\n\r\n", 1)[1])["clients"], 1)
+        self.assertIn("403", (await get("/api/link", "evil.example:80")).split("\r\n")[0])      # DNS rebinding
 
     async def test_static_placeholder_and_no_traversal(self):
         async def get(path):

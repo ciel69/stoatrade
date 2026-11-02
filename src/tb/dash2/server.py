@@ -21,7 +21,9 @@ from tb.dash2 import ctlbridge, topics
 
 HOST = "127.0.0.1"
 DEFAULT_PORT = 8767
-MAX_CLIENTS = 5
+MAX_CLIENTS = 12           # вкладки + быстрые переходы; слот освобождается при закрытии страницы (клиент закрывает сокет на pagehide) или за ping_interval + ping_timeout
+PING_INTERVAL_S = 10       # оборванное соединение (вкладка убита, сеть пропала) держит слот не дольше PING_INTERVAL_S + PING_TIMEOUT_S
+PING_TIMEOUT_S = 10
 TICK_S = 1.0
 HEARTBEAT_S = 15.0
 HEAVY_S = 2.0           # home собирается около секунды: обновляем не чаще раза в 2 с
@@ -295,6 +297,10 @@ class Hub(object):
         if host not in ("127.0.0.1", "localhost", "::1"):                      # защита от DNS rebinding
             return connection.respond(HTTPStatus.FORBIDDEN, "bad host\n")
         path = request.path.split("?", 1)[0]
+        if path == "/api/link":                                                # только число занятых слотов: клиент спрашивает один раз после неудачного подключения (503 из браузера не видно); CORS-заголовков нет
+            body = json.dumps({"clients": len(self.clients), "max": self.max_clients}).encode("utf-8")
+            return Response(200, "OK", Headers([("Content-Type", "application/json; charset=utf-8"), ("Content-Length", str(len(body))), ("Cache-Control", "no-store"),
+                                                ("X-Content-Type-Options", "nosniff"), ("Referrer-Policy", "no-referrer")]), body)
         if path == "/ws":
             if len(self.clients) >= self.max_clients:
                 return connection.respond(HTTPStatus.SERVICE_UNAVAILABLE, "too many clients\n")
@@ -325,7 +331,7 @@ async def serve(port=DEFAULT_PORT, root=None, max_seconds=None, ready=None):
     from websockets.asyncio.server import serve as ws_serve
     hub = Hub(root=root, port=port)
     origins = ["http://127.0.0.1:%d" % port, "http://localhost:%d" % port] + list(DEV_ORIGINS) + [None]      # None: клиенты без Origin (не браузер, тесты)
-    async with ws_serve(hub.handler, HOST, port, origins=origins, process_request=hub.process_request, max_size=4096, ping_interval=20, ping_timeout=20) as srv:
+    async with ws_serve(hub.handler, HOST, port, origins=origins, process_request=hub.process_request, max_size=4096, ping_interval=PING_INTERVAL_S, ping_timeout=PING_TIMEOUT_S) as srv:
         if ready is not None:
             ready(hub, srv)
         task = asyncio.ensure_future(hub.loop())

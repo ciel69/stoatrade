@@ -66,6 +66,8 @@ export interface StatusSummary {
 export interface StatusInput {
   now: number
   link: LinkState
+  /** сервер отказал: слишком много открытых вкладок (платформа при этом жива) */
+  full?: boolean
   home: HomeSnapshot | null
   system: SystemSnapshot | null
   brain: BrainSnapshot | null

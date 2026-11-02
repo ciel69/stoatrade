@@ -59,7 +59,7 @@ export interface SystemSnapshot {
   nodes: SysNode[]
   warnings: Array<{ level: SysLevel | null; text: string | null }>
   session: SysSession | null
-  room: { allowed: boolean | null; reasons: string[]; rows: SysRoomRow[] }
+  room: { allowed: boolean | null; /** бумага: лимиты показаны справочно и входы не закрывают */ paper?: boolean; reasons: string[]; rows: SysRoomRow[] }
   account: { equity: N; hwm: N; drawdown: N; ladder_mult: N; venues: Record<string, { equity: N; free: N }> }
   sources: {
     feed: Array<{ id: string; state: string | null; connected: boolean | null; reconnects: N; errors: N; error: string | null }>

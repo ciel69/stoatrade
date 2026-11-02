@@ -2,14 +2,14 @@
 import { computed } from 'vue'
 import { dayFacts, dayHeadline, useDayStore } from '@/entities/day'
 import { useLive } from '@/shared/api'
-import { dayLabel, dayModeWord, dayStateWord, useNow } from '@/shared/lib'
+import { TABS_FULL_TEXT, TABS_FULL_TITLE, dayLabel, dayModeWord, dayStateWord, useNow } from '@/shared/lib'
 
 /**
  * Начало страницы «День»: одно предложение о том, что происходит и нужно ли что-то от вас, под ним уточнение и два-три факта (итог дня, план дня, перенесённое со вчера).
  * Цвет точки: зелёный (всё в порядке), жёлтый (нужен ответ или внимание), красный (сбой), серый (спокойно или данных нет). Данные приходят по WebSocket темой day.
  */
 const store = useDayStore()
-const { link } = useLive()
+const { link, full } = useLive()
 const now = useNow()
 const snap = computed(() => store.snapshot)
 const head = computed(() => dayHeadline(snap.value, now.value))
@@ -37,8 +37,9 @@ const offline = computed(() => !snap.value && link.value !== 'open')
     <div v-else-if="offline" class="row">
       <i class="dot" aria-hidden="true" />
       <div class="txt">
-        <h2 class="title" role="status">Нет связи с платформой</h2>
-        <p class="detail">Данные о торговом дне не приходят. Страница переподключится сама; если не получается, проверьте, что платформа запущена.</p>
+        <h2 class="title" role="status">{{ full ? TABS_FULL_TITLE : 'Нет связи с платформой' }}</h2>
+        <p v-if="full" class="detail">Платформа работает, но данные о торговом дне сюда не приходят. {{ TABS_FULL_TEXT }}</p>
+        <p v-else class="detail">Данные о торговом дне не приходят. Страница переподключится сама; если не получается, проверьте, что платформа запущена.</p>
       </div>
     </div>
     <div v-else class="skel" aria-busy="true" />

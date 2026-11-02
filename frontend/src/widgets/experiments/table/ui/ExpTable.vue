@@ -3,7 +3,7 @@ import { computed } from 'vue'
 import { expState, hiddenRows, rowViews, thresholdText, useExperimentStore } from '@/entities/experiment'
 import { useTradingStore } from '@/entities/trading'
 import { useLive } from '@/shared/api'
-import { EXP_CUTS, cutInfo, modeName, type ExpCut } from '@/shared/lib'
+import { EXP_CUTS, TABS_FULL_TEXT, TABS_FULL_TITLE, cutInfo, modeName, type ExpCut } from '@/shared/lib'
 import { UiChip, UiSegment } from '@/shared/ui'
 
 /**
@@ -16,7 +16,7 @@ const emit = defineEmits<{ 'update:by': [value: ExpCut]; select: [key: string] }
 
 const store = useExperimentStore()
 const trading = useTradingStore()
-const { link } = useLive()
+const { link, full } = useLive()
 const d = computed(() => store.detail)
 const state = computed(() => expState(store.detail, store.pending, link.value === 'open' || !!store.mocked))
 const rows = computed(() => (state.value === 'ok' ? rowViews(d.value, props.by) : []))
@@ -80,7 +80,7 @@ const unreviewed = computed(() => (props.by === 'err' ? (d.value?.unreviewed ?? 
       <p v-else-if="state === 'none'" key="none" class="empty">Пока нет закрытых сделок с экспериментами. Как только сделки закроются, здесь появятся группы с результатами.</p>
       <p v-else-if="state === 'cut'" key="cut" class="empty">В этом разрезе групп нет: у закрытых сделок нет нужной пометки. Выберите другой разрез.</p>
       <p v-else-if="state === 'failed'" key="failed" class="empty">Не удалось собрать статистику. Выберите другой разрез или зайдите позже.</p>
-      <p v-else-if="state === 'link'" key="link" class="empty">Нет связи с платформой, данные не приходят. Страница переподключится сама.</p>
+      <p v-else-if="state === 'link'" key="link" class="empty">{{ full ? `${TABS_FULL_TITLE}, данные не приходят. ${TABS_FULL_TEXT}` : 'Нет связи с платформой, данные не приходят. Страница переподключится сама.' }}</p>
       <div v-else key="load" class="skel" aria-busy="true" />
     </Transition>
   </section>

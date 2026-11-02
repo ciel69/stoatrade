@@ -1,21 +1,25 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { dayRows, useDayStore } from '@/entities/day'
+import { DAYS_SHOWN, visibleDays } from '../lib/visible'
 
 /**
  * Список торговых дней, новые сверху: дата и номер запуска, состояние, режим, итог и оценка. У дня с готовым отчётом строка кнопка: отчёт открывается в боковой панели (выбор хранится в адресе, ?day=),
  * повторный клик закрывает. Отметка «не прочитан» у дня, итог которого платформа ещё ждёт отметить.
  */
-defineProps<{ selected: string | null }>()
+const props = defineProps<{ selected: string | null }>()
 const emit = defineEmits<{ select: [id: string] }>()
 const store = useDayStore()
 const snap = computed(() => store.snapshot)
-const rows = computed(() => dayRows(snap.value?.days ?? [], store.needs.report))
+const all = computed(() => dayRows(snap.value?.days ?? [], store.needs.report))
+const expanded = ref(false)
+const rows = computed(() => visibleDays(all.value, props.selected, expanded.value))
+const hiddenCount = computed(() => all.value.length - rows.value.length)
 </script>
 
 <template>
   <section class="list" aria-labelledby="dl-h">
-    <h2 id="dl-h" class="h">Дни<span v-if="rows.length" class="n">{{ rows.length }}</span></h2>
+    <h2 id="dl-h" class="h">Дни<span v-if="all.length" class="n">{{ all.length }}</span></h2>
     <ul v-if="rows.length" class="rows">
       <li v-for="r in rows" :key="r.id">
         <component :is="r.hasReport ? 'button' : 'div'" class="row" :class="{ btn: r.hasReport }" :type="r.hasReport ? 'button' : undefined" :aria-pressed="r.hasReport ? selected === r.id : undefined" @click="r.hasReport && emit('select', r.id)">
@@ -32,8 +36,12 @@ const rows = computed(() => dayRows(snap.value?.days ?? [], store.needs.report))
         </component>
       </li>
     </ul>
-    <p v-else-if="snap" class="empty">Дней ещё не было. Запуск: «Старт торговли».</p>
-    <div v-else class="skel" aria-busy="true" />
+    <button v-if="hiddenCount > 0" type="button" class="more" @click="expanded = true">Показать все ({{ all.length }})</button>
+    <button v-else-if="expanded && all.length > DAYS_SHOWN" type="button" class="more" @click="expanded = false">Показать только последние {{ DAYS_SHOWN }}</button>
+    <template v-if="!rows.length">
+      <p v-if="snap" class="empty">Дней ещё не было. Запуск: «Старт торговли».</p>
+      <div v-else class="skel" aria-busy="true" />
+    </template>
   </section>
 </template>
 
@@ -57,10 +65,13 @@ const rows = computed(() => dayRows(snap.value?.days ?? [], store.needs.report))
 .vd.warn { color: var(--warn); }
 .vd.bad { color: var(--neg); }
 .none { opacity: 0.8; }
+.more { justify-self: start; margin: 0 var(--space-1); padding: var(--space-2); background: none; border: 0; border-radius: var(--radius-sm); color: var(--accent); font: inherit; font-size: 13px; cursor: pointer; }
+.more:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .empty { margin: 0; padding: var(--space-2); font-size: 13px; line-height: 1.5; color: var(--muted); }
 .skel { height: 140px; border-radius: var(--radius-sm); background: var(--panel2); }
 @media (hover: hover) and (pointer: fine) {
   .row.btn:not([aria-pressed='true']):hover { background: var(--panel2); }
+  .more:hover { background: var(--panel2); }
 }
 @media (prefers-reduced-motion: reduce) {
   .row.btn { transition: none; }

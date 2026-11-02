@@ -22,5 +22,5 @@ export {
 export type { CutInfo, ExpCut, LiveGateState, LiveWhy, NewsTone, PTone, PWord, ReaderWord } from './human-pages'
 export { NODE_IDS, humanNode, nodeLabel, nodeStops, nodeValue } from './human-nodes'
 export { TONE_WORD, dayLabel, detailsOf, isPlain, plainify, modeName, modeOn, toneOfLevel, unknownHuman } from './human-text'
-export { ROLE_IDS, actionName, commandStatus, consumerName, contextName, feedState, holdText, planState, proper, roleAbout, roleTitle, sessionName, stopNote, thesisText } from './human-words'
+export { PAPER_LIMITS_CHIP, PAPER_LIMITS_NOTE, ROLE_IDS, TABS_FULL_TEXT, TABS_FULL_TITLE, actionName, commandStatus, consumerName, contextName, feedState, holdText, planState, proper, roleAbout, roleTitle, sessionName, stopNote, thesisText } from './human-words'
 export type { Headline, Human, HumanCtx, HumanItem, HumanNodeInput, Tone } from './human-types'

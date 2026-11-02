@@ -2,13 +2,14 @@
 import { computed } from 'vue'
 import { useTradingStore, type LimitRow } from '@/entities/trading'
 import { UiChip, UiMeter } from '@/shared/ui'
-import { fixed } from '@/shared/lib'
+import { PAPER_LIMITS_NOTE, fixed } from '@/shared/lib'
 
 const SHORT: Record<string, string> = { session: 'бюджет сессии', slots: 'слоты', stops: 'стопы подряд', trades: 'сделки', learn_loss: 'учёба: убыток', learn_trades: 'учёба: сделки' }
 const trading = useTradingStore()
 /** Дневной лимит уже в полосе денег; здесь остальные запасы. */
 const rows = computed(() => (trading.snapshot?.limits ?? []).filter((r) => r.id !== 'daily'))
 const paper = computed(() => trading.snapshot?.limits_paper ?? false)
+const closed = computed(() => !paper.value && trading.snapshot?.allowed === false)
 
 function text(r: LimitRow): string {
   if (r.id === 'stops') return `${fixed(r.used, 0)} / ${fixed(r.limit, 0)}`
@@ -26,7 +27,8 @@ function fill(r: LimitRow): number {
       <div class="top"><span class="name">{{ SHORT[r.id] ?? r.label }}</span><span class="val">{{ text(r) }}</span></div>
       <UiMeter :fill="fill(r)" :level="r.level" :label="SHORT[r.id] ?? r.label" />
     </div>
-    <UiChip v-if="paper" class="note">paper: лимиты на сделки не влияют</UiChip>
+    <UiChip v-if="paper" class="note">{{ PAPER_LIMITS_NOTE }}</UiChip>
+    <UiChip v-else-if="closed" tone="warn" class="note">Новые сделки сейчас закрыты: лимит исчерпан</UiChip>
   </section>
 </template>
 

@@ -40,6 +40,10 @@ export class FakeDash {
     this.httpRequests = []
     /** true: новые подключения отклоняются на рукопожатии (имитация недоступного сервера). */
     this.blockConnections = false
+    /** Сколько запросов GET /api/link пришло (клиент спрашивает один раз после неудачного подключения). */
+    this.linkRequests = 0
+    /** Сколько занятых слотов сообщает /api/link (по умолчанию число живых сокетов); 12 = лимит исчерпан. */
+    this.reportedClients = undefined
     /** Правила команд управления по действию, см. ctl-rules.mjs и сценарии. */
     this.rules = {}
     /** Ответы на разовые запросы (plan_detail и т.п.): op -> (msg) => data. */
@@ -83,6 +87,11 @@ export class FakeDash {
   _http(req, res) {
     const pathname = decodeURIComponent((req.url || '/').split('?')[0])
     this.httpRequests.push(`${req.method} ${pathname}`)
+    if (pathname === '/api/link') {      // как сервер: сколько слотов занято, без данных платформы
+      this.linkRequests += 1
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }).end(JSON.stringify({ clients: this.reportedClients ?? this.sockets.size, max: 12 }))
+      return
+    }
     let file = path.normalize(path.join(DIST_DIR, pathname === '/' ? 'index.html' : pathname))
     const inside = file.startsWith(DIST_DIR)
     if (!inside || !existsSync(file) || !statSync(file).isFile()) {

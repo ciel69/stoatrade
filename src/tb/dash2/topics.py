@@ -436,17 +436,24 @@ def system(root=None, now=None):
          "text": ("risk_off: " + ", ".join(str(x) for x in (ctx.get("risk_off_reasons") or [])[:3])) if ctx.get("risk_off") else "risk_off нет"},
         {"id": "session", "label": "Сессия", "level": lv("session"), "text": (items.get("session") or {}).get("text")},
     ]
-    levels = [n["level"] for n in nodes] + [w.get("level") for w in (s.get("warnings") or []) if isinstance(w, dict)] + (["bad"] if isinstance(kill, dict) and kill.get("active", True) else [])
+    paper = bool((s.get("risk_room") or {}).get("paper"))
+    warns = [w for w in (s.get("warnings") or []) if isinstance(w, dict)]
+    if paper:        # guard._evaluate_paper не применяет сессию, слоты, дневной лимит и серию стопов: «входы запрещены» по ним на бумаге справочные, не замечание
+        warns = [w for w in warns if not str(w.get("text") or "").startswith("Сессия: входы запрещены")]
+        for n in nodes:
+            if n["id"] == "session" and str(n.get("text") or "").startswith("входы запрещены"):
+                n["level"] = "ok"
+    levels = [n["level"] for n in nodes] + [w.get("level") for w in warns] + (["bad"] if isinstance(kill, dict) and kill.get("active", True) else [])
     overall = max((l for l in levels if l in _LEVEL_RANK), key=lambda x: _LEVEL_RANK[x], default="ok")
     sessions = [{k: r.get(k) for k in ("id", "type", "ts", "stopped", "stop_note")} | {"thesis": _txt(r.get("thesis"), 160)} for r in (s.get("sessions") or [])[:8] if isinstance(r, dict)]
     rr = s.get("risk_room") or {}
     acc = s.get("account") or {}
     return {
         "mode": mode, "level": overall, "kill": {"flatten": bool(kill.get("flatten")), "reason": _txt(kill.get("reason"), 80)} if isinstance(kill, dict) and kill.get("active", True) else None,
-        "nodes": nodes, "warnings": [{"level": w.get("level"), "text": _txt(w.get("text"), 200)} for w in (s.get("warnings") or [])[:6] if isinstance(w, dict)],
+        "nodes": nodes, "warnings": [{"level": w.get("level"), "text": _txt(w.get("text"), 200)} for w in warns[:6]],
         "session": ({k: sess.get(k) for k in ("id", "type", "budget_usdt", "budget_used", "trades", "max_trades", "entries_allowed", "block_reasons", "realized", "open_risk", "perf_mult", "perf_n", "start")}
                     | {"thesis": _txt(sess.get("thesis"), 200), "expires_at": int(round((now + sess["left_s"]) / 30.0) * 30) if _num(sess.get("left_s")) is not None else None}) if isinstance(sess, dict) else None,
-        "room": {"allowed": rr.get("allowed"), "reasons": [str(x)[:80] for x in (rr.get("reasons") or [])[:4]],
+        "room": {"allowed": rr.get("allowed"), "paper": paper, "reasons": [str(x)[:80] for x in (rr.get("reasons") or [])[:4]],
                  "rows": [{k: r.get(k) for k in ("id", "label", "limit", "used", "room", "frac", "level", "unit", "help")} for r in (rr.get("rows") or []) if isinstance(r, dict)][:8]},
         "account": {"equity": _num(acc.get("equity")), "hwm": _num(acc.get("hwm")), "drawdown": _num(acc.get("drawdown")), "ladder_mult": _num(acc.get("ladder_mult")),
                     "venues": {k: {"equity": _num(v.get("equity")), "free": _num(v.get("free"))} for k, v in (acc.get("venues") or {}).items() if isinstance(v, dict)}},
@@ -685,6 +692,12 @@ def home(root=None, now=None, mode=None):
     strip = ((s.get("v2") or {}).get("strip") or {}).get("items") or []
     items = [{"id": i.get("id"), "label": i.get("label"), "level": i.get("level"), "value": i.get("value")}
              for i in list(strip) + list(status.get("items") or []) if i.get("id") in ("exec", "net", "scanner", "feed", "context", "session")]
+    if rr.get("paper"):      # на бумаге «входы запрещены» по лимитам сессии справочные (см. system)
+        raw = {i.get("id"): i for i in list(strip) + list(status.get("items") or []) if isinstance(i, dict)}
+        if str((raw.get("session") or {}).get("text") or "").startswith("входы запрещены"):
+            for i in items:
+                if i["id"] == "session":
+                    i["level"] = "ok"
     return {"mode": mode, "modes": list(MODES),
             "platform": {"state": plat.get("state"), "mode": plat.get("mode"), "trading": plat.get("trading"), "level": status.get("level"), "items": items},
             "money": {"under_risk": _num(daily.get("open_risk")), "day_room": _num(daily.get("room")), "day_limit": _num(daily.get("limit")), "pnl_today": pnl_today, "trades_today": len(today) + parts_n,      # частичное закрытие = отдельная завершённая сделка (как closed PnL биржи)

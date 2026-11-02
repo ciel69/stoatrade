@@ -79,7 +79,7 @@ export function summarize(rows: StatusRow[], meta: SummaryMeta = {}): StatusSumm
     }
     return {
       ...base, level: 'warn', text: 'Торговля идёт, есть что проверить', extra: problemRows.length - 1,
-      headline: { tone: 'warn', title: 'Торговля идёт, но есть что проверить', detail: `Замечаний: ${problemRows.length}, ничего срочного. Они перечислены ниже.` },
+      headline: { tone: 'warn', title: 'Торговля идёт, но есть что проверить', detail: `Замечаний: ${problemRows.length}. Они перечислены ниже, торговлю ни одно не останавливает.` },
     }
   }
 

@@ -22,7 +22,7 @@ export function usePlatformStatus() {
   const news = useNewsStore()
   const control = useControlStore()
   const day = useDayStore()
-  const { link } = useLive()
+  const { link, full } = useLive()
   const now = useNow()
   const mock = mockKind(location.search)
   const mockBase = Date.now() / 1000
@@ -45,7 +45,7 @@ export function usePlatformStatus() {
 
   const input = computed<StatusInput>(() => mocked
     ? { ...mocked, now: now.value }
-    : { now: now.value, link: link.value, home: trading.snapshot, system: system.snapshot, brain: brain.snapshot, market: market.snapshot, news: news.snapshot, ctl: control.ctl, day: day.snapshot })
+    : { now: now.value, link: link.value, full: full.value, home: trading.snapshot, system: system.snapshot, brain: brain.snapshot, market: market.snapshot, news: news.snapshot, ctl: control.ctl, day: day.snapshot })
   const summary = computed(() => {
     const i = input.value
     return summarize(buildRows(i), { mode: i.ctl?.platform.mode ?? i.system?.mode ?? i.home?.platform.mode ?? null })
