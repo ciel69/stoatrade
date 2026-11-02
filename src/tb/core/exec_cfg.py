@@ -26,7 +26,7 @@ DEFAULTS = {
     # сторож позиции (logic/watch.py): будит мозг (position_manager) по NEWS / FAST_MOVE / STRUCT_BREAK / CROWD_TURN / BOOK_WALL / VOL_SPIKE / REGIME_CHANGE / FLOW_TURN / STALLED.
     # Указание владельца 2026-11-01: монета в позиции под постоянным надзором, paper и live одинаково (paper_only=false), до 12 пробуждений в час на позицию.
     "position_watch": {"enabled": True, "paper_only": False, "stalled_min": 15, "stalled_min_r": 0.5, "flow_turn_s": 30, "max_wakes_per_hour": 12,
-                       "fast_move_atr": 2.0, "fast_move_s": 60, "struct_break_s": 30, "struct_break_buf_pct": 0.1, "wall_atr": 1.5, "vol_spike_x": 3.0, "news_max_age_s": 180},
+                       "fast_move_atr": 2.0, "fast_move_s": 60, "struct_break_s": 30, "struct_break_buf_pct": 0.1, "struct_break_atr": 0.5, "wall_atr": 1.5, "vol_spike_x": 3.0, "news_max_age_s": 180},
     # WebSocket Trade API Bybit (executor/ws_trade.py): ордерные запросы (create/amend/cancel) по постоянному соединению. Выключено до проверки на testnet: ./tb exec wscheck
     "ws_trade": {"enabled": False, "request_timeout_s": 5.0, "ping_s": 20.0},
     "entry": {"max_price_age_s": 3, "max_chase_bps": 15, "chase_atr_frac": 0.3, "chase_rr_floor": 1.5, "no_confirm_max_size_mult": 0.5, "blocked_attempts_max": 3,

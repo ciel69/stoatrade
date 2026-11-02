@@ -34,6 +34,7 @@
   "fast_move_s": 60,
   "struct_break_s": 30,
   "struct_break_buf_pct": 0.1,
+  "struct_break_atr": 0.5,
   "wall_atr": 1.5,
   "vol_spike_x": 3.0,
   "news_max_age_s": 180

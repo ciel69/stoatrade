@@ -180,6 +180,18 @@ class PmSemantics(unittest.TestCase):
         self.assertIn("CANCEL_IN_POSITION", self.chk(pm("cancel")))
         self.assertEqual(self.chk(pm("cancel"), has_position=False), [])
 
+    def test_close_rejected_on_small_loss(self):
+        """Разбор POWR 2026-11-02: мозг закрыл по STRUCT_BREAK при -0.2R. Жёсткое правило 3 кодом: полное закрытие при убытке от -0.5R до 0 отклоняется."""
+        wake = dict(event_types=["brain_wake_request"])
+        self.assertIn("HOLD_SMALL_LOSS", self.chk(pm("close"), r=-0.2, **wake))
+        self.assertIn("HOLD_SMALL_LOSS", self.chk(pm("close"), r=-0.49, **wake))
+        self.assertEqual(self.chk(pm("close"), r=-0.5, **wake), [])                    # убыток от 0.5R: решает мозг
+        self.assertEqual(self.chk(pm("close"), r=0.3, **wake), [])                     # в прибыли не ограничиваем
+        self.assertEqual(self.chk(pm("close"), r=None, **wake), [])                    # нет R в досье: проверка пропускается
+        self.assertEqual(self.chk(pm("partial_close", {"frac": 0.5}), r=-0.2, **wake), [])
+        for et in ("session_ending", "kill", "limit_hit"):
+            self.assertEqual(self.chk(pm("close"), r=-0.2, event_types=[et]), [], et)
+
     def test_unknown_plan_allows_only_hold_or_escalate(self):
         self.assertIn("PLAN_NOT_IN_BRIEF", self.chk(pm("close"), unknown_plan=True, has_position=None))
         self.assertEqual(self.chk(pm("escalate", {"reason_code": "DATA_GAP"}), unknown_plan=True), [])

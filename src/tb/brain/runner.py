@@ -101,6 +101,19 @@ PM_TOOL_NOTE = ("\n\nTOOL MODE (this run). Act by calling exactly ONE tool: pm_h
                 "the run ends. Do not output JSON. If a call is rejected with codes, fix it with another call.")
 
 
+def _rejected(errs):
+    """Отказ вызова pm_*/es_*: коды и постоянные пояснения к известным (слабой модели одного кода мало, чтобы выбрать другое действие)."""
+    out = {"ok": False, "errors": list(errs)[:6]}
+    means = {}
+    for c in out["errors"]:
+        base = str(c).split(":")[0]
+        if base in schema_mod.HINT_TEXT:
+            means[base] = schema_mod.HINT_TEXT[base]
+    if means:
+        out["meaning"] = means
+    return out
+
+
 class Deferred(Exception):
     """Задание нельзя выполнить сейчас (нет профиля/бюджета): вернуть в очередь без траты попытки."""
 
@@ -774,7 +787,7 @@ class Runner(object):
                 errs = schema_mod.validate(role.schema, obj) or sem(obj)
             if errs:
                 state["rej"].append("%s:%s" % (name, errs[0]))
-                return {"ok": False, "errors": list(errs)[:6]}
+                return _rejected(errs)
             res = self._execute(role, obj, run["job"], run["agent"], dict(meta), ctx, llm_info, run["meter"])
             state["done"] = {"obj": obj, "result": res, "tool": name}
             return {"ok": res["outcome"] in ("decision", "hold"), "outcome": res["outcome"], "code": res["code"]}
@@ -864,7 +877,7 @@ class Runner(object):
                 errs = ["PROTECT_ONLY"]
             if errs:
                 state["rej"].append("%s:%s" % (name, errs[0]))
-                return {"ok": False, "errors": list(errs)[:6]}
+                return _rejected(errs)
             res = self._execute(role, obj, run["job"], run["agent"], dict(meta), ctx, llm_info, run["meter"])
             state["done"] = {"decision": d, "obj": obj, "result": res, "tool": name, "reason": a.get("reason"), "why": a.get("why")}
             return {"ok": res["outcome"] in ("decision", "hold"), "outcome": res["outcome"], "code": res["code"]}
