@@ -357,5 +357,12 @@ export const useActionStore = defineStore('action', () => {
     transport = mockTransport('full')
   }
 
-  return { hello, phase, spec, challenge, receivedAt, error, errorDetails, resultText, riskyRun, toasts, active, risks, start, can, run, sendKey, accept, recheck, cancel, reset, dismissToast, mock, mockEdit, mockNotify, mockDay, applyHello, applyResult, applyFinal }
+  /** Отладка страницы «Новости» (?newsmock=...): доступно intel.refresh, безрисковый поток; на сервер ничего не уходит. */
+  function mockNews(): void {
+    mocked = true
+    hello.value = { enabled: true, csrf: 'mock', full: true, modes: ['intel.refresh'] }
+    transport = mockTransport('full')
+  }
+
+  return { hello, phase, spec, challenge, receivedAt, error, errorDetails, resultText, riskyRun, toasts, active, risks, start, can, run, sendKey, accept, recheck, cancel, reset, dismissToast, mock, mockEdit, mockNotify, mockDay, mockNews, applyHello, applyResult, applyFinal }
 })

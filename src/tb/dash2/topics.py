@@ -362,12 +362,34 @@ def news(root=None, now=None):
     j = dashapi.news(root, {"limit": ["60"]}, now)
     items = [{k: v for k, v in i.items() if k != "age_s"} for i in j.get("items") or []]
     cal = j.get("calendar") or {}
-    nxt = [{"id": e.get("id"), "type": e.get("type"), "impact": e.get("impact"), "verified": e.get("verified"),
-            "at": round((now + (_num(e.get("in_min")) or 0.0) * 60.0) / 60.0) * 60} for e in cal.get("next") or []]
+    nxt = [{"id": _txt(e.get("id"), 40), "type": _txt(e.get("type"), 40), "impact": _num(e.get("impact")), "verified": bool(e.get("verified")),
+            "at": round((now + (_num(e.get("in_min")) or 0.0) * 60.0) / 60.0) * 60} for e in (cal.get("next") or [])[:6] if isinstance(e, dict)]
+    bo = cal.get("blackout") if isinstance(cal.get("blackout"), dict) else None
+    blackout = None if bo is None else {"name": _txt(bo.get("name"), 60), "from": _num(bo.get("from")), "to": _num(bo.get("to")), "verified": bo.get("v") is not False}
     rd = j.get("reader") or {}
-    return {"items": items, "sources": [{k: v for k, v in s.items() if k != "age_s"} for s in j.get("sources") or []], "degraded": j.get("degraded") or [],
-            "calendar": {"next": nxt, "blackout": cal.get("blackout")},
-            "reader": {"enabled": bool(rd.get("enabled")), "status": rd.get("status"), "stale": bool(rd.get("stale"))}}
+    st = rd.get("stats") if isinstance(rd.get("stats"), dict) else {}
+    lim = rd.get("limits") if isinstance(rd.get("limits"), dict) else {}
+    status = rd.get("status") if rd.get("status") in _READER_STATUSES else None
+    srcs = [{"id": _txt(s.get("id"), 40), "ok": bool(s.get("ok")), "degraded": bool(s.get("degraded")), "verified": bool(s.get("verified")), "fails": _num(s.get("fails")),
+             "at": _moment(now, s.get("age_s"), 60)} for s in (j.get("sources") or [])[:24] if isinstance(s, dict)]
+    return {"items": items, "sources": srcs, "degraded": [_txt(d, 40) for d in (j.get("degraded") or [])[:24] if _txt(d, 40)],
+            "calendar": {"next": nxt, "blackout": blackout},
+            "reader": {"enabled": bool(rd.get("enabled")), "present": bool(rd.get("present")), "status": status, "stale": bool(rd.get("stale")),
+                       "profile": _txt(rd.get("profile"), 60), "calls_h": _num(st.get("calls_h")), "max_calls_h": _num(lim.get("calls_h")),
+                       "usd_h": _round(_num(st.get("usd_h")), 4), "usd_day": _round(_num(st.get("usd_day")), 4), "max_usd_day": _num(lim.get("usd_day")),
+                       "pending": _num(st.get("pending")), "ok_n": _num(st.get("ok_n")), "fail_n": _num(st.get("fail_n")), "susp_n": _num(st.get("susp_n")),
+                       "err": _txt(st.get("err"), 80), "pause_until": _num(st.get("pause_until")), "last_ok": _num(st.get("last_ok")), "at": _moment(now, rd.get("age_s"), 60)}}
+
+
+_READER_STATUSES = ("ok", "idle", "off", "limit", "paused", "llm_down")
+
+
+def _txt(x, n):
+    """Короткий текст: только строка, без управляющих символов, не длиннее n. Любое другое значение -> None."""
+    if not isinstance(x, str):
+        return None
+    s = "".join(c for c in x if c >= " " and c != "\x7f").strip()
+    return s[:n] if s else None
 
 
 def _round(x, n):

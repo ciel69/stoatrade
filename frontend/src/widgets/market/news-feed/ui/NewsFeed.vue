@@ -2,11 +2,11 @@
 import { computed, ref } from 'vue'
 import { dirTone, filterNews, importance, markState, NEWS_DIR, NEWS_TYPE, useNewsStore, weightOf, type NewsFilter, type NewsItem } from '@/entities/headline'
 import { UiChip, UiSegment } from '@/shared/ui'
-import { ageText, countdown, useNow } from '@/shared/lib'
+import { ageText, useNow } from '@/shared/lib'
 
 /**
  * Лента новостей в «Рынке»: очищенные заголовки с разметкой карантинного читателя (тип, важность, направление, монеты). Слева полоса важности (красная от 4, янтарная 3). Монета в разметке
- * выбирает её на карте; клик по заголовку открывает новость боковой панелью (её держит страница). Сверху календарь событий и окно блокировки. Заголовки это текст третьих лиц: показываются как текст, мозгу не передаются, ссылок нет (только домен).
+ * выбирает её на карте; клик по заголовку открывает новость боковой панелью (её держит страница). Состояние источников, читателя и календаря показывает виджет news-status над лентой. Заголовки это текст третьих лиц: показываются как текст, мозгу не передаются, ссылок нет (только домен).
  */
 const props = defineProps<{ coin: string | null; selected: string | null }>()
 const emit = defineEmits<{ selectCoin: [sym: string]; select: [ref: string] }>()
@@ -25,31 +25,17 @@ const options = computed(() => [
 const active = computed<NewsFilter>(() => (filter.value === 'coin' && !props.coin ? 'all' : filter.value))
 const rows = computed(() => filterNews(all.value, active.value, props.coin))
 const shown = computed(() => rows.value.slice(0, limit.value))
-const badSources = computed(() => (snap.value?.sources ?? []).filter((s) => s.degraded || !s.ok))
-const events = computed(() => (snap.value?.calendar.next ?? []).slice(0, 3))
-const blackout = computed(() => snap.value?.calendar.blackout ?? null)
 
 const markText = (i: NewsItem): string => ({ ok: '', struct: 'структурно (факты)', waiting: 'ждёт читателя', susp: 'подозрение: текст модели не передавался', fail: 'формат разметки не принят', raw: 'без модели' })[markState(i)]
 const typeText = (i: NewsItem): string => (i.cls?.type ? (NEWS_TYPE[i.cls.type] ?? i.cls.type) : '')
-const when = (s: number): string => { const d = s - now.value; return d > 86400 ? `через ${Math.round(d / 86400)} дн` : `через ${countdown(d)}` }
 </script>
 
 <template>
   <section class="news" aria-label="Новости">
     <header class="top">
       <h2 class="title">Новости</h2>
-      <span v-if="snap && !snap.reader.enabled" class="note" title="config/intel.json, reader.enabled">читатель выключен: заголовки без разметки</span>
-      <span v-else-if="snap?.reader.stale" class="note warn">разметка устарела</span>
       <UiSegment v-model="filter" :options="options" label="Фильтр новостей" />
     </header>
-
-    <p v-if="blackout" class="black"><UiChip tone="warn">окно блокировки</UiChip> вокруг события «{{ blackout.name || 'без названия' }}»: новые входы закрыты</p>
-    <ul v-if="events.length" class="cal" aria-label="Календарь событий">
-      <li v-for="e in events" :key="e.id" :title="e.verified ? 'дата проверена' : 'дата не проверена'">
-        <b>{{ e.type }}</b> {{ when(e.at) }} <span class="muted">влияние {{ e.impact ?? '–' }}{{ e.verified ? '' : ', дата не проверена' }}</span>
-      </li>
-    </ul>
-    <p v-if="badSources.length" class="srcs warn">Источники с проблемами: {{ badSources.map((s) => s.id).join(', ') }}</p>
 
     <template v-if="snap">
       <ul v-if="shown.length" class="list">
@@ -70,7 +56,7 @@ const when = (s: number): string => { const d = s - now.value; return d > 86400 
           </span>
         </li>
       </ul>
-      <p v-else class="empty">{{ all.length ? 'В этом фильтре заголовков нет.' : 'Заголовков пока нет: их собирает сервис intel из RSS (./tb up --services ...,intel).' }}</p>
+      <p v-else class="empty">{{ all.length ? 'В этом фильтре заголовков нет.' : 'Заголовков пока нет: их собирает служба новостей, она ещё не запущена или ничего не нашла.' }}</p>
       <button v-if="rows.length > limit" type="button" class="more" @click="limit += 20">Показать ещё {{ Math.min(20, rows.length - limit) }}</button>
     </template>
     <div v-else class="skel" aria-busy="true" />
@@ -81,12 +67,7 @@ const when = (s: number): string => { const d = s - now.value; return d > 86400 
 .news { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--space-4); min-width: 0; display: grid; gap: var(--space-3); }
 .top { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-3); }
 .title { margin: 0; font-size: 14px; font-weight: 600; margin-right: auto; }
-.note { font-size: 12px; color: var(--muted); }
-.warn { color: var(--warn); }
-.black { margin: 0; font-size: 12px; display: flex; align-items: center; gap: var(--space-2); }
-.cal { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-5); font-size: 12px; font-variant-numeric: tabular-nums; }
 .muted { color: var(--muted); }
-.srcs { margin: 0; font-size: 12px; }
 /* заголовки сеткой по 440 px (на широком экране 2-3 колонки); разделитель снизу, нижняя линия последнего ряда срезана clip-path */
 .list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(440px, 100%), 1fr)); column-gap: var(--space-5); clip-path: inset(0 0 1px 0); }
 .item { position: relative; padding: var(--space-3) 0 var(--space-3) var(--space-3); border-bottom: 1px solid var(--line); }

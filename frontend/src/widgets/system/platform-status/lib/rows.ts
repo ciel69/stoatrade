@@ -1,5 +1,6 @@
-import { ageText, countdown, duration, gateName, humanize, isPlain, modeOn, nodeLabel, nodeStops, nodeValue, type Human, type Tone } from '@/shared/lib'
+import { ageText, duration, gateName, humanize, isPlain, modeOn, nodeLabel, nodeStops, nodeValue, readerWord, type Human, type Tone } from '@/shared/lib'
 import { dayNeeds, dayWaitText } from '@/entities/day'
+import { blackoutView, downSources, eventViews } from '@/entities/headline'
 import { roleLabel } from '@/entities/role'
 import type { SysNode } from '@/entities/system'
 import { freshLevel, THRESHOLDS } from './thresholds'
@@ -216,13 +217,17 @@ export function buildRows(inp: StatusInput): StatusRow[] {
   // новости
   if (news) {
     const srcs = news.sources
-    const failing = new Set<string>([...srcs.filter((s) => !s.ok || s.degraded).map((s) => s.id), ...news.degraded])
+    const failing = new Set<string>(downSources(news))
     if (srcs.length || failing.size) {
       const total = Math.max(srcs.length, failing.size)
-      const list = [...failing].filter((s) => isPlain(s) || /^[a-z0-9.\-]+$/i.test(s)).join(', ')
+      const names = [...failing].filter((s) => isPlain(s) || /^[a-z0-9.\-]+$/i.test(s))
+      const list = names.join(', ')
+      const all = failing.size >= total
+      const one = failing.size === 1 && names.length === 1 ? names[0] : null
+      const title = all ? 'Источники новостей не отвечают' : one ? `Источник ${one} не отвечает` : 'Часть источников новостей не отвечает'
       rows.push(failing.size
-        ? fromHuman('news', 'news-sources', say(failing.size >= total ? 'Ленты новостей не отвечают' : 'Не все ленты новостей отвечают', `Работают ${total - failing.size} из ${total}${list ? `; не отвечают: ${list}` : ''}. Торговлю это не останавливает, но мозг видит меньше новостей.`, 'Сайты новостей временно недоступны.', 'Обычно проходит само.', failing.size >= total ? 'warn' : 'warn', `news: ${[...failing].join(', ')}`), { brief: failing.size >= total ? 'Ленты новостей не отвечают' : 'Часть лент новостей не отвечает' })
-        : okRow('news', 'news-sources', 'Ленты новостей', `работают ${total} из ${total}`))
+        ? fromHuman('news', 'news-sources', say(title, `Работают ${total - failing.size} из ${total}${list && !one ? `; не отвечают: ${list}` : ''}. Торговлю это не останавливает, но мозг видит меньше новостей.`, 'Сайты новостей временно недоступны.', 'Обычно проходит само. Перечитать источник можно на странице «Новости», в подробностях.', 'warn', `news: ${[...failing].join(', ')}`), { brief: title })
+        : okRow('news', 'news-sources', 'Источники новостей', `работают ${total} из ${total}`))
     }
     const stamps = news.items.map((i) => i.ts).filter((t): t is number => typeof t === 'number')
     if (stamps.length) {
@@ -233,13 +238,17 @@ export function buildRows(inp: StatusInput): StatusRow[] {
         : okRow('news', 'news-fresh', 'Свежесть новостей', `последний заголовок ${ageText(last, now)}`))
     } else rows.push(idleRow('news', 'news-fresh', 'Свежесть новостей', 'заголовков нет'))
     const rd = news.reader
-    rows.push(!rd.enabled ? idleRow('news', 'reader', 'Разбор новостей', 'выключен')
-      : rd.stale ? fromHuman('news', 'reader', say('Разбор новостей отстаёт', 'Заголовки приходят, но не размечаются по важности.', 'Служба разметки давно не работала.', 'Действий не требуется: торговля идёт.', 'warn', 'news.reader.stale'), { brief: 'Разбор новостей отстаёт' })
-        : okRow('news', 'reader', 'Разбор новостей', 'работает'))
-    const bo = news.calendar.blackout
-    const next = news.calendar.next[0]
-    if (bo) rows.push(idleRow('news', 'calendar', 'Календарь событий', 'идёт окно важной новости', 'Новые входы закрыты на время события.'))
-    else if (next) rows.push(okRow('news', 'calendar', 'Календарь событий', `${next.type} через ${countdown(next.at - now)}`))
+    const rw = readerWord(rd.enabled, rd.status)
+    // выключенный читатель и лимит расходов это справка: заголовки идут и без разметки, торговле это не мешает (красным новости не бывают)
+    if (!rd.enabled) rows.push(idleRow('news', 'reader', 'Читатель заголовков', rw.text, rw.about))
+    else if (rd.stale) rows.push(fromHuman('news', 'reader', say('Разметка новостей устарела', 'Заголовки приходят, но не оцениваются по важности: читатель давно не обновлялся.', 'Читатель остановился или не успевает.', 'Действий не требуется: торговля идёт.', 'warn', 'news.reader.stale'), { brief: 'Разметка новостей устарела' }))
+    else if (rd.status === 'paused' || rd.status === 'llm_down') rows.push(fromHuman('news', 'reader', say(`Читатель новостей: ${rw.text}`, rw.about, 'Модель читателя отвечает неверно или недоступна.', 'Действий не требуется: торговля идёт, пока без оценки заголовков.', 'warn', `news.reader.status=${rd.status}${rd.err ? ` | ${rd.err}` : ''}`), { brief: rd.status === 'paused' ? 'Читатель новостей на паузе после ошибок' : 'Модель читателя новостей не отвечает' }))
+    else if (rd.status === 'limit') rows.push(idleRow('news', 'reader', 'Читатель заголовков', rw.text, rw.about))
+    else rows.push(okRow('news', 'reader', 'Читатель заголовков', rd.status === 'idle' ? 'ждёт новых заголовков' : 'работает'))
+    const bo = blackoutView(news, now)
+    const next = eventViews(news, now)[0]
+    if (bo?.active) rows.push(idleRow('news', 'calendar', 'Календарь событий', 'идёт окно важной новости', bo.text))
+    else if (next) rows.push(okRow('news', 'calendar', 'Календарь событий', `${next.type} ${next.inText}`))
   }
 
   // проверки допуска к живой торговле и предупреждения запуска (платформа считает их всегда)

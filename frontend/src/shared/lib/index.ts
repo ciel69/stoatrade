@@ -12,7 +12,8 @@ export {
   isCloseStep, planSourceWord, regimeWord, ruleWord, stopSourceText, verdictWord,
   EXP_CUTS, EXP_CUT_IDS, cutInfo, expModeWord, expValueWord, isExpCut, pHint, pWord, plural,
 } from './human-pages'
-export type { CutInfo, ExpCut, PTone, PWord } from './human-pages'
+export { READER_ENABLE_HINT, clockWord, impactWord, readerWord, untilWord } from './human-pages'
+export type { CutInfo, ExpCut, NewsTone, PTone, PWord, ReaderWord } from './human-pages'
 export { NODE_IDS, humanNode, nodeLabel, nodeStops, nodeValue } from './human-nodes'
 export { TONE_WORD, dayLabel, detailsOf, isPlain, plainify, modeName, modeOn, toneOfLevel, unknownHuman } from './human-text'
 export { ROLE_IDS, actionName, commandStatus, consumerName, contextName, feedState, holdText, planState, proper, roleAbout, roleTitle, sessionName, stopNote, thesisText } from './human-words'

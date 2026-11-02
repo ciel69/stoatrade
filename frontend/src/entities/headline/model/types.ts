@@ -33,6 +33,8 @@ export interface NewsSource {
   fails: number | null
   verified: boolean
   degraded: boolean
+  /** когда источник последний раз отвечал (момент, секунды, до минуты) */
+  at?: number | null
 }
 
 export interface CalendarEvent {
@@ -44,10 +46,43 @@ export interface CalendarEvent {
   at: number
 }
 
+/** Окно вокруг события: в нём новые входы закрыты. from и to: секунды epoch; verified: дата события проверена. Название это текст из конфигурации, только данные. */
+export interface NewsBlackout {
+  name?: string | null
+  from?: number | null
+  to?: number | null
+  verified?: boolean
+}
+
+/** Состояние читателя; всё, кроме enabled, status и stale, может отсутствовать (старый сервер, сервис новостей не запущен). */
+export interface NewsReader {
+  enabled: boolean
+  status: string | null
+  stale: boolean
+  /** читатель уже писал дайджест */
+  present?: boolean
+  profile?: string | null
+  calls_h?: number | null
+  max_calls_h?: number | null
+  usd_h?: number | null
+  usd_day?: number | null
+  max_usd_day?: number | null
+  pending?: number | null
+  ok_n?: number | null
+  fail_n?: number | null
+  susp_n?: number | null
+  /** последняя ошибка модели, обрезанный текст */
+  err?: string | null
+  pause_until?: number | null
+  last_ok?: number | null
+  /** когда обновлялся дайджест */
+  at?: number | null
+}
+
 export interface NewsSnapshot {
   items: NewsItem[]
   sources: NewsSource[]
   degraded: string[]
-  calendar: { next: CalendarEvent[]; blackout: { name?: string } | null }
-  reader: { enabled: boolean; status: string | null; stale: boolean }
+  calendar: { next: CalendarEvent[]; blackout: NewsBlackout | null }
+  reader: NewsReader
 }
