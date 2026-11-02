@@ -13,6 +13,7 @@
       "dispatch",
       "ctl",
       "dash",
+      "labels",
       "brain"
     ],
     "testnet": [
@@ -25,6 +26,7 @@
       "dispatch",
       "ctl",
       "dash",
+      "labels",
       "brain"
     ],
     "trade": [
@@ -36,7 +38,8 @@
       "sync",
       "dispatch",
       "ctl",
-      "dash"
+      "dash",
+      "labels"
     ]
   },
   "supervisor": {
@@ -122,6 +125,11 @@
       "hb": "file",
       "hb_stale_s": 900.0,
       "grace_s": 90.0
+    },
+    "labels": {
+      "hb": "file",
+      "hb_stale_s": 120.0,
+      "grace_s": 90.0
     }
   },
   "scan": {
@@ -145,7 +153,8 @@
       "idea_level": 86400.0,
       "idea_invalidated": 86400.0,
       "idea_tp": 86400.0,
-      "idea_expired": 86400.0
+      "idea_expired": 86400.0,
+      "idea_stale": 14400.0
     },
     "hb_s": 5.0
   },

@@ -5,6 +5,8 @@
 2. tb.logic.*: никаких os, sys, socket, urllib, asyncio, subprocess, threading, tb.paths и вызовов open(), time.time(), time.sleep().
 3. Строка BYBIT_API_SECRET встречается в src/tb только в launcher.py, venues/bybit.py, bybit_stream.py, bybit_wsx.py.
 4. tb.brain не читает ~/.config/traider-bot (нет «.config» в строковых литералах).
+5. R1: tb.labels не импортирует venues/executor/gateway/llm/brain/control/intel.items (прямо и транзитивно);
+   tb.logic.bars/geometry/sim/costs чисты (п. 2) и не тянут биржу/исполнитель транзитивно.
 """
 import ast
 import os
@@ -62,6 +64,13 @@ def under(name, prefixes):
 
 def forbidden_layer_imports(source, module="tb.x"):
     return sorted(n for n in imports_of(source, module) if under(n, FORBIDDEN_FROM_LAYERS))
+
+
+LABELS_FORBIDDEN = ("tb.venues", "tb.executor", "tb.gateway", "tb.llm", "tb.brain", "tb.control", "tb.intel.items")
+
+
+def labels_violations(source, module="tb.labels.x"):
+    return sorted(n for n in imports_of(source, module) if under(n, LABELS_FORBIDDEN))
 
 
 def logic_violations(source):
@@ -394,8 +403,69 @@ class TestLayers(unittest.TestCase):
             src = read(os.path.join(SRC, "control", name + ".py"))
             self.assertFalse([n for n in imports_of(src, "tb.control." + name) if under(n, ("tb.venues", "tb.executor", "tb.llm.keys", "tb.core.secretfile"))], name)
 
+    # ---------------------------------------------------------------- R1: фабрика меток
+    def test_labels_layer_rules(self):
+        """R1 (14.1): tb.labels не импортирует venues/executor/gateway/llm/brain/control/intel.items ни прямо, ни транзитивно."""
+        banned = LABELS_FORBIDDEN
+        bad = {}
+        for path in py_files("labels"):
+            mod = module_name(path)
+            found = labels_violations(read(path), mod)
+            if found:
+                bad[mod] = found
+        self.assertEqual(bad, {})
+        mods = [module_name(p) for p in py_files("labels")]
+        seen, stack, trans = set(), list(mods), {}
+        while stack:
+            m = stack.pop()
+            if m in seen:
+                continue
+            seen.add(m)
+            path = os.path.join(os.path.dirname(SRC), *m.split("."))
+            path = os.path.join(path, "__init__.py") if os.path.isdir(path) else path + ".py"
+            if not os.path.isfile(path):
+                continue
+            imps = imports_of(read(path), m)
+            hit = [n for n in imps if under(n, banned)]
+            if hit:
+                trans[m] = hit
+            stack.extend(n for n in imps if n.startswith("tb.") and n not in seen)
+        self.assertEqual(trans, {})
+
+    def test_labels_checker_catches_violations(self):
+        for src in ("import tb.venues.bybit", "from tb.executor import ports", "from tb import gateway", "from tb.llm.keys import x",
+                    "from tb.brain import brief", "from tb.control import client", "from tb.intel.items import load",
+                    "def f():\n    from tb.brain.validate import v"):
+            self.assertTrue(labels_violations(src, "tb.labels.x"), src)
+        self.assertTrue(labels_violations("from ..venues import bybit", "tb.labels.x"))
+        self.assertFalse(labels_violations("from tb.logic import sim\nfrom tb.core import expstats\nfrom tb.intel import other", "tb.labels.x"))
+
+    def test_logic_r1_modules_are_pure(self):
+        """R1 (14.2): bars, geometry, sim, costs подчиняются правилам чистоты tb.logic (прямо) и не тянут биржу/исполнитель транзитивно."""
+        names = ("bars", "geometry", "sim", "costs")
+        for n in names:
+            path = os.path.join(SRC, "logic", n + ".py")
+            self.assertTrue(os.path.isfile(path), n)
+            self.assertEqual(logic_violations(read(path)), [], n)
+        self.assertEqual(self.closure_violations(["tb.logic." + n for n in names]), {})
+        # транзитивная чистота по внутренним импортам tb.logic
+        seen, stack, bad = set(), ["tb.logic." + n for n in names], {}
+        while stack:
+            m = stack.pop()
+            if m in seen:
+                continue
+            seen.add(m)
+            path = os.path.join(os.path.dirname(SRC), *m.split(".")) + ".py"
+            if not os.path.isfile(path):
+                continue
+            v = logic_violations(read(path))
+            if v:
+                bad[m] = v
+            stack.extend(i for i in imports_of(read(path), m) if i.startswith("tb.logic.") and i not in seen)
+        self.assertEqual(bad, {})
+
     def test_layer_dirs_exist(self):
-        for layer in ("brain", "logic", "core", "dash", "executor", "venues", "gateway", "mcp", "llm", "control"):
+        for layer in ("brain", "logic", "core", "dash", "executor", "venues", "gateway", "mcp", "llm", "control", "labels"):
             self.assertTrue(os.path.isfile(os.path.join(SRC, layer, "__init__.py")), layer)
 
 

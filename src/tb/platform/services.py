@@ -1,6 +1,6 @@
 """Сервисы платформы: конфиг `config/platform.json`, пути `runtime/platform/`, команды и окружение дочерних процессов. Владелец: WP11-B.
 
-Сервис = дочерний процесс супервизора. Список и порядок запуска: exec, scan, feed, context, intel, sync, dispatch, ctl, dash (дашборд), mcp, brain. Ключи Bybit получают ТОЛЬКО исполнитель
+Сервис = дочерний процесс супервизора. Список и порядок запуска: exec, scan, feed, context, intel, sync, dispatch, ctl, dash (дашборд), labels (фабрика меток, без ключей), mcp, brain. Ключи Bybit получают ТОЛЬКО исполнитель
 (launcher грузит ключ в его собственный процесс для testnet/trade) и сервис sync (launcher грузит читающий ключ `read`, только баланс); окружение остальных чистится в `child_env`.
 Без fork и сигнальных API: только subprocess (кроссплатформенно); сетевых вызовов и торговых модулей здесь нет.
 """
@@ -16,9 +16,11 @@ from tb.core import localcfg
 from tb.core.filelock import atomic_write_json
 
 PROFILES = ("paper", "testnet", "trade")
-ORDER = ("exec", "scan", "feed", "context", "intel", "sync", "dispatch", "ctl", "dash", "mcp", "brain")      # порядок запуска; остановка в обратном, но exec последним (см. stop_order)
+ORDER = ("exec", "scan", "feed", "context", "intel", "sync", "dispatch", "ctl", "dash", "labels", "mcp", "brain")      # порядок запуска; остановка в обратном, но exec последним (см. stop_order)
 SERVICE_NAMES = ORDER
 SECRET_PREFIXES = ("BYBIT_", "ANTHROPIC_")                        # не передаются никому, кроме процесса, который грузит их сам (launcher)
+LABELS_SECRET_PREFIXES = ("BYBIT_", "ANTHROPIC_", "DEEPSEEK_", "OPENAI_")      # сервис labels (R1.6, требование 14.3): никаких ключей, чистка шире общей
+LABELS_SECRET_SUFFIXES = ("_API_KEY", "_SECRET", "_TOKEN")
 PROXY_VARS = ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY")
 # что сделать, чтобы закрыть предстартовую проверку P1-P16 (lifecycle.preflight и дашборд показывают одну строку действия)
 PREFLIGHT_FIX = {
@@ -45,9 +47,9 @@ DEFAULTS = {
     "version": 1,
     "profile": "paper",
     "services": {                       # какие сервисы поднимаются по умолчанию в профиле (`--services` перекрывает)
-        "paper": ["exec", "scan", "feed", "context", "intel", "sync", "dispatch", "ctl", "dash", "brain"],
-        "testnet": ["exec", "scan", "feed", "context", "intel", "sync", "dispatch", "ctl", "dash", "brain"],
-        "trade": ["exec", "scan", "feed", "context", "intel", "sync", "dispatch", "ctl", "dash"],
+        "paper": ["exec", "scan", "feed", "context", "intel", "sync", "dispatch", "ctl", "dash", "labels", "brain"],
+        "testnet": ["exec", "scan", "feed", "context", "intel", "sync", "dispatch", "ctl", "dash", "labels", "brain"],
+        "trade": ["exec", "scan", "feed", "context", "intel", "sync", "dispatch", "ctl", "dash", "labels"],
     },
     "supervisor": {
         "poll_s": 1.0,                  # период цикла контроля
@@ -74,6 +76,7 @@ DEFAULTS = {
         "intel": {"hb": "file", "hb_stale_s": 180.0, "grace_s": 90.0},
         "context": {"hb": "file", "hb_stale_s": 180.0, "grace_s": 60.0},
         "sync": {"hb": "file", "hb_stale_s": 900.0, "grace_s": 90.0},
+        "labels": {"hb": "file", "hb_stale_s": 120.0, "grace_s": 90.0},        # фабрика меток (tb.labels.service): захват сигналов и разметка свечами, ключей нет
     },
     "context": {"poll_s": 15.0},        # период цикла сервиса context (публичные источники: деривативы, DVOL, индекс страха, макро-блэкаут); интервалы источников в config/context_config.json
     "sync": {                           # автосинхронизация капитала: баланс читающим ключом read -> state/portfolio.json
@@ -87,7 +90,7 @@ DEFAULTS = {
         "interval": 30.0, "top": 10, "min_turnover": 5e6, "max_spread_bps": 8.0, "max_lot": 15.0, "range_pct": 0.8, "surge_min": 4.0,
         "cooldown": 1200.0, "wake_score": 4.0, "max_per_hour": 12, "idea_zone_pct": 0.3, "outcome_min": "15,60",
         "publish_info": True,           # тихие (wake=false) события тоже в шину, pri=info (как раньше у моста исполнителя)
-        "dedup_s": {"default": 300.0, "patrol": 240.0, "idea_near": 1800.0, "idea_level": 86400.0, "idea_invalidated": 86400.0, "idea_tp": 86400.0, "idea_expired": 86400.0},
+        "dedup_s": {"default": 300.0, "patrol": 240.0, "idea_near": 1800.0, "idea_level": 86400.0, "idea_invalidated": 86400.0, "idea_tp": 86400.0, "idea_expired": 86400.0, "idea_stale": 14400.0},
         "hb_s": 5.0,
         "patrol": {                     # плановый обход монет дня (scansvc.Patrol): на уровнях риска >= min_level сканер сам будит entry_scout
             "enabled": True, "every_s": 300.0, "min_level": 4, "hot_n": 2,
@@ -312,6 +315,8 @@ def service_cmd(name, profile, observe, cfg, py=None):
         return [py, "-m", "tb.intel.service", "run"]
     if name == "context":
         return [py, "-m", "tb.platform.contextsvc", "run"]
+    if name == "labels":
+        return [py, "-m", "tb.labels.service", "run"]
     if name == "sync":
         return launcher + ["sync", "run"]              # launcher загружает читающий ключ read в окружение ЭТОГО процесса (не супервизора)
     if name == "ctl":
@@ -332,6 +337,12 @@ def src_dir():
     return os.path.dirname(os.path.dirname(os.path.abspath(tb.__file__)))
 
 
+def labels_secret(var):
+    """Имя переменной окружения, которой не место в процессе labels: BYBIT_*, ANTHROPIC_*, DEEPSEEK_*, OPENAI_*, *_API_KEY, *_SECRET, *_TOKEN."""
+    u = str(var).upper()
+    return u.startswith(LABELS_SECRET_PREFIXES) or u.endswith(LABELS_SECRET_SUFFIXES)
+
+
 def child_env(name, base, root, selected=(), profile="paper"):
     """Окружение дочернего процесса. Секреты (BYBIT_*, ANTHROPIC_*) и прокси НЕ передаются никому: ключ исполнителя грузит launcher
     внутри самого процесса (testnet/trade), прокси не нужны публичным/локальным сервисам и ломали бы доступ к бирже."""
@@ -339,6 +350,8 @@ def child_env(name, base, root, selected=(), profile="paper"):
     for k, v in base.items():
         ku = k.upper()
         if ku.startswith(SECRET_PREFIXES) or ku in PROXY_VARS:
+            continue
+        if name == "labels" and labels_secret(k):
             continue
         env[k] = v
     env["TB_ROOT"] = os.path.abspath(root)
