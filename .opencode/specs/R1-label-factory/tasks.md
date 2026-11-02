@@ -83,7 +83,7 @@
   - тесты `tests/test_labels_cli.py`, `tests/test_memory_coverage.py` (в том числе `snap` в урезанном досье)
   - _Requirements: 4.3, 8.8, 11.1, 11.2, 11.3, 11.4, 12.5, 13.1, 13.2, 13.3, 13.4_
 
-- [~] 14. Слои, документация, полный прогон (код и документация готовы, полный прогон `./tb test` и сверка конфигов лимитов за главным агентом)
+- [x] 14. Слои, документация, полный прогон (`./tb test` 2026-11-02: 4468 тестов, единственное падение `test_real_dirs_untouched` вызвано новым `config/learning.json`, который параллельно создавал агент R0.2; `risk_profile.json` и `risk_levels.json` не менялись)
   - `tests/test_layering.py`: `tb.labels` без venues/executor/gateway/llm/brain/control/intel.items; `tb.logic.bars|geometry|sim` под правилами чистоты
   - документация: `docs/ARCHITECTURE.md` (база знаний, пакет labels, logic.geometry), `docs/BRAIN.md` (кандидаты вместо цен), `docs/RUNBOOK.md` (сервис labels, backup, папка синхронизации), `docs/ROADMAP.md` (статус R1.x, ссылка на спеку)
   - полный `./tb test` зелёный; проверка, что `risk_profile.json`, `risk_levels.json` и лимиты не изменены
