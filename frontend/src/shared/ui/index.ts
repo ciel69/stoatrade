@@ -1,3 +1,5 @@
+export { default as UiBandChart } from './UiBandChart.vue'
+export type { BandPoint } from './band-chart'
 export { default as UiBrainIcon } from './UiBrainIcon.vue'
 export type { BrainIconState } from './UiBrainIcon.vue'
 export { default as UiNeuralField } from './UiNeuralField.vue'
