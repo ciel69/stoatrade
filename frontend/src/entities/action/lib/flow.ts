@@ -1,4 +1,4 @@
-import { humanize, plainify, type HumanCtx } from '@/shared/lib'
+import { LIVE_RISK, humanize, plainify, type HumanCtx } from '@/shared/lib'
 import type { ActionCommand, ActionHello, ActionSpec, Challenge, ChallengeGate, KillInfo, RiskItem } from '../model/types'
 
 /**
@@ -87,10 +87,16 @@ export function killRisks(kill: KillInfo): RiskItem[] {
   return out
 }
 
-/** Последствия по-человечески, важное сверху: опасность, предупреждения, жёлтые проверки. noUndo: показать строку «нельзя откатить» (только для isIrreversible). */
-export function risksOf(ch: Challenge | null | undefined, noUndo = false): RiskItem[] {
+/** Запуск торгового дня на реальные деньги: у него свои заголовок окна, первая строка последствий и ожидание проверок «как в live». */
+export function isLiveStart(action: string | undefined, args: Record<string, unknown> | undefined): boolean {
+  return action === 'day.start' && args?.mode === 'live'
+}
+
+/** Последствия по-человечески, важное сверху: опасность, предупреждения, жёлтые проверки. noUndo: показать строку «нельзя откатить» (только для isIrreversible). liveStart: первой строкой реальные деньги. */
+export function risksOf(ch: Challenge | null | undefined, noUndo = false, liveStart = false): RiskItem[] {
   if (!ch) return []
   const out: RiskItem[] = []
+  if (liveStart) out.push({ id: 'live', level: 'danger', text: LIVE_RISK })
   if (ch.danger && noUndo) out.push({ id: 'danger', level: 'danger', text: 'Это действие нельзя откатить одним нажатием: прочтите последствия ниже.' })
   if (ch.kill?.active) out.push(...killRisks(ch.kill))
   for (const w of warnings(ch)) {
@@ -115,9 +121,9 @@ export function passedGates(ch: Challenge | null | undefined): ChallengeGate[] {
 }
 
 /** Причины блокировки: непройденные условия простым языком и что делать; если сервер их не перечислил, понятный текст по коду ответа. */
-export function blockReasons(ch: Challenge | null | undefined, fallback: string): string[] {
-  // при снятии аварийной остановки непройденная проверка серьёзна всегда («это справка для бумаги» здесь неуместно)
-  const ctx: HumanCtx | undefined = ch?.kill ? { mode: 'live' } : undefined
+export function blockReasons(ch: Challenge | null | undefined, fallback: string, live = false): string[] {
+  // при снятии аварийной остановки и запуске на реальные деньги непройденная проверка серьёзна всегда («это справка для бумаги» здесь неуместно)
+  const ctx: HumanCtx | undefined = ch?.kill || live ? { mode: 'live' } : undefined
   const list = failedGates(ch).map((g) => {
     const l = plainLine(g.id, g.name, g.msg, false, undefined, ctx)
     return l.todo ? `${l.title}. ${l.todo}` : l.title

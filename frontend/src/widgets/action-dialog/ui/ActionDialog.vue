@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch, watchEffect } from 'vue'
-import { acceptLabel, blockReasons, failedGates, isExpired, ownProgress, passedGates, plainLine, secondsLeft, useActionStore, type ActionMock, type ActionPhase, type Challenge, type RiskItem } from '@/entities/action'
+import { acceptLabel, blockReasons, failedGates, isExpired, isLiveStart, ownProgress, passedGates, plainLine, secondsLeft, useActionStore, type ActionMock, type ActionPhase, type Challenge, type RiskItem } from '@/entities/action'
 
 /** Исходные коды и тексты непройденных условий: только для «Подробностей для специалиста». */
 const failedRaw = (ch: Challenge | null): string => failedGates(ch).map((g) => [g.id, g.name, g.msg].filter(Boolean).join(' · ')).join('\n')
@@ -51,7 +51,7 @@ watchEffect(() => {
     what: action.spec?.what ?? '',
     risks: action.risks,
     passed: passedGates(action.challenge).map((g) => ({ id: g.id, text: plainLine(g.id, g.name, g.msg, true).title })),
-    reasons: action.phase === 'blocked' ? blockReasons(action.challenge, action.error ?? '') : [],
+    reasons: action.phase === 'blocked' ? blockReasons(action.challenge, action.error ?? '', isLiveStart(action.spec?.action, action.spec?.args)) : [],
     text: action.phase === 'done' ? action.resultText : (action.error ?? ''),
     details: action.errorDetails ?? (action.phase === 'blocked' ? (failedRaw(action.challenge) || null) : null),
   }

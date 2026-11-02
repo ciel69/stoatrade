@@ -1,5 +1,7 @@
 export { useControlStore } from './model/store'
-export type { ChallengeData, CtlCheck, CtlHello, CtlResult, CtlSnapshot, DayMode, DayStepRow, FlowPhase, PlatformState } from './model/types'
+export type { ChallengeData, CtlCheck, CtlHello, CtlResult, CtlSnapshot, DayMode, DayStepRow, FlowPhase, PlatformState, StartMode } from './model/types'
+export { canBeginLive, liveAccess, liveGateRows, liveGatesBad, liveLimits } from './lib/live'
+export type { LiveAccess, LiveGateRow } from './lib/live'
 export { CTL_STEP_LABEL, REGION_LABELS, START_STEPS, STOP_WHAT, buttonKind, canBegin, dayArgs, dayWhat, launchFill, litNodes, regionProgress, stepRows, stopArgs, warnCount } from './lib/flow'
 export type { ButtonKind, StepRow, StepState } from './lib/flow'
 export { RELEASE_CHECKS, RELEASE_CHECKS_LIVE, RELEASE_COMMAND, RELEASE_TITLE, killCleared, positionsLine, reasonLine, releaseNote, releaseWhat } from './lib/kill'

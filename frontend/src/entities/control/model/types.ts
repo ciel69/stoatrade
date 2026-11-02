@@ -1,5 +1,7 @@
 /** Контракты управления днём (сервер: src/tb/dash2/ctlbridge.py и тема `ctl` в topics.py). */
 export type DayMode = 'paper' | 'testnet' | 'observe'
+/** Режим в окне запуска: к трём безопасным добавлены реальные деньги (доступны, только когда это разрешает сервер). */
+export type StartMode = DayMode | 'live'
 export type PlatformState = 'stopped' | 'starting' | 'running' | 'closing' | 'halted' | 'unknown'
 
 export interface CtlCheck {
@@ -27,6 +29,8 @@ export interface CtlSnapshot {
   kill: { flatten: boolean; reason: string } | null
   /** снятие аварийной остановки кнопкой включено владельцем (флаг control.allow_clear_kill_from_dash); без него остаётся только команда в терминале */
   clear_kill?: boolean
+  /** запуск дня на реальные деньги из дашборда включён владельцем (флаг control.allow_live_start_from_dash); без него реальные деньги отсюда недоступны */
+  live_start?: boolean
   risk: { level: number | null; name: string | null }
   busy: boolean
   checks: CtlCheck[]
@@ -49,7 +53,9 @@ export interface CtlHello {
 export interface ChallengeData {
   action?: string
   danger?: boolean
-  gates?: Array<{ id: string; name?: string; ok?: boolean; msg?: string }>
+  gates?: Array<{ id: string; name?: string; ok?: boolean; msg?: string; deferred?: boolean }>
+  phrases?: string[]
+  nonce?: string
   warnings?: Array<{ id: string; code?: string; msg?: string }>
   pre_amber?: Array<{ id?: string; name?: string; msg?: string; code?: string }>
   blocked?: boolean

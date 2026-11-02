@@ -2,3 +2,4 @@
 export * from './day'
 export * from './exp'
 export * from './news'
+export * from './live'

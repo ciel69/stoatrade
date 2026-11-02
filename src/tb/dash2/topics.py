@@ -731,6 +731,7 @@ def ctl(root=None, now=None):
             "kill": ({"flatten": bool(kill.get("flatten")), "reason": str(kill.get("reason") or "")[:80]} if kill and kill.get("active") else None),
             "risk": {"level": risk.get("level"), "name": risk.get("name")}, "busy": bool(st.get("pending")),
             "clear_kill": (st.get("config") or {}).get("allow_clear_kill") is True,       # снятие KILL из дашборда включено флагом control.allow_clear_kill_from_dash (решение владельца)
+            "live_start": (st.get("config") or {}).get("allow_live_start_dash") is True,    # запуск дня в live из нового дашборда включён выключателем control.allow_live_start_from_dash
             "checks": [{"id": c.get("id"), "name": str(c.get("name") or "")[:90], "sev": c.get("sev"), "ok": bool(c.get("ok")), "msg": str(c.get("msg") or "")[:160]}
                        for c in (st.get("checks") or []) if isinstance(c, dict)][:16],
             "banner": ({"level": banner.get("level"), "text": str(banner.get("text") or "")[:160]} if banner else None), "day": day,

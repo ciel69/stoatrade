@@ -672,7 +672,7 @@ class Ctl(object):
                 "risk": {"level": rl["level"], "name": rl["name"], "source": rl["source"], "levels": riskstore.levels_list(self.root)},
                 "pending": [{"id": self.busy, "action": "day.start"}] if self.busy else [], "last": list(self.last), "banner": self.banner or lifecycle.banner(self.root),
                 "config": {"allow_shutdown": bool(self.cfg.get("allow_shutdown")), "allow_clear_kill": ctlstate.load_cfg(self.root).get("allow_clear_kill_from_dash") is True,
-"nonce_ttl_s": self.cfg["nonce_ttl_s"], "min_delay_s": self.cfg["min_delay_s"],
+                           "allow_live_start_dash": ctlstate.load_cfg(self.root).get("allow_live_start_from_dash") is True, "nonce_ttl_s": self.cfg["nonce_ttl_s"], "min_delay_s": self.cfg["min_delay_s"],
                            "min_type_s": self.cfg["min_type_s"]}}
 
     def write_status(self):

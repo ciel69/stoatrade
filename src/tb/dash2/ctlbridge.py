@@ -7,6 +7,7 @@
 - CSRF-токен соединения: выдаётся в `hello` и сверяется константным сравнением в каждой команде (поверх проверки Host/Origin при рукопожатии сокета);
 - лимит частоты `max_post_per_min` из config/control.json на соединение (тот же счётчик сессии, что у POST);
 - белый список: `day.start` только для paper|testnet|observe и `day.stop` soft; всё остальное (live, риск, KILL, смена мозга, неизвестное) отвечает E_ELEVATE или E_UNKNOWN
+  (live-старт: только в расширенном режиме И при control.allow_live_start_from_dash=true, иначе E_ELEVATE / E_DISABLED; ворота H1-H8, предупреждения, nonce и фразы проверяет ctl)
   и пишется в аудит; в команду попадают только поля mode, session, accepted, allow_amber (nonce, фразы, team отбрасываются);
 - РАСШИРЕННЫЙ РЕЖИМ (решение владельца, только 127.0.0.1): config/control.json `auth.dash2_full: true` (по умолчанию false) даёт соединению сессию «full» без токена и открывает FULL_ACTIONS
   (кроме platform.shutdown) и запись ключа LLM (op llmkey). Все проверки соединения, аргументы через protocol.validate_args и подтверждения ctl (nonce, фразы, шлюзы) остаются: мост передаёт то,
@@ -106,6 +107,24 @@ class CtlBridge(object):
         except Exception:
             return False
 
+    def live_start_enabled(self):
+        """Выключатель запуска live из этого дашборда: control.allow_live_start_from_dash строго true (по умолчанию false). Нет ключа, не bool или битый файл = выключено."""
+        try:
+            return self.web.conf().get("allow_live_start_from_dash") is True
+        except Exception:
+            return False
+
+    @staticmethod
+    def _live_msg(code, action, args):
+        """Понятный текст отказа для live-старта; остальное берётся из справочника кодов."""
+        if action != "day.start" or not (isinstance(args, dict) and args.get("mode") == "live"):
+            return None
+        if code == "E_ELEVATE":
+            return "запуск live из этого дашборда требует расширенного управления (auth.dash2_full в config/control.json); либо запустите день в старом дашборде"
+        if code == "E_DISABLED":
+            return "запуск live из этого дашборда выключен владельцем (control.allow_live_start_from_dash); либо запустите день в старом дашборде"
+        return None
+
     def _audit(self, label, action, code, now, args=None, result="rejected", cid="-"):
         """Аудит из нового дашборда: источник dash2, в журнале только хеш аргументов (ни ключа LLM, ни nonce). Не чаще 30 записей в минуту, как у ctlweb."""
         w = self.web
@@ -150,10 +169,11 @@ class CtlBridge(object):
             args, code = self.allowed_full(action, m.get("args"))
         else:
             args, code = self.allowed(action, m.get("args"))
+        if not code and full and action == "day.start" and args.get("mode") == "live" and not self.live_start_enabled():
+            code = "E_DISABLED"                                  # выключатель владельца: control.allow_live_start_from_dash (строго true), читается при каждом обращении
         if code:
             self._audit(s["label"], action[:24] or "-", code, now, m.get("args"))
-            msg = "live запускается в старом дашборде: нужны токен и подтверждение фразами" if (code == "E_ELEVATE" and action == "day.start") else None
-            return self._reply(cid, kind, action, code, msg)
+            return self._reply(cid, kind, action, code, self._live_msg(code, action, m.get("args")))
         data = {"action": action, "args": args}
         if full and kind == "command":
             conf, why = self._confirm_of(m)

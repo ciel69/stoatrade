@@ -1,33 +1,40 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { dialogUp, ownProgress, unavailableReason, useActionStore } from '@/entities/action'
-import { CTL_STEP_LABEL, STOP_WHAT, canBegin, dayArgs, dayWhat, launchFill, litNodes, regionProgress, stepRows, stopArgs, useControlStore, warnCount, type DayMode } from '@/entities/control'
+import {
+  CTL_STEP_LABEL, STOP_WHAT, canBegin, canBeginLive, dayArgs, dayWhat, launchFill, liveAccess, liveGateRows, liveGatesBad, liveLimits, litNodes, regionProgress, stepRows, stopArgs, useControlStore, warnCount,
+  type StartMode,
+} from '@/entities/control'
 import { BRAIN_REGIONS, UiBrainIcon, UiMeter, UiSegment, type BrainIconState } from '@/shared/ui'
-import { dayLabel, failureText, humanize, modeName, plainify, useNow } from '@/shared/lib'
+import { LIVE_CONFIRM_TITLE, LIVE_GATES_NOTE, LIVE_GATES_TITLE, LIVE_INTRO, LIVE_PICK, LIVE_START_BUTTON, LIVE_TITLE, LIVE_WARN_NOTE, LIVE_WHAT, dayLabel, failureText, humanize, modeName, plainify, useNow } from '@/shared/lib'
 
 /**
  * Старт торгового дня. Компактная карточка по центру: крупный мозг, под ним одно главное сообщение, одна тонкая шкала хода запуска и одна кнопка.
  * Детали (проверки готовности, шаги запуска) спрятаны под «Подробнее» и раскрываются сами, только если что-то не прошло. Области коры зажигаются по реальным шагам ctl,
- * на каждом новом шаге по сети идёт волна, в конце мозг оживает. Здесь paper, testnet и observe; live запускается в старом дашборде (токен и фразы).
+ * на каждом новом шаге по сети идёт волна, в конце мозг оживает. Режимы: бумага, тестнет, наблюдение и «Реальные деньги».
  * Режим выбирается здесь, а подтверждение рисков делает общее окно «Принимаю риски» (виджет action-dialog): предупреждения и жёлтые проверки там, без отдельных галочек.
  * Если предупреждений нет, день стартует сразу. Жёсткие условия (ворота) проверяет ctl: пока они не выполнены, «Начать торговлю» недоступна.
+ * Реальные деньги: вариант виден всегда, но выбираем только когда сервер разрешает (расширенное управление и выключатель владельца), иначе он серый и причина написана словами.
+ * Для них показаны усиленный текст, жёсткие проверки H1–H8 словами со статусом и пределы из ответа платформы; подтверждение то же единое окно, но со своим заголовком про реальные деньги.
+ * Отладка без сервера: ?start=mock-live | mock-live-blocked | mock-live-off.
  */
 const emit = defineEmits<{ close: [] }>()
 const control = useControlStore()
 const action = useActionStore()
 const now = useNow()
-const OLD_DASH = 'http://127.0.0.1:8766/#control'
 
-const PICKS: ReadonlyArray<{ value: DayMode | 'live'; label: string }> = [
-  { value: 'paper', label: 'Бумага' }, { value: 'testnet', label: 'Тестнет' }, { value: 'observe', label: 'Наблюдение' }, { value: 'live', label: 'Реальные деньги' },
-]
+/** Реальные деньги доступны, только если сервер это разрешает (расширенное управление, выключатель владельца, служба управления на связи). */
+const live = computed(() => liveAccess(control.hello, control.ctl))
+const PICKS = computed<ReadonlyArray<{ value: StartMode; label: string; muted?: boolean }>>(() => [
+  { value: 'paper', label: 'Бумага' }, { value: 'testnet', label: 'Тестнет' }, { value: 'observe', label: 'Наблюдение' }, { value: 'live', label: LIVE_PICK, muted: !live.value.ok },
+])
 const HINT: Record<string, string> = {
   paper: 'Виртуальные сделки, реальных денег нет.',
   testnet: 'Настоящая биржа, но не настоящие деньги.',
   observe: 'Ничего не торгуется, платформа наблюдает.',
 }
 
-const pick = ref<DayMode | 'live'>(control.mode)
+const pick = ref<StartMode>(control.mode)
 const dialog = ref<HTMLElement | null>(null)
 const icon = ref<InstanceType<typeof UiBrainIcon> | null>(null)
 const confirmClose = ref(false)
@@ -59,9 +66,9 @@ onUnmounted(() => {
   opener?.focus?.()
 })
 
-function onPick(v: DayMode | 'live'): void {
+function onPick(v: StartMode): void {
   pick.value = v
-  if (v === 'live') {
+  if (v === 'live' && !live.value.ok) {        // недоступно: ни одного запроса к платформе, только причина словами
     control.reset()
     return
   }
@@ -102,13 +109,18 @@ const stepNo = computed(() => Math.min(rows.value.length, doneCount.value + 1))
 const ch = computed(() => control.challenge)
 const warns = computed(() => warnCount(ch.value))
 const unavailable = computed(() => unavailableReason(action.hello, 'day.start'))
-const ready = computed(() => control.phase === 'ready' && canBegin(ch.value) && !unavailable.value && !action.active)
-/** Подтверждение рисков делает общее окно: здесь только запуск действия. */
+const isLive = computed(() => pick.value === 'live')
+const ready = computed(() => control.phase === 'ready' && (isLive.value ? live.value.ok && canBeginLive(ch.value) : canBegin(ch.value)) && !unavailable.value && !action.active)
+/** Реальные деньги: проверки допуска словами, пределы из ответа платформы. */
+const liveRows = computed(() => (isLive.value ? liveGateRows(ch.value) : []))
+const liveBad = computed(() => liveGatesBad(liveRows.value))
+const liveLimitLines = computed(() => liveLimits(ch.value))
+/** Подтверждение рисков делает общее окно: здесь только запуск действия. Для реальных денег у окна свой заголовок, фразы и nonce подставляет движок из ответа платформы. */
 function begin(): void {
-  if (!ready.value || pick.value === 'live') return
+  if (!ready.value) return
   const mode = pick.value
   action.run({
-    action: 'day.start', args: dayArgs(mode), title: `Старт торгового дня: ${modeName(mode)}`, what: dayWhat(mode),
+    action: 'day.start', args: dayArgs(mode), title: mode === 'live' ? LIVE_CONFIRM_TITLE : `Старт торгового дня: ${modeName(mode)}`, what: mode === 'live' ? LIVE_WHAT : dayWhat(mode),
     timeoutMs: 180_000,                // запуск идёт до минуты и больше: дольше обычных 60 секунд
     onDone: () => { startedByUs.value = true },
   })
@@ -122,7 +134,7 @@ const gateRows = computed(() => gates.value.map((g) => {
 const failText = (code: string | null) => (code ? failureText(code) : 'Шаг не прошёл проверку. Устраните причину и запустите день снова.')
 const gatesOk = computed(() => gates.value.filter((g) => g.ok).length)
 const gatesBad = computed(() => gates.value.length - gatesOk.value)
-watch(gatesBad, (v) => { if (v) details.value = true })
+watch(gatesBad, (v) => { if (v && !isLive.value) details.value = true })
 
 // ---- итог
 const risk = computed(() => control.ctl?.risk)
@@ -139,11 +151,11 @@ watch(finished, (v) => {
 })
 
 // ---- заголовок и подзаголовок
-const title = computed(() => ({ pick: 'Старт торговли', launch: 'Запускаю день', running: 'Торговый день идёт', closing: 'Завершаю день', done: 'День запущен' })[view.value])
+const title = computed(() => ({ pick: isLive.value ? LIVE_TITLE : 'Старт торговли', launch: 'Запускаю день', running: 'Торговый день идёт', closing: 'Завершаю день', done: 'День запущен' })[view.value])
 const sub = computed(() => {
   if (view.value === 'launch') return `${ctlStep.value ?? current.value?.label ?? 'Ожидаю сервис управления'} · шаг ${stepNo.value} из ${rows.value.length || 9} · ${elapsed.value} с`
   if (view.value === 'closing') return 'Ждущие входы, чек-лист переноса, аудитор, отчёт. Обычно 10 до 40 секунд.'
-  if (view.value === 'pick') return pick.value === 'live' ? '' : HINT[pick.value]
+  if (view.value === 'pick') return isLive.value ? '' : HINT[pick.value]
   return facts.value.join(' · ')
 })
 
@@ -193,14 +205,32 @@ function stopNow(): void {
 
       <!-- выбор режима и проверки -->
       <template v-if="view === 'pick'">
-        <UiSegment class="modes" :model-value="pick" :options="PICKS" label="Режим дня" data-autofocus @update:model-value="onPick($event as DayMode | 'live')" />
+        <UiSegment class="modes" :model-value="pick" :options="PICKS" label="Режим дня" data-autofocus @update:model-value="onPick($event as StartMode)" />
 
-        <template v-if="pick === 'live'">
-          <p class="note warn">Торговля на реальные деньги запускается только в старом дашборде: там нужны отдельное подтверждение и принятие всех предупреждений.</p>
-          <div class="foot"><a class="cta" :href="OLD_DASH" target="_blank" rel="noopener">Открыть старый дашборд</a></div>
-        </template>
+        <!-- реальные деньги: недоступно (серая причина) или усиленный текст, проверки допуска словами, пределы платформы -->
+        <Transition name="lv">
+          <div v-if="isLive" class="livebox">
+            <p v-if="!live.ok" class="note locked" role="note">{{ live.reason }}</p>
+            <template v-else>
+              <p class="note live" role="note">{{ LIVE_INTRO }}</p>
+              <p v-if="control.phase === 'checking' || action.phase === 'checking'" class="note" role="status"><i class="spin" aria-hidden="true" />Проверяю условия запуска…</p>
+              <section v-if="liveRows.length" class="lg" aria-labelledby="sd-lg">
+                <h3 id="sd-lg" class="lgt">{{ LIVE_GATES_TITLE }}<span :class="liveBad ? 'bad' : 'ok'">{{ liveBad ? `не готово: ${liveBad}` : 'всё готово' }}</span></h3>
+                <ul class="lrows" aria-label="Жёсткие проверки допуска">
+                  <li v-for="r in liveRows" :key="r.id" :class="r.state">
+                    <i class="mark" aria-hidden="true" />
+                    <div><span class="t">{{ r.title }}</span><b class="w">{{ r.word }}</b><span v-if="r.todo" class="td">{{ r.todo }}</span></div>
+                  </li>
+                </ul>
+                <p class="fine">{{ LIVE_GATES_NOTE }}</p>
+              </section>
+              <ul v-if="liveLimitLines.length" class="limits" aria-label="Пределы платформы"><li v-for="l in liveLimitLines" :key="l">{{ l }}</li></ul>
+              <p v-if="warns && ready" class="note warn" role="note">{{ warns === 1 ? 'Есть одно предупреждение' : `Есть предупреждений: ${warns}` }}. {{ LIVE_WARN_NOTE }}</p>
+            </template>
+          </div>
+        </Transition>
 
-        <template v-else>
+        <template v-if="!isLive">
           <p v-if="control.phase === 'checking' || action.phase === 'checking'" class="note" role="status"><i class="spin" aria-hidden="true" />Проверяю условия запуска…</p>
 
           <button v-if="gates.length" type="button" class="more" :aria-expanded="details" aria-controls="sd-gates" @click="details = !details">
@@ -215,15 +245,18 @@ function stopNow(): void {
           </div>
 
           <p v-if="warns && ready" class="note warn" role="note">{{ warns === 1 ? 'Есть одно предупреждение' : `Есть предупреждений: ${warns}` }}. Перед запуском вы увидите последствия и подтвердите их в отдельном окне.</p>
+        </template>
+
+        <template v-if="!isLive || live.ok">
           <p v-if="unavailable" class="err" role="alert">{{ unavailable }}</p>
           <p v-if="control.error && (control.phase === 'blocked' || control.phase === 'failed')" class="err" role="alert">{{ control.error }}</p>
-
-          <div class="foot">
-            <button type="button" class="ghost" @click="requestClose">Отмена</button>
-            <button type="button" class="cta" :disabled="!ready" @click="begin">Начать торговлю</button>
-          </div>
-          <p class="fine">Уровень риска: {{ risk?.level ?? '–' }}{{ risk?.name ? ' · ' + risk.name : '' }}. Менять его можно в «Система · Настройки». Торговый день идёт до остановки.</p>
         </template>
+
+        <div class="foot">
+          <button type="button" class="ghost" @click="requestClose">Отмена</button>
+          <button type="button" class="cta" :disabled="!ready" @click="begin">{{ LIVE_START_BUTTON }}</button>
+        </div>
+        <p class="fine">Уровень риска: {{ risk?.level ?? '–' }}{{ risk?.name ? ' · ' + risk.name : '' }}. Менять его можно в «Система · Настройки». Торговый день идёт до остановки.</p>
       </template>
 
       <!-- ход запуска -->
@@ -307,6 +340,32 @@ function stopNow(): void {
 .list li.run .mark { background: var(--accent); animation: sd-pulse 1.2s var(--ease-in-out) infinite; }
 .list li.bad .mark { background: var(--neg); }
 @keyframes sd-pulse { 50% { opacity: 0.35; } }
+
+/* реальные деньги: усиленный текст, проверки допуска со словом статуса, причина недоступности серым */
+.livebox { display: grid; gap: var(--space-3); text-align: left; }
+.note.live { display: block; padding: var(--space-3); border: 1px solid color-mix(in srgb, var(--warn) 55%, transparent); border-radius: var(--radius-sm); color: var(--text); background: color-mix(in srgb, var(--warn) 7%, transparent); }
+.note.locked { display: block; padding: var(--space-3); border: 1px dashed var(--line2); border-radius: var(--radius-sm); color: var(--muted); }
+.lg { display: grid; gap: var(--space-2); }
+.lgt { margin: 0; display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); font-size: 13px; font-weight: 650; }
+.lgt span { font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.lgt .ok { color: var(--pos); }
+.lgt .bad { color: var(--neg); }
+.lrows { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); font-size: 12px; }
+.lrows li { display: grid; grid-template-columns: 7px minmax(0, 1fr); gap: var(--space-2); align-items: start; }
+.lrows .mark { margin-top: 5px; }
+.lrows li.ok .mark { background: var(--pos); }
+.lrows li.bad .mark { background: var(--neg); }
+.lrows li.later .mark { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted); }
+.lrows li > div { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px var(--space-3); min-width: 0; }
+.lrows .t { color: var(--text); overflow-wrap: anywhere; }
+.lrows .w { flex: none; font-weight: 600; font-size: 11px; color: var(--pos); }
+.lrows li.bad .w { color: var(--neg); }
+.lrows li.later .w { color: var(--muted); }
+.lrows .td { flex: 1 1 100%; color: var(--muted); font-size: 11px; line-height: 1.4; }
+.limits { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.lv-enter-from { opacity: 0; transform: translateY(6px); }
+.lv-enter-active { transition: opacity 200ms var(--ease-out), transform 200ms var(--ease-out); }
+
 .err { margin: 0; padding: var(--space-2) var(--space-3); border: 1px solid var(--neg); border-radius: var(--radius-sm); color: var(--neg); font-size: 12px; text-align: left; }
 
 .foot { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
@@ -331,5 +390,6 @@ function stopNow(): void {
   .spin { animation: none; border-top-color: var(--accent); border-right-color: var(--accent); }
   .list li.run .mark { animation: none; }
   .fold, .more svg, .cta { transition: none; }
+  .lv-enter-from { transform: none; }
 }
 </style>

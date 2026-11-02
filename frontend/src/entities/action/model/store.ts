@@ -2,10 +2,10 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { useLive, type LiveMessage } from '@/shared/api'
 import { failureText, plainify } from '@/shared/lib'
-import { FINAL_TIMEOUT_MS, TIMEOUT_TEXT, buildCommand, timeoutText, isExpired, isIrreversible, isRisky, risksOf, secondsLeft, unavailableReason } from '../lib/flow'
+import { FINAL_TIMEOUT_MS, TIMEOUT_TEXT, blockReasons, buildCommand, timeoutText, isExpired, isIrreversible, isLiveStart, isRisky, risksOf, secondsLeft, unavailableReason } from '../lib/flow'
 import { createKeySender } from './key'
 import type { KeyOutcome } from '../lib/key'
-import type { ActionFinal, ActionHello, ActionPhase, ActionResult, ActionSpec, ActionToast, Challenge } from './types'
+import type { ActionFinal, ActionHello, ActionPhase, ActionResult, ActionSpec, ActionToast, Challenge, ChallengeGate as ActionGateRow } from './types'
 
 type Transport = (payload: Record<string, unknown>) => boolean
 export type ActionMock = 'confirm' | 'blocked' | 'done' | 'fail' | 'toast' | 'full' | 'kill' | 'kill-live' | 'kill-blocked'
@@ -42,7 +42,7 @@ export const useActionStore = defineStore('action', () => {
   let transport: Transport = (payload) => useLive().socket.send(payload)
 
   const active = computed(() => ACTIVE.has(phase.value))
-  const risks = computed(() => risksOf(challenge.value, isIrreversible(spec.value?.action, spec.value?.args)))
+  const risks = computed(() => risksOf(challenge.value, isIrreversible(spec.value?.action, spec.value?.args), isLiveStart(spec.value?.action, spec.value?.args)))
   /** Запись ключа провайдера: напрямую, без challenge. Отправитель не хранит значение, в состоянии стора его нет. */
   const keys = createKeySender({ csrf: () => hello.value.csrf, send: (p) => transport(p) })
   const sendKey = (provider: string, value: string): Promise<KeyOutcome> => keys.send(provider, value)
@@ -177,11 +177,23 @@ export const useActionStore = defineStore('action', () => {
     if (phase.value === 'sending') phase.value = 'waiting'
   }
 
+  /**
+   * Итог-отказ словами. Отказ по жёстким условиям (E_GATE) называет, какие именно не прошли, если платформа их прислала (так бывает при повторной проверке
+   * сразу после переключения исполнителя на живую биржу: тогда торговля не включена, исполнитель возвращён обратно).
+   */
+  function failedText(f: ActionFinal): string {
+    const raw: unknown = f.code === 'E_GATE' ? f.data?.gates : null
+    const bad = (Array.isArray(raw) ? (raw as ActionGateRow[]) : []).filter((g) => g && g.ok === false)
+    if (!bad.length) return failureText(f.code, f.msg)
+    const live = isLiveStart(spec.value?.action, spec.value?.args)
+    return `${failureText(f.code, f.msg)} ${blockReasons({ gates: bad }, '', live).join(' ')}`
+  }
+
   function applyFinal(m: LiveMessage): void {
     const f = m.data as ActionFinal
     if (f.rid !== cmdId || (phase.value !== 'sending' && phase.value !== 'waiting')) return
     if (f.status === 'done') finish(true, plainify(f.msg) ?? 'Готово.')
-    else finish(false, failureText(f.code, f.msg), [f.status, f.code, f.msg].filter(Boolean).join(' | ') || null)
+    else finish(false, failedText(f), [f.status, f.code, f.msg].filter(Boolean).join(' | ') || null)
   }
 
   /** «Принимаю риски»: после паузы min_delay отправляет команду; если срок challenge вышел, сам запрашивает условия заново. */
@@ -275,6 +287,14 @@ export const useActionStore = defineStore('action', () => {
     if (action === 'mode.set') return calm
     if (action === 'day.stop') {
       return { ...calm, min_delay: 0, warnings: [{ id: 'W_STOP_OPEN', code: 'W_STOP_OPEN', msg: 'Открытые позиции останутся под стопами на бирже, пока день завершается.' }] }
+    }
+    if (action === 'day.start' && args.mode === 'live') {
+      // запуск на реальные деньги: danger, фраза с датой, предупреждения принимаются общим окном
+      return {
+        danger: true, blocked: false, phrases: ['ТОРГУЮ LIVE 2026-11-02 УРОВЕНЬ 3'], nonce: 'mock', min_delay: 2, expires_in: 90, pre_amber: [],
+        gates: ['H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'H7', 'H8'].map((id) => ({ id, name: id, ok: true })),
+        warnings: [{ id: 'W1', code: 'W_PAPER', msg: 'сделок 18 из рекомендованных 30; дней 5 из 7' }, { id: 'W9', code: 'W_SESSION', msg: 'сделок в журнале 4 из 10' }],
+      }
     }
     if (action === 'day.start') {
       return {

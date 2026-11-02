@@ -106,9 +106,11 @@ class TestWhitelist(Base):
         self.assertIn(("day.start", "E_ELEVATE"), codes)
         self.assertIn(("risk.set", "E_ELEVATE"), codes)
 
-    def test_live_start_explains_where_to_go(self):
+    def test_live_start_explains_what_is_needed(self):
         r = self.b.handle(WS, self.msg(args={"mode": "live", "session": "day"}))
-        self.assertIn("старом дашборде", r["msg"])
+        self.assertEqual(r["code"], "E_ELEVATE")
+        self.assertIn("dash2_full", r["msg"])                  # без расширенного режима live из этого дашборда невозможен
+        self.assertIn("старом дашборде", r["msg"])             # путь через старый дашборд остаётся
 
     def test_bad_mode_is_arg_error(self):
         self.assertEqual(self.b.handle(WS, self.msg(args={"mode": "moon"}))["code"], "E_ARGS")
@@ -237,6 +239,14 @@ class TestFull(FullBase):
         self.assertIn("kill.clear", ctlbridge.FULL_ACTIONS)
         self.assertEqual(ctlbridge.CtlBridge.allowed_full("kill.clear", {"force": True, "applied": True}), ({}, None))
         self.assertEqual(ctlbridge.CtlBridge.allowed("kill.clear", {}), (None, "E_ELEVATE"))
+        self.assertEqual(ctlbridge.CtlBridge.allowed_full("platform.shutdown", {}), (None, "E_ELEVATE"))
+
+    def test_live_day_start_needs_the_owner_switch_even_in_full(self):
+        for kind in ("challenge", "command"):
+            r = self.b.handle(WS, self.msg(kind=kind, action="day.start", args={"mode": "live", "session": "day"}))
+            self.assertEqual((r["ok"], r["code"]), (False, "E_DISABLED"), kind)
+        self.assertEqual(self.queued(), [])
+        self.assertIn(("day.start", "E_DISABLED"), self.audit_codes())
         self.assertEqual(ctlbridge.CtlBridge.allowed_full("platform.shutdown", {}), (None, "E_ELEVATE"))
 
     def test_allowed_full_filters_args(self):
