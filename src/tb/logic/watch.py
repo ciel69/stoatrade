@@ -6,7 +6,8 @@
 Триггеры (код пробуждения, в порядке важности):
   NEWS           свежая новость по монете (intel/flash): любая, не старше news_max_age_s;
   FAST_MOVE      ход за минуту от fast_move_atr ATR(5м) в любую сторону (кит, каскад);
-  STRUCT_BREAK   цена за ближайшим уровнем структуры против позиции (long: ниже поддержки, short: выше сопротивления) не меньше struct_break_s подряд;
+  STRUCT_BREAK   цена за ближайшим уровнем структуры против позиции (long: ниже поддержки, short: выше сопротивления) дальше буфера
+                 max(struct_break_buf_pct, struct_break_atr * ATR(5м)) не меньше struct_break_s подряд;
   CROWD_TURN     настроение толпы (brain/crowd.py) стало против позиции: паника для лонга, эйфория для шорта, или сторона давления против;
   BOOK_WALL      устойчивая стена в стакане против позиции ближе wall_atr ATR(5м);
   VOL_SPIKE      оборот часа к норме (tx) от vol_spike_x и заметно выше, чем при входе;
@@ -28,8 +29,8 @@ REPEAT_S = {"NEWS": 0.0, "FAST_MOVE": 5 * 60.0, "STRUCT_BREAK": 10 * 60.0, "CROW
             "REGIME_CHANGE": 30 * 60.0, "FLOW_TURN": 10 * 60.0, "STALLED": 15 * 60.0}
 ORDER = ("NEWS", "FAST_MOVE", "STRUCT_BREAK", "CROWD_TURN", "BOOK_WALL", "VOL_SPIKE", "REGIME_CHANGE", "FLOW_TURN", "STALLED")
 CODES = ORDER
-DEFAULTS = {"fast_move_atr": 2.0, "fast_move_s": 60.0, "struct_break_s": 30.0, "struct_break_buf_pct": 0.1, "wall_atr": 1.5, "vol_spike_x": 3.0,
-            "news_max_age_s": 180.0}
+DEFAULTS = {"fast_move_atr": 2.0, "fast_move_s": 60.0, "struct_break_s": 30.0, "struct_break_buf_pct": 0.1, "struct_break_atr": 0.5, "wall_atr": 1.5,
+            "vol_spike_x": 3.0, "news_max_age_s": 180.0}
 PX_HIST_S = 120.0          # сколько секунд цен держать для хода за минуту
 
 
@@ -76,10 +77,11 @@ def _market_codes(st, side_sign, flow, now, cfg, ctx):
             ref = base[-1]
             if ref and abs(last / ref - 1.0) * 100.0 >= _cfg(cfg, "fast_move_atr") * a5:
                 out.add("FAST_MOVE")
-    # STRUCT_BREAK: за ближайшим уровнем против позиции не меньше struct_break_s
+    # STRUCT_BREAK: за ближайшим уровнем против позиции не меньше struct_break_s. Буфер = max(struct_break_buf_pct, struct_break_atr * ATR(5м)):
+    # разбор POWR 2026-11-02: тиковое касание на 0.1% под уровнем (шум) будило мозг, и тот закрывал сделку при -0.2R с целым тезисом.
     lv = ctx.get("sup") if side_sign > 0 else ctx.get("res")
     lvl = max((p for p in (lv or []) if _f(p)), default=None) if side_sign > 0 else min((p for p in (lv or []) if _f(p)), default=None)
-    buf = _cfg(cfg, "struct_break_buf_pct") / 100.0
+    buf = max(_cfg(cfg, "struct_break_buf_pct"), _cfg(cfg, "struct_break_atr") * (a5 or 0.0)) / 100.0
     if last and lvl and side_sign * (last - lvl * (1 - side_sign * buf)) < 0:
         st.setdefault("break_since", now)
         if now - st["break_since"] >= _cfg(cfg, "struct_break_s"):

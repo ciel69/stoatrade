@@ -1,5 +1,5 @@
 *, *::before, *::after { box-sizing: border-box; }
-html { background: var(--bg); }
+html { background: var(--bg); scrollbar-gutter: stable; }        /* место под полосу прокрутки резервируется всегда: ширина контента не прыгает между длинными и короткими страницами */
 body {
   margin: 0;
   background: var(--bg);

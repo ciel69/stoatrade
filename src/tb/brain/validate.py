@@ -212,10 +212,14 @@ def _num(x):
     return float(x) if isinstance(x, (int, float)) and not isinstance(x, bool) and x == x else None
 
 
+SMALL_LOSS_R = -0.5                 # pm close при убытке между -0.5R и 0 отклоняется (HOLD_SMALL_LOSS): стоп и инвалидация плана работают сами
+CLOSE_ANY_R_EVENTS = {"session_ending", "kill", "limit_hit"}       # события, при которых закрыть можно при любом R
+
+
 def pm_context(brief, plan, event=None):
     """Контекст смысловой проверки pm/1 из досье scope=event и события задания: сторона, цена, стоп, наличие позиции, типы событий, политика переноса, окно новостей.
     Нет данных -> поле None (проверка пропускается, остаётся шлюз). Досье есть, а плана в нём нет -> unknown_plan (любое действие кроме hold/escalate отклоняется)."""
-    ctx = {"plan": plan, "has_position": None, "side": None, "px": None, "sl": None, "avg": None, "status": None, "unknown_plan": False,
+    ctx = {"plan": plan, "has_position": None, "side": None, "px": None, "sl": None, "avg": None, "r": None, "status": None, "unknown_plan": False,
            "event_types": sorted(set(t for t in ((event or {}).get("types") or []) if isinstance(t, str))), "carry_policy": None, "blackout_min": None, "blackout_warn": False}
     if not isinstance(brief, dict):
         return ctx
@@ -229,7 +233,7 @@ def pm_context(brief, plan, event=None):
     pos = next((x for x in brief.get("positions") or [] if isinstance(x, dict) and x.get("plan") == plan), None)
     pl = next((x for x in brief.get("plans") or [] if isinstance(x, dict) and x.get("id") == plan), None)
     if pos:
-        ctx.update(has_position=True, side=pos.get("side"), px=_num(pos.get("px")), sl=_num(pos.get("sl")), avg=_num(pos.get("avg")))
+        ctx.update(has_position=True, side=pos.get("side"), px=_num(pos.get("px")), sl=_num(pos.get("sl")), avg=_num(pos.get("avg")), r=_num(pos.get("r")))
     elif pl:
         ctx.update(has_position=False, side=pl.get("side"))
     if pl:
@@ -554,6 +558,9 @@ def _pm(o, ctx):
         errs.append("CARRY_NOT_ALLOWED")             # политика never: к концу сессии позицию закрывают
     if hp is False and d in ("close", "partial_close"):
         errs.append("NO_POSITION")
+    r = ctx.get("r")
+    if d == "close" and hp and r is not None and SMALL_LOSS_R < r < 0 and not (ets & CLOSE_ANY_R_EVENTS):
+        errs.append("HOLD_SMALL_LOSS")               # жёсткое правило 3 промпта кодом: убыток меньше 0.5R не повод закрывать (разбор POWR 2026-11-02: закрыто при -0.2R по шуму)
     if hp is True and d == "cancel":
         errs.append("CANCEL_IN_POSITION")
     if d == "move_stop" and hp is False and a.get("to") == "be":

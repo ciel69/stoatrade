@@ -56,14 +56,21 @@ class WatchTest(unittest.TestCase):
         W.evaluate(st, 1, -0.2, None, 100.0, cfg, dict(base, last=100.0))
         self.assertEqual(W.evaluate(st, 1, -0.2, None, 160.0, cfg, dict(base, last=98.9)), "FAST_MOVE")             # -1.1% за минуту при ATR 0.5% = 2.2 ATR
         self.assertIsNone(W.evaluate(st, 1, -0.2, None, 170.0, cfg, dict(base, last=98.85)))                         # пауза 5 мин на код
-        # пробой поддержки против лонга: 30 с подряд ниже уровня с буфером 0.1%
+        # пробой поддержки против лонга: 30 с подряд ниже уровня с буфером max(0.1%, 0.5 ATR(5м)) = 0.25% (уровень 98.7525)
         st2 = {}
-        W.evaluate(st2, 1, 0.1, None, 0.0, cfg, dict(base, last=98.85))
-        self.assertIsNone(W.evaluate(st2, 1, 0.1, None, 20.0, cfg, dict(base, last=98.85)))
-        self.assertEqual(W.evaluate(st2, 1, 0.1, None, 31.0, cfg, dict(base, last=98.85)), "STRUCT_BREAK")
+        W.evaluate(st2, 1, 0.1, None, 0.0, cfg, dict(base, last=98.7))
+        self.assertIsNone(W.evaluate(st2, 1, 0.1, None, 20.0, cfg, dict(base, last=98.7)))
+        self.assertEqual(W.evaluate(st2, 1, 0.1, None, 31.0, cfg, dict(base, last=98.7)), "STRUCT_BREAK")
         st3 = {}
-        W.evaluate(st3, -1, 0.1, None, 0.0, cfg, dict(base, last=101.7))
-        self.assertEqual(W.evaluate(st3, -1, 0.1, None, 31.0, cfg, dict(base, last=101.7)), "STRUCT_BREAK")          # шорт: выше сопротивления
+        W.evaluate(st3, -1, 0.1, None, 0.0, cfg, dict(base, last=101.8))
+        self.assertEqual(W.evaluate(st3, -1, 0.1, None, 31.0, cfg, dict(base, last=101.8)), "STRUCT_BREAK")          # шорт: выше сопротивления (101.754)
+        # шум внутри 0.5 ATR за уровнем не будит (разбор POWR 2026-11-02); без ATR остаётся буфер 0.1%
+        st2n = {}
+        W.evaluate(st2n, 1, 0.1, None, 0.0, cfg, dict(base, last=98.85))
+        self.assertIsNone(W.evaluate(st2n, 1, 0.1, None, 61.0, cfg, dict(base, last=98.85)))
+        st2a = {}
+        W.evaluate(st2a, 1, 0.1, None, 0.0, cfg, dict(base, last=98.85, a5_pct=None))
+        self.assertEqual(W.evaluate(st2a, 1, 0.1, None, 31.0, cfg, dict(base, last=98.85, a5_pct=None)), "STRUCT_BREAK")
         # толпа развернулась против лонга (паника) один раз на смену состояния
         st4 = {}
         self.assertEqual(W.evaluate(st4, 1, 0.1, None, 0.0, cfg, dict(base, crowd={"mood": "panic", "bias": "short"})), "CROWD_TURN")
@@ -83,9 +90,9 @@ class WatchTest(unittest.TestCase):
         self.assertEqual(W.evaluate(st7, 1, 0.1, None, 1.0, cfg, dict(base, reg="trend_down")), "REGIME_CHANGE")
         # приоритет: новость важнее пробоя
         st8 = {}
-        W.evaluate(st8, 1, 0.1, None, 0.0, cfg, dict(base, last=98.85))
-        self.assertEqual(W.evaluate(st8, 1, 0.1, None, 31.0, cfg, dict(base, last=98.85, news=[{"id": "n9", "age_s": 1}])), "NEWS")
-        self.assertEqual(W.evaluate(st8, 1, 0.1, None, 32.0, cfg, dict(base, last=98.85)), "STRUCT_BREAK")           # следующий тик отдаёт пробой
+        W.evaluate(st8, 1, 0.1, None, 0.0, cfg, dict(base, last=98.7))
+        self.assertEqual(W.evaluate(st8, 1, 0.1, None, 31.0, cfg, dict(base, last=98.7, news=[{"id": "n9", "age_s": 1}])), "NEWS")
+        self.assertEqual(W.evaluate(st8, 1, 0.1, None, 32.0, cfg, dict(base, last=98.7)), "STRUCT_BREAK")           # следующий тик отдаёт пробой
         # прежние коды без ctx работают как раньше (совместимость)
         st9 = {}
         W.evaluate(st9, 1, 0.8, None, 0.0, CFG)
