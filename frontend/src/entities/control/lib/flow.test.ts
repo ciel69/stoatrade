@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ChallengeData, CtlSnapshot } from '../model/types'
-import { acceptList, buttonKind, canBegin, canStart, dayArgs, dayWhat, launchFill, litNodes, regionProgress, startArgs, stepRows, warnCount } from './flow'
+import { STOP_WHAT, buttonKind, canBegin, dayArgs, dayWhat, launchFill, litNodes, regionProgress, stepRows, stopArgs, warnCount } from './flow'
 
 describe('запуск дня через общий диалог', () => {
   it('начинать можно, пока условия не блокируют и нет необратимой опасности; предупреждения не мешают', () => {
@@ -77,22 +77,23 @@ describe('нейроны по прогрессу', () => {
   })
 })
 
-describe('принятие и аргументы', () => {
+describe('условия и аргументы', () => {
   const ch: ChallengeData = { warnings: [{ id: 'W1', msg: 'мало истории' }], pre_amber: [{ id: 'P1', msg: 'жёлтая' }, { msg: 'без id' }], blocked: false }
-  it('список принимаемого: предупреждения и жёлтые проверки', () => {
-    expect(acceptList(ch).map((a) => a.id)).toEqual(['W1', 'P1', 'amber-1'])
+  it('сколько предупреждений увидит владелец в общем окне', () => {
+    expect(warnCount(ch)).toBe(3)
+    expect(warnCount({})).toBe(0)
+    expect(warnCount(null)).toBe(0)
   })
-  it('старт доступен, когда принято всё и нет блокировки', () => {
-    expect(canStart(ch, new Set())).toBe(false)
-    expect(canStart(ch, new Set(['W1', 'P1', 'amber-1']))).toBe(true)
-    expect(canStart({ blocked: true }, new Set())).toBe(false)
-    expect(canStart({ danger: true }, new Set())).toBe(false)
-    expect(canStart(null, new Set())).toBe(false)
-    expect(canStart({}, new Set())).toBe(true)
+  it('начинать можно, пока условия не блокируют и нет необратимой опасности', () => {
+    expect(canBegin(ch)).toBe(true)
+    expect(canBegin({ blocked: true })).toBe(false)
+    expect(canBegin({ danger: true })).toBe(false)
+    expect(canBegin(null)).toBe(false)
   })
-  it('аргументы: принятые предупреждения и allow_amber, сессия day', () => {
-    expect(startArgs('paper', ch)).toEqual({ mode: 'paper', session: 'day', accepted: ['W1'], allow_amber: true })
-    expect(startArgs('observe', {})).toEqual({ mode: 'observe', session: 'day', accepted: [], allow_amber: false })
+  it('аргументы запуска и остановки: сессия day, мягкая остановка', () => {
+    expect(dayArgs('paper')).toEqual({ mode: 'paper', session: 'day' })
+    expect(stopArgs()).toEqual({ mode: 'soft' })
+    expect(STOP_WHAT).toMatch(/платформа останется запущенной/)
   })
 })
 

@@ -19,7 +19,7 @@ const effect = computed(() => {
     ? `Им пользуются роли: ${who.value}. Если выключить, они перейдут на запасные модели.`
     : `Раньше им пользовались роли: ${who.value}. Пока он выключен, они обходятся запасными моделями.`
 })
-const liveNote = computed(() => (on.value && e.liveMode.value && e.liveUsers.value.length ? `Роль, влияющая на live (${e.liveUsers.value.map(roleLabel).join(', ')}), пользуется им: платформа в live, поэтому сервер не даст его выключить.` : ''))
+const liveNote = computed(() => (on.value && e.liveMode.value && e.liveUsers.value.length ? `Им пользуется роль, от которой зависит торговля на реальные деньги (${e.liveUsers.value.map(roleLabel).join(', ')}). Платформа сейчас торгует на реальные деньги, поэтому сервер не даст его выключить.` : ''))
 </script>
 
 <template>

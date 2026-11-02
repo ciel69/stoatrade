@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { dialogUp, unavailableReason, useActionStore } from '@/entities/action'
-import { CTL_STEP_LABEL, canBegin, dayArgs, dayWhat, launchFill, litNodes, regionProgress, stepRows, useControlStore, warnCount, type DayMode } from '@/entities/control'
+import { dialogUp, ownProgress, unavailableReason, useActionStore } from '@/entities/action'
+import { CTL_STEP_LABEL, STOP_WHAT, canBegin, dayArgs, dayWhat, launchFill, litNodes, regionProgress, stepRows, stopArgs, useControlStore, warnCount, type DayMode } from '@/entities/control'
 import { BRAIN_REGIONS, UiBrainIcon, UiMeter, UiSegment, type BrainIconState } from '@/shared/ui'
 import { dayLabel, failureText, humanize, modeName, plainify, useNow } from '@/shared/lib'
 
@@ -31,7 +31,7 @@ const pick = ref<DayMode | 'live'>(control.mode)
 const dialog = ref<HTMLElement | null>(null)
 const icon = ref<InstanceType<typeof UiBrainIcon> | null>(null)
 const confirmClose = ref(false)
-const confirmStop = ref(false)
+const stopCheck = computed(() => action.spec?.action === 'day.stop' && action.phase === 'checking')
 const details = ref(false)
 let opener: HTMLElement | null = null
 
@@ -41,8 +41,10 @@ const running = computed(() => platform.value?.state === 'running')
 const sentByUs = computed(() => action.spec?.action === 'day.start' && (action.phase === 'sending' || action.phase === 'waiting'))
 const startedByUs = ref(false)
 const launching = computed(() => control.phase === 'starting' || platform.value?.state === 'starting' || sentByUs.value)
-const closing = computed(() => control.phase === 'stopping' || platform.value?.state === 'closing')
-const finished = computed(() => startedByUs.value || (control.phase === 'done' && control.lastAction === 'day.start'))
+/** Остановка идёт через тот же общий движок: команда в пути (sending, waiting) уже считается завершением дня, не дожидаясь, пока тема ctl покажет «closing». */
+const stopSent = computed(() => action.spec?.action === 'day.stop' && (action.phase === 'sending' || action.phase === 'waiting'))
+const closing = computed(() => stopSent.value || platform.value?.state === 'closing')
+const finished = computed(() => startedByUs.value || control.phase === 'done')
 const view = computed<'launch' | 'running' | 'closing' | 'done' | 'pick'>(() => (launching.value ? 'launch' : closing.value ? 'closing' : finished.value ? 'done' : running.value ? 'running' : 'pick'))
 
 onMounted(() => {
@@ -154,7 +156,7 @@ function requestClose(): void {
   emit('close')
 }
 function onKey(ev: KeyboardEvent): void {
-  if (dialogUp(action.phase, action.riskyRun)) return        // поверх открыто общее окно «Принимаю риски»: Escape и Tab принадлежат ему
+  if (!ownProgress(action.spec?.action, action.phase) && dialogUp(action.phase, action.riskyRun)) return        // поверх открыто общее окно «Принимаю риски»: Escape и Tab принадлежат ему
   if (ev.key === 'Escape') {
     ev.stopPropagation()
     if (confirmClose.value) confirmClose.value = false
@@ -170,9 +172,10 @@ function onKey(ev: KeyboardEvent): void {
   if (ev.shiftKey && (act === first || act === dialog.value)) { ev.preventDefault(); last.focus() }
   else if (!ev.shiftKey && act === last) { ev.preventDefault(); first.focus() }
 }
+/** Остановка дня: безрисковое или рискованное определяет сервер (challenge); рискованное идёт в общий диалог «Принимаю риски», ход закрытия показывает это окно. */
 function stopNow(): void {
-  confirmStop.value = false
-  control.stopDay()
+  if (action.active) return
+  action.run({ action: 'day.stop', args: stopArgs(), title: 'Остановить торговый день', what: STOP_WHAT, timeoutMs: 120_000 })
 }
 </script>
 
@@ -252,18 +255,12 @@ function stopNow(): void {
       <!-- день идёт -->
       <template v-else-if="view === 'running'">
         <p v-if="dayId" class="fine">Торговый день: {{ dayLabel(dayId) }}</p>
-        <p v-if="control.error && control.phase === 'failed'" class="err" role="alert">{{ control.error }}</p>
+        <p v-if="stopCheck" class="note" role="status"><i class="spin" aria-hidden="true" />Проверяю условия остановки…</p>
         <div class="foot">
-          <template v-if="!confirmStop">
-            <button type="button" class="ghost" data-autofocus @click="requestClose">Закрыть</button>
-            <button type="button" class="danger" @click="confirmStop = true">Остановить день</button>
-          </template>
-          <template v-else>
-            <p class="note stop-note">Новые входы прекратятся, день завершится штатно, платформа останется запущенной.</p>
-            <button type="button" class="ghost" @click="confirmStop = false">Назад</button>
-            <button type="button" class="danger solid" @click="stopNow">Остановить</button>
-          </template>
+          <button type="button" class="ghost" data-autofocus @click="requestClose">Закрыть</button>
+          <button type="button" class="danger" :disabled="action.active" @click="stopNow">Остановить день</button>
         </div>
+        <p class="fine">{{ STOP_WHAT }}</p>
       </template>
 
       <!-- день завершается -->
@@ -315,7 +312,7 @@ function stopNow(): void {
 .foot { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
 .foot > .cta { flex: 1 1 auto; }
 .foot.confirm span { flex: 1 1 100%; font-size: 12px; }
-.stop-note { flex: 1 1 100%; font-size: 12px; color: var(--muted); }
+.danger:disabled { opacity: 0.4; cursor: not-allowed; }
 .cta { display: inline-flex; align-items: center; justify-content: center; min-height: 42px; padding: 0 20px; background: var(--accent); color: var(--bg); border: 0; border-radius: 12px; font: inherit; font-size: 14px; font-weight: 650; text-decoration: none; cursor: pointer; transition: filter var(--dur-fast) ease, opacity var(--dur-fast) ease, transform 120ms var(--ease-out); }
 .cta.small { min-height: 34px; padding: 0 14px; font-size: 13px; }
 .cta:active:not(:disabled) { transform: scale(0.98); }

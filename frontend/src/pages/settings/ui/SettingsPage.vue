@@ -14,8 +14,8 @@ import { UsagePanel } from '@/widgets/settings/usage-panel'
 import { UiSidePanel } from '@/shared/ui'
 
 /**
- * Страница «Система · Настройки»: организована по задачам, а не по терминам конфигурации. Блоки по порядку: «Кто думает» (роли мозга и их модели), «Что подключено» (провайдеры LLM, биржи),
- * «Сколько стоит» (расход LLM, история назначений); плюс «Режим платформы». Уровень риска правится не здесь, а на «Система · Управление» рядом с запуском дня. Правки (модели ролей, провайдеры, биржи, режим) доступны при auth.dash2_full, иначе чтение.
+ * Страница «Система · Настройки»: организована по задачам, а не по терминам конфигурации. Блоки по порядку: «Кто думает» (роли мозга и их модели), «Что подключено» (провайдеры моделей, биржи),
+ * «Сколько стоит» (расход мозга, история смен моделей), «Режим платформы»; у каждого блока заголовок и одна фраза-ответ, редкое (лимиты, параметры, цены) в боковых панелях или свёрнуто. Уровень риска правится не здесь, а на «Система · Управление» рядом с запуском дня. Правки (модели ролей, провайдеры, биржи, режим) доступны при auth.dash2_full, иначе чтение.
  * Одна боковая панель поверх страницы; что в ней, задаёт адрес и ровно один вид параметров: ?role=, ?provider=, ?exchange=, ?panel=swaps или ?usage=ID&days=&by= (строка расхода с периодом и разрезом). Повторный клик закрывает.
  */
 const route = useRoute()
@@ -49,9 +49,9 @@ function close(): void {
 <template>
   <main class="page">
     <div class="w-roles"><RolesBoard :selected="role" @select="pickRole" /></div>
-    <div class="w-trade"><ModeBoard /></div>
     <div class="w-conn"><ConnectBoard :provider="provider" :exchange="exchange" @provider="pickProvider" @exchange="pickExchange" /></div>
     <div class="w-cost"><UsageBoard :swaps-open="swaps" :selected="usage" @swaps="pickSwaps" @select="pickUsage" @close="close" /></div>
+    <div class="w-trade"><ModeBoard /></div>
     <UiSidePanel :open="open" :label="label" @close="close">
       <RolePanel v-if="role" :key="'r' + role" :role="role" @close="close" />
       <ConnectPanel v-else-if="provider" :key="'p' + provider" kind="provider" :id="provider" @close="close" />
@@ -63,14 +63,14 @@ function close(): void {
 </template>
 
 <style scoped>
-.page { gap: var(--space-6); }
+.page { gap: calc(var(--space-6) + var(--space-2)); }
 .w-roles, .w-conn, .w-trade, .w-cost { min-width: 0; }
 /* от 1500 px две колонки: «Кто думает» слева на всю высоту, справа «Режим платформы», «Что подключено» и «Сколько стоит» друг под другом */
 @media (min-width: 1500px) {
-  .page { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); column-gap: var(--space-6); row-gap: var(--space-6); align-items: start; }
+  .page { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); column-gap: var(--space-6); row-gap: calc(var(--space-6) + var(--space-2)); align-items: start; }
   .w-roles { grid-column: 1; grid-row: 1 / span 3; }
-  .w-trade { grid-column: 2; grid-row: 1; }
-  .w-conn { grid-column: 2; grid-row: 2; }
-  .w-cost { grid-column: 2; grid-row: 3; }
+  .w-conn { grid-column: 2; grid-row: 1; }
+  .w-cost { grid-column: 2; grid-row: 2; }
+  .w-trade { grid-column: 2; grid-row: 3; }
 }
 </style>

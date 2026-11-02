@@ -59,7 +59,7 @@ export function mockStatus(kind: StatusMockKind, now: number): StatusInput {
     degraded: [], calendar: { next: [{ id: 'cpi', type: 'CPI', impact: 3, verified: true, at: now + 3 * 3600 }], blackout: null }, reader: { enabled: true, status: 'ok', stale: false },
   }
   const ctl: CtlSnapshot = {
-    alive: true, configured: true, platform: { state: 'running', mode: 'paper', session: 'day', health: 'green', day_id: 'D-mock', trading: true, observe: false }, step: null, kill: null,
+    alive: true, configured: true, platform: { state: 'running', mode: 'paper', session: 'day', health: 'green', day_id: 'D-20261102-1', trading: true, observe: false }, step: null, kill: null,
     risk: { level: 3, name: 'Базовый' }, busy: false, banner: null, day: null,
     checks: [
       { id: 'H1', name: 'KILL чист', sev: 'red', ok: true, msg: 'state/KILL нет' },

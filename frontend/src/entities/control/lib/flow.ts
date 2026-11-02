@@ -1,4 +1,4 @@
-import { humanize, plainify, stepLabel } from '@/shared/lib'
+import { stepLabel } from '@/shared/lib'
 import type { ChallengeData, CtlSnapshot, DayStepRow } from '../model/types'
 
 /** Шаги запуска дня в ctl (lifecycle): S1..S9. Имена шагов служебные, человеку показываются только подписи из общего словаря. */
@@ -87,26 +87,6 @@ export function litNodes(progress: ReadonlyArray<{ done: number }>, regions: Rea
   return out
 }
 
-/** Что владелец должен принять перед стартом: мягкие предупреждения ctl (warnings) и жёлтые предстартовые проверки (pre_amber). */
-export function acceptList(ch: ChallengeData | null | undefined): Array<{ id: string; msg: string; kind: 'warning' | 'amber' }> {
-  const out: Array<{ id: string; msg: string; kind: 'warning' | 'amber' }> = []
-  for (const w of ch?.warnings ?? []) {
-    const h = humanize({ kind: 'warning', id: w.id, code: w.code, msg: w.msg })
-    out.push({ id: w.id, msg: /не умеем объяснить/.test(h.title) ? (plainify(w.msg) ?? h.title) : [h.title, h.what].filter(Boolean).join('. '), kind: 'warning' })
-  }
-  ;(ch?.pre_amber ?? []).forEach((a, i) => {
-    const h = humanize({ kind: 'gate', id: a.id ?? '', name: a.name, ok: false, msg: a.msg, sev: 'amber' })
-    out.push({ id: a.id ?? `amber-${i}`, msg: /не умеем объяснить/.test(h.title) ? (plainify([a.name, a.msg].filter(Boolean).join(': ')) ?? 'Есть замечание к запуску') : h.title, kind: 'amber' })
-  })
-  return out
-}
-
-/** Можно ли нажимать «Начать»: условия не блокируют, всё принято. */
-export function canStart(ch: ChallengeData | null | undefined, accepted: ReadonlySet<string>): boolean {
-  if (!ch || ch.blocked || ch.danger) return false
-  return acceptList(ch).every((a) => accepted.has(a.id))
-}
-
 /** Можно ли начинать: условия не блокируют и нет необратимой опасности. Предупреждения принимаются в общем окне «Принимаю риски», а не здесь. */
 export function canBegin(ch: ChallengeData | null | undefined): boolean {
   return !!ch && !ch.blocked && !ch.danger
@@ -119,8 +99,15 @@ export function dayArgs(mode: string): { mode: string; session: string } {
 
 /** Сколько предупреждений и жёлтых проверок увидит владелец в окне подтверждения (0: окна не будет, день стартует сразу). */
 export function warnCount(ch: ChallengeData | null | undefined): number {
-  return acceptList(ch).length
+  return (ch?.warnings?.length ?? 0) + (ch?.pre_amber?.length ?? 0)
 }
+
+/** Аргументы остановки дня для общего движка действий: мягкая остановка (новые входы прекращаются, день завершается штатно, платформа остаётся запущенной). */
+export function stopArgs(): { mode: 'soft' } {
+  return { mode: 'soft' }
+}
+
+export const STOP_WHAT = 'Новые входы прекратятся, день завершится штатно, платформа останется запущенной.'
 
 /** Что произойдёт при запуске, по режиму: одна фраза для окна подтверждения. */
 export function dayWhat(mode: string): string {
@@ -130,16 +117,6 @@ export function dayWhat(mode: string): string {
     observe: 'Начнётся торговый день наблюдения: платформа смотрит рынок, сделок не открывает.',
   }
   return m[mode] ?? 'Начнётся торговый день.'
-}
-
-/** Аргументы команды старта: принятые предупреждения и признак принятия жёлтых проверок (как у старого дашборда). */
-export function startArgs(mode: string, ch: ChallengeData | null | undefined): { mode: string; session: string; accepted: string[]; allow_amber: boolean } {
-  return {
-    mode,
-    session: 'day',
-    accepted: (ch?.warnings ?? []).map((w) => w.id),
-    allow_amber: (ch?.pre_amber ?? []).length > 0,
-  }
 }
 
 /** Состояние кнопки старта по теме ctl и hello. */

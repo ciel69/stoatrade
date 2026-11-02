@@ -39,6 +39,14 @@ export function dialogUp(phase: string, riskyRun: boolean | null): boolean {
   return riskyRun === true && phase !== 'idle'
 }
 
+/** Действия, ход которых показывает окно дня с мозгом (запуск и остановка): общее окно «Принимаю риски» поверх него прогресс не закрывает. */
+const OWN_PROGRESS: ReadonlySet<string> = new Set(['day.start', 'day.stop'])
+
+/** Идёт (или только что кончился) выполнение действия, ход которого показывает своё окно: общее окно в это время скрыто, подтверждение и отказ остаются за ним. */
+export function ownProgress(action: string | undefined, phase: string): boolean {
+  return !!action && OWN_PROGRESS.has(action) && (phase === 'sending' || phase === 'waiting' || phase === 'done')
+}
+
 const warnings = (ch: Challenge | null | undefined) => ch?.warnings ?? []
 const preAmber = (ch: Challenge | null | undefined) => ch?.pre_amber ?? []
 
@@ -58,11 +66,23 @@ export function plainLine(id: string | undefined, name: string | undefined, msg:
   return { title: h.title, todo: ok ? '' : h.todo }
 }
 
-/** Последствия по-человечески, важное сверху: опасность, предупреждения, жёлтые проверки. */
-export function risksOf(ch: Challenge | null | undefined): RiskItem[] {
+/**
+ * Действие нельзя вернуть одним нажатием: аварийная остановка (снимается только в терминале платформы), закрытие позиций по рынку (flatten),
+ * перевод биржи на живые деньги. Уровень риска, режим платформы, модели мозга, провайдеры и запуск дня обратимы: для них строки «нельзя откатить» нет,
+ * хотя сервер и ставит им флаг danger ради паузы и подтверждения.
+ */
+export function isIrreversible(action: string | undefined, args: Record<string, unknown> | undefined): boolean {
+  if (action === 'kill.set') return true
+  if (args?.flatten === true) return true
+  if (action === 'exchange.set' && args?.mode === 'live') return true
+  return false
+}
+
+/** Последствия по-человечески, важное сверху: опасность, предупреждения, жёлтые проверки. noUndo: показать строку «нельзя откатить» (только для isIrreversible). */
+export function risksOf(ch: Challenge | null | undefined, noUndo = false): RiskItem[] {
   if (!ch) return []
   const out: RiskItem[] = []
-  if (ch.danger) out.push({ id: 'danger', level: 'danger', text: 'Это действие нельзя откатить одним нажатием: прочтите последствия ниже.' })
+  if (ch.danger && noUndo) out.push({ id: 'danger', level: 'danger', text: 'Это действие нельзя откатить одним нажатием: прочтите последствия ниже.' })
   for (const w of warnings(ch)) {
     const known = /^W\d$/.test(w.id) ? humanize({ kind: 'warning', id: w.id, msg: w.msg }) : null
     const own = known ? null : plainify(w.msg)
@@ -72,7 +92,7 @@ export function risksOf(ch: Challenge | null | undefined): RiskItem[] {
     const l = plainLine(a.id, a.name, a.msg, false, 'amber')
     out.push({ id: a.id ?? `amber-${i}`, level: 'amber', text: l.title })
   })
-  if (!out.length && (ch.phrases?.length ?? 0) > 0) out.push({ id: 'phrases', level: 'warn', text: 'Платформа просит явно подтвердить это действие.' })
+  if (!out.length && ((ch.phrases?.length ?? 0) > 0 || ch.danger)) out.push({ id: 'phrases', level: 'warn', text: 'Платформа просит явно подтвердить это действие.' })
   return out
 }
 

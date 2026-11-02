@@ -10,8 +10,8 @@ const role = (o: Partial<RoleRow> = {}): RoleRow => ({
 const snap = (roles: RoleRow[], o: Partial<RolesSnapshot> = {}): RolesSnapshot => ({ mode: 'paper', rev: 1, live_team: 'A', exchange: null, providers: null, usage_today: null, errors: [], roles, ...o })
 
 describe('роли мозга', () => {
-  it('названия ролей по-русски, неизвестная как есть', () => {
-    expect([roleLabel('entry_scout'), roleLabel('news_reader'), roleLabel('new_role')]).toEqual(['Поиск входа', 'Читатель новостей', 'new_role'])
+  it('названия ролей по-русски, неизвестная без служебного кода', () => {
+    expect([roleLabel('entry_scout'), roleLabel('news_reader'), roleLabel('new_role')]).toEqual(['Поиск входа', 'Читатель новостей', 'Другая роль мозга'])
   })
   it('место работы модели', () => {
     expect([placeOf(model()), placeOf(model({ provider: 'deepseek' })), placeOf(null)]).toEqual(['локально', 'облако', '–'])
@@ -31,7 +31,7 @@ describe('роли мозга', () => {
   it('сводка: одна модель на все роли или перечень; число запасных', () => {
     const one = summary(snap([role(), role({ role: 'reviewer', fallback: [model()] })]))
     expect(one.line).toBe('Все 2 роли думают одной моделью: gpt-oss')
-    expect(one.detail).toBe('Запасная модель есть у 1 из 2 ролей.')
+    expect(one.detail).toBe('Запасная модель, на которую роль переходит при сбое, есть у 1 из 2 ролей.')
     expect(summary(snap([role(), role({ primary: model({ model_name: 'other' }) })])).line).toContain('моделей: 2')
     expect(summary(snap([])).line).toBe('Роли мозга не загружены')
   })
@@ -39,6 +39,8 @@ describe('роли мозга', () => {
     const g = groups(snap([role(), role({ role: 'reviewer', scope: 'shared', team: null })]))
     expect(g.map((x) => x.id)).toEqual(['team', 'shared'])
     expect(groups(snap([role()])).map((x) => x.id)).toEqual(['team'])
+    expect(g.map((x) => x.title).join(' ')).not.toMatch(/[A-Za-z]/)        // без «Команда A» и других служебных букв
+    expect(issuesOf(role({ live_risk: true }), 'live').map((i) => i.text).join(' ')).not.toMatch(/live/i)
   })
   it('проценты', () => {
     expect([pct(0.0763), pct(null)]).toEqual(['8%', '–'])

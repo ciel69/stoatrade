@@ -91,7 +91,7 @@ onBeforeUnmount(() => { wipe(); clearTimeout(msgTimer) })
     <p v-if="!needs" class="pe-meta">{{ p?.local ? 'Ключ не нужен: провайдер работает локально.' : 'Этому провайдеру ключ не нужен.' }}</p>
     <template v-else>
       <p v-if="perms" class="pe-meta warn">{{ perms }}</p>
-      <p v-if="!e.canKey.value" class="pe-locked">Ввод ключа выключен: включите расширенное управление (auth.dash2_full в config/control.json) или добавьте ключ в терминале.</p>
+      <p v-if="!e.canKey.value" class="pe-locked">Ввести ключ здесь пока нельзя: владельцу нужно включить расширенное управление, либо добавить ключ в терминале.</p>
 
       <div v-if="e.canKey.value && present && !field" class="pe-acts left">
         <button ref="addBtn" type="button" class="pe-btn" :disabled="e.busy.value || sending" @click="openField">Заменить ключ</button>

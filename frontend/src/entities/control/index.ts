@@ -1,5 +1,5 @@
 export { useControlStore } from './model/store'
-export type { ChallengeData, CtlCheck, CtlFinal, CtlHello, CtlResult, CtlSnapshot, DayMode, DayStepRow, FlowPhase, PlatformState } from './model/types'
-export { CTL_STEP_LABEL, REGION_LABELS, START_STEPS, acceptList, buttonKind, canBegin, canStart, dayArgs, dayWhat, launchFill, litNodes, regionProgress, startArgs, stepRows, warnCount } from './lib/flow'
+export type { ChallengeData, CtlCheck, CtlHello, CtlResult, CtlSnapshot, DayMode, DayStepRow, FlowPhase, PlatformState } from './model/types'
+export { CTL_STEP_LABEL, REGION_LABELS, START_STEPS, STOP_WHAT, buttonKind, canBegin, dayArgs, dayWhat, launchFill, litNodes, regionProgress, stepRows, stopArgs, warnCount } from './lib/flow'
 export type { ButtonKind, StepRow, StepState } from './lib/flow'
 export { MODE_ORDER, modeArgs, modeBlock, modeEffect, modeLine, modeReflects, modeTitle, saferModes } from './lib/platform-mode'

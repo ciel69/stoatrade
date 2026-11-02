@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch, watchEffect } from 'vue'
-import { acceptLabel, blockReasons, failedGates, isExpired, passedGates, plainLine, secondsLeft, useActionStore, type ActionMock, type ActionPhase, type Challenge, type RiskItem } from '@/entities/action'
+import { acceptLabel, blockReasons, failedGates, isExpired, ownProgress, passedGates, plainLine, secondsLeft, useActionStore, type ActionMock, type ActionPhase, type Challenge, type RiskItem } from '@/entities/action'
 
 /** Исходные коды и тексты непройденных условий: только для «Подробностей для специалиста». */
 const failedRaw = (ch: Challenge | null): string => failedGates(ch).map((g) => [g.id, g.name, g.msg].filter(Boolean).join(' · ')).join('\n')
@@ -26,19 +26,19 @@ watch(() => action.phase, (p) => {
   if (p === 'checking') checkTimer = setTimeout(() => { checkShown.value = true }, CHECK_DELAY_MS)
 }, { immediate: true })
 
-/** Запуск дня показывает себя сам: окно запуска с мозгом ведёт по этапам, общее окно поверх него закрывало бы анимацию. Подтверждение и отказ остаются за общим окном. */
-const ownProgress = computed(() => action.spec?.action === 'day.start' && (action.phase === 'sending' || action.phase === 'waiting' || action.phase === 'done'))
+/** Запуск и остановка дня показывают себя сами: окно дня с мозгом ведёт по этапам, общее окно поверх него закрывало бы анимацию. Подтверждение и отказ остаются за общим окном. */
+const hasOwnProgress = computed(() => ownProgress(action.spec?.action, action.phase))
 
 const visible = computed(() => {
   const p = action.phase
   if (p === 'confirm' || p === 'blocked') return true
-  if (ownProgress.value) return false
+  if (hasOwnProgress.value) return false
   if (p === 'checking') return action.riskyRun === true || checkShown.value
   if (p === 'sending' || p === 'waiting' || p === 'done' || p === 'failed') return action.riskyRun === true
   return false
 })
 /** Безрисковая команда в пути: окна нет, но выполнение не должно быть невидимым. */
-const busy = computed(() => !visible.value && !ownProgress.value && (action.phase === 'sending' || action.phase === 'waiting'))
+const busy = computed(() => !visible.value && !hasOwnProgress.value && (action.phase === 'sending' || action.phase === 'waiting'))
 
 /** Снимок для показа: при закрытии окно успевает плавно исчезнуть с прежним содержимым, а не пустым. */
 interface View { phase: ActionPhase; title: string; what: string; risks: RiskItem[]; passed: Array<{ id: string; text: string }>; reasons: string[]; text: string; details: string | null }

@@ -5,6 +5,7 @@ import { GATE_IDS, PRE_IDS, WARNING_IDS, h7Parts } from './human-gates'
 import { NODE_IDS } from './human-nodes'
 import { dayLabel } from './human-text'
 import type { Human, HumanCtx } from './human-types'
+import { ROLE_IDS, roleAbout, roleTitle } from './human-words'
 
 /** Служебные следы, которых не должно быть в основном тексте: коды проверок и шагов, коды ответов, snake_case, имена файлов. */
 const CODE_LIKE = [/\b[HSWP]\d{1,2}\b/, /E_[A-Z_]+/, /\b[a-z]+_[a-z_]+\b/, /\.json/, /\.py\b/, /\bpid\b/i]
@@ -133,5 +134,23 @@ describe('режим определяет серьёзность проверо�
     expect(humanize({ kind: 'gate', id: 'H1', ok: false, msg: 'KILL активен' }, { mode: 'paper' }).tone).toBe('bad')
     expect(humanize({ kind: 'gate', id: 'H3', ok: false, msg: 'исполнитель не отвечает (heartbeat нет)' }, { mode: 'paper' }).tone).toBe('bad')
     expect(humanize({ kind: 'gate', id: 'H3', ok: false, msg: 'приватный WS не подключён' }, { mode: 'paper' }).tone).toBe('info')
+  })
+})
+
+describe('роли мозга словами', () => {
+  it('у каждой известной роли есть название и описание без латиницы и служебных слов', () => {
+    expect(ROLE_IDS.length).toBe(6)
+    for (const r of ROLE_IDS) {
+      expect(roleTitle(r)).not.toMatch(/[A-Za-z_]/)
+      expect(roleAbout(r)).not.toMatch(/[A-Za-z_]/)
+      expect(roleAbout(r)).not.toMatch(/карантин/i)
+      expect(roleAbout(r).length).toBeGreaterThan(30)
+    }
+  })
+  it('незнакомая роль и пустое значение не показывают код', () => {
+    expect(roleTitle('some_new_role')).toBe('Другая роль мозга')
+    expect(roleAbout('some_new_role')).not.toContain('some_new_role')
+    expect(roleTitle(null)).toBe('Мозг')
+    expect(roleAbout(undefined)).toBe('')
   })
 })

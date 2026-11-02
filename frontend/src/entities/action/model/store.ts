@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { useLive, type LiveMessage } from '@/shared/api'
 import { failureText, plainify } from '@/shared/lib'
-import { FINAL_TIMEOUT_MS, TIMEOUT_TEXT, buildCommand, timeoutText, isExpired, isRisky, risksOf, secondsLeft, unavailableReason } from '../lib/flow'
+import { FINAL_TIMEOUT_MS, TIMEOUT_TEXT, buildCommand, timeoutText, isExpired, isIrreversible, isRisky, risksOf, secondsLeft, unavailableReason } from '../lib/flow'
 import { createKeySender } from './key'
 import type { KeyOutcome } from '../lib/key'
 import type { ActionFinal, ActionHello, ActionPhase, ActionResult, ActionSpec, ActionToast, Challenge } from './types'
@@ -42,7 +42,7 @@ export const useActionStore = defineStore('action', () => {
   let transport: Transport = (payload) => useLive().socket.send(payload)
 
   const active = computed(() => ACTIVE.has(phase.value))
-  const risks = computed(() => risksOf(challenge.value))
+  const risks = computed(() => risksOf(challenge.value, isIrreversible(spec.value?.action, spec.value?.args)))
   /** Запись ключа провайдера: напрямую, без challenge. Отправитель не хранит значение, в состоянии стора его нет. */
   const keys = createKeySender({ csrf: () => hello.value.csrf, send: (p) => transport(p) })
   const sendKey = (provider: string, value: string): Promise<KeyOutcome> => keys.send(provider, value)
@@ -263,6 +263,9 @@ export const useActionStore = defineStore('action', () => {
       return calm
     }
     if (action === 'mode.set') return calm
+    if (action === 'day.stop') {
+      return { ...calm, min_delay: 0, warnings: [{ id: 'W_STOP_OPEN', code: 'W_STOP_OPEN', msg: 'Открытые позиции останутся под стопами на бирже, пока день завершается.' }] }
+    }
     if (action === 'day.start') {
       return {
         ...calm, phrases: [], min_delay: 2, expires_in: 90,

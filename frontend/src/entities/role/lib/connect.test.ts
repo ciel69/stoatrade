@@ -40,20 +40,20 @@ describe('подключения', () => {
     expect(providerIssues(prov({ cred: { needed: true, present: true, perms_ok: null, env: null } }), [])).toEqual([])
   })
   it('статус биржи, ключи, вывод', () => {
-    expect([exchangeStatus(ex()), exchangeStatus(ex({ active: false })), exchangeStatus(ex({ implemented: false, active: false }))]).toEqual(['активная', 'разрешена', 'заготовка, не реализована'])
+    expect([exchangeStatus(ex()), exchangeStatus(ex({ active: false })), exchangeStatus(ex({ implemented: false, active: false }))]).toEqual(['активная', 'разрешена', 'пока не поддерживается'])
     expect(credsText(['read', 'trade'])).toBe('чтение, торговля')
     expect(credsText([])).toBe('ключей нет')
     expect(connectSummary([prov(), prov({ id: 'local', local: true }), prov({ id: 'a', enabled: false })], [ex()])).toBe('Включено провайдеров 2 из 3 (1 в облаке, 1 локально); торгует Bybit, режим: бумага.')
   })
   it('склонения', () => {
     expect([modelsText(1), modelsText(3), modelsText(11)]).toEqual(['1 модель', '3 модели', '11 моделей'])
-    expect([swapsLine(0, 3), swapsLine(1, 3), swapsLine(5, 12)]).toEqual(['смен не было', '1 смена, ревизия 3', '5 смен, ревизия 12'])
+    expect([swapsLine(0), swapsLine(1), swapsLine(5), swapsLine(22)]).toEqual(['смен не было', '1 смена', '5 смен', '22 смены'])
   })
   it('журнал смен словами', () => {
     const s = { seq: 1, ts: 0, rev: 2, prev_rev: 1, tier: null, by: 'ctl', target: ['entry_scout'], from: 'A', to: 'B' }
     expect(swapText({ ...s, kind: 'use' })).toBe('роль Поиск входа: модель A → B')
     expect(swapText({ ...s, kind: 'reload' })).toBe('перечитаны настройки')
-    expect(swapText({ ...s, kind: 'weird', target: [] })).toBe('weird: A → B')
-    expect([swapBy('owner-cli'), swapBy('ctl'), swapBy('x'), swapBy(null)]).toEqual(['владелец, терминал', 'дашборд', 'x', 'неизвестно'])
+    expect(swapText({ ...s, kind: 'weird', target: [] })).toBe('другое изменение: A → B')
+    expect([swapBy('owner-cli'), swapBy('ctl'), swapBy('x'), swapBy(null)]).toEqual(['владелец, в терминале', 'через дашборд', 'другим способом', 'неизвестно'])
   })
 })

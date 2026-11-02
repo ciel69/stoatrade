@@ -80,7 +80,7 @@ export function providerIssues(p: ProviderRow, roles: RoleRow[]): ConnectIssue[]
 
 /** Статус биржи словами: активная (на ней торгует платформа), разрешена, заготовка (адаптера нет), не разрешена. */
 export function exchangeStatus(e: ExchangeRow): string {
-  if (!e.implemented) return 'заготовка, не реализована'
+  if (!e.implemented) return 'пока не поддерживается'
   if (e.active) return 'активная'
   return e.allowed ? 'разрешена' : 'не разрешена'
 }
@@ -107,8 +107,8 @@ export function connectSummary(providers: ProviderRow[], exchanges: ExchangeRow[
   return `${prov}; ${ex}.`
 }
 
-const BY_WORDS: Record<string, string> = { 'owner-cli': 'владелец, терминал', ctl: 'дашборд' }
-export const swapBy = (by: string | null | undefined): string => (by ? (BY_WORDS[by] ?? by) : 'неизвестно')
+const BY_WORDS: Record<string, string> = { 'owner-cli': 'владелец, в терминале', ctl: 'через дашборд' }
+export const swapBy = (by: string | null | undefined): string => (by ? (BY_WORDS[by] ?? 'другим способом') : 'неизвестно')
 
 /** Что сделано словами: смена модели роли, перечитывание настроек; прочее как есть. */
 export function swapText(s: SwapRow): string {
@@ -119,14 +119,14 @@ export function swapText(s: SwapRow): string {
   }
   if (s.kind === 'reload') return 'перечитаны настройки'
   if (s.kind === 'rollback') return 'откат назначений'
-  const tail = [(s.target ?? []).join(', '), s.from || s.to ? `${s.from ?? '–'} → ${s.to ?? '–'}` : ''].filter(Boolean).join(': ')
-  return tail ? `${s.kind}: ${tail}` : s.kind
+  const tail = [(s.target ?? []).map(roleLabel).join(', '), s.from || s.to ? `${s.from ?? '–'} → ${s.to ?? '–'}` : ''].filter(Boolean).join(': ')
+  return tail ? `другое изменение: ${tail}` : 'другое изменение'
 }
 
-/** «5 смен, ревизия 12»; смен нет: «смен не было». */
-export function swapsLine(count: number, rev: number | null | undefined): string {
+/** «5 смен»; смен нет: «смен не было». Номер ревизии остаётся только в подробностях панели. */
+export function swapsLine(count: number): string {
   if (!count) return 'смен не было'
-  return `${count} ${plural(count, 'смена', 'смены', 'смен')}${rev != null ? `, ревизия ${rev}` : ''}`
+  return `${count} ${plural(count, 'смена', 'смены', 'смен')}`
 }
 
 /** Дата и время по-русски: «31 окт., 14:05». ts в секундах. */

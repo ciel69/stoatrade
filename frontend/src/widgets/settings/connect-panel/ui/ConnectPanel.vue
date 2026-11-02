@@ -57,7 +57,7 @@ const verified = (v: boolean | string | null | undefined) => (v === true ? 'пр
         <ProviderLimits :edit="edit" />
       </template>
       <template v-else>
-        <p class="locked">Изменение провайдеров выключено: включите расширенное управление (auth.dash2_full в config/control.json).</p>
+        <p class="locked">Менять провайдеров из дашборда пока нельзя: владельцу нужно включить расширенное управление.</p>
         <section class="sec">
           <h4>Ключ и лимиты</h4>
           <dl class="kv">
@@ -69,12 +69,12 @@ const verified = (v: boolean | string | null | undefined) => (v === true ? 'пр
       </template>
 
       <section class="sec">
-        <h4>Модели ({{ p.models.length }}), цены за 1 млн токенов</h4>
+        <h4>Модели ({{ p.models.length }}), цена за 1 млн токенов</h4>
         <ul v-if="p.models.length" class="models">
           <li v-for="m in p.models" :key="m.id">
             <b>{{ m.name }}</b>
             <p class="meta">{{ priceText(m.price) }}</p>
-            <p class="meta">контекст {{ ctxText(m.ctx) }}{{ m.tools === true ? ' · умеет вызывать инструменты' : m.tools === false ? ' · без инструментов' : '' }}</p>
+            <p class="meta">контекст {{ ctxText(m.ctx) }}{{ m.tools === true ? ' · умеет пользоваться внешними функциями' : m.tools === false ? ' · без внешних функций' : '' }}</p>
             <p v-if="m.tags.length" class="tags"><UiChip v-for="t in m.tags" :key="t">{{ t }}</UiChip></p>
           </li>
         </ul>
@@ -92,27 +92,27 @@ const verified = (v: boolean | string | null | undefined) => (v === true ? 'пр
         <p class="meta">{{ verified(p.verified) }}</p>
       </section>
 
-      <p class="tech">идентификатор {{ p.id }}{{ p.adapter ? ' · адаптер ' + p.adapter : '' }}{{ p.base_host ? ' · хост ' + p.base_host : '' }}{{ p.cred.env ? ' · переменная ключа ' + p.cred.env : '' }}{{ p.profiles.length ? ' · профили ' + p.profiles.join(', ') : '' }}</p>
+      <details class="tech"><summary>Для специалиста</summary><p>идентификатор {{ p.id }}{{ p.adapter ? ' · адаптер ' + p.adapter : '' }}{{ p.base_host ? ' · хост ' + p.base_host : '' }}{{ p.cred.env ? ' · переменная ключа ' + p.cred.env : '' }}{{ p.profiles.length ? ' · профили ' + p.profiles.join(', ') : '' }}</p></details>
     </template>
 
     <template v-else-if="e">
-      <p class="what">{{ !e.implemented ? 'Заготовка: адаптер биржи ещё не написан, торговать на ней нельзя.' : e.active ? 'На этой бирже сейчас торгует платформа.' : e.allowed ? 'Биржа разрешена владельцем, но сейчас не активна.' : 'Биржа не разрешена владельцем.' }}</p>
+      <p class="what">{{ !e.implemented ? 'Эта биржа пока не поддерживается: торговать на ней нельзя.' : e.active ? 'На этой бирже сейчас торгует платформа.' : e.allowed ? 'Биржа разрешена владельцем, но сейчас не активна.' : 'Биржа не разрешена владельцем.' }}</p>
       <section class="sec">
-        <h4>Состояние</h4>
+        <h4>Сейчас</h4>
         <dl class="kv">
           <div><dt>Режим</dt><dd><UiChip :tone="e.mode === 'live' ? 'bad' : 'neutral'">{{ modeText(e.mode) }}</UiChip></dd></div>
-          <div><dt>Исполнитель</dt><dd>{{ e.alive == null ? 'нет данных' : e.alive ? 'работает' : 'не запущен' }}</dd></div>
-          <div><dt>Настроенные ключи</dt><dd>{{ credsText(e.creds) }}</dd></div>
+          <div><dt>Исполнитель сделок</dt><dd>{{ e.alive == null ? 'нет данных' : e.alive ? 'работает' : 'не запущен' }}</dd></div>
+          <div><dt>Ключи доступа</dt><dd>{{ credsText(e.creds) }}</dd></div>
           <div><dt>Лимит открытых позиций</dt><dd>{{ e.max_open_positions ?? '–' }}</dd></div>
         </dl>
       </section>
       <ExchangeEdit v-if="xedit.canEdit.value && e.implemented" :edit="xedit" />
-      <p v-else-if="e.implemented" class="locked">Изменение бирж выключено: включите расширенное управление (auth.dash2_full в config/control.json).</p>
+      <p v-else-if="e.implemented" class="locked">Менять биржи из дашборда пока нельзя: владельцу нужно включить расширенное управление.</p>
       <section v-if="e.note" class="sec">
         <h4>Примечание</h4>
         <p class="meta">{{ e.note }}</p>
       </section>
-      <p class="tech">идентификатор {{ e.id }} · {{ e.enabled ? 'включена в настройках' : 'выключена в настройках' }}</p>
+      <details class="tech"><summary>Для специалиста</summary><p>идентификатор {{ e.id }} · {{ e.enabled ? 'включена в настройках' : 'выключена в настройках' }}</p></details>
     </template>
 
     <p v-else class="meta">{{ kind === 'provider' ? 'Провайдер не найден.' : 'Биржа не найдена.' }}</p>
@@ -138,5 +138,8 @@ const verified = (v: boolean | string | null | undefined) => (v === true ? 'пр
 dt { color: var(--muted); }
 dd { margin: 0; text-align: right; }
 dd.warn { color: var(--warn); }
-.tech { margin: 0; font-size: 11px; color: var(--muted); font-family: var(--mono, ui-monospace, monospace); overflow-wrap: anywhere; }
+.tech { font-size: 12px; color: var(--muted); }
+.tech summary { cursor: pointer; min-height: 32px; display: flex; align-items: center; }
+.tech summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+.tech p { margin: 4px 0 0; font-size: 11px; font-family: var(--mono, ui-monospace, monospace); overflow-wrap: anywhere; }
 </style>

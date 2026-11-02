@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { ROLE_INFO, roleLabel } from '@/entities/role'
+import { roleLabel } from '@/entities/role'
 import { panelSubtitle, pctText, toksShare, toksTip, usageKey, useUsageStore, withShares, type UsageBy, type UsagePeriod } from '@/entities/usage'
 import { UiDetail } from '@/shared/ui'
+import { roleAbout } from '@/shared/lib'
 
 /**
  * Боковая панель «Расход группы»: что стоит за строкой блока «Сколько стоит». Сверху крупно «всего токенов» и среднее на вызов, ниже сегментная полоса состава токенов
@@ -20,7 +21,7 @@ const groups = computed(() => withShares(reply.value?.ok ? reply.value.data?.gro
 const g = computed(() => groups.value.find((x) => x.id === props.id) ?? null)
 const t = computed(() => (g.value ? toksTip(g.value) : null))
 const name = computed(() => (props.by === 'role' ? roleLabel(props.id) : props.id))
-const what = computed(() => (props.by === 'role' ? ROLE_INFO[props.id]?.what ?? '' : ''))
+const what = computed(() => (props.by === 'role' ? roleAbout(props.id) : ''))
 const parts = computed(() => (t.value?.mix ?? []).filter((x) => x.value > 0))
 const aria = computed(() => `Состав токенов: ${(t.value?.mix ?? []).map((x) => `${x.label} ${x.text}, ${pctText(x.share)}`).join('; ')}`)
 const shares = computed(() => {

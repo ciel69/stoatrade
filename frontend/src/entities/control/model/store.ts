@@ -2,12 +2,15 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { useLive, type LiveMessage } from '@/shared/api'
 import { failureText } from '@/shared/lib'
-import { buttonKind, startArgs } from '../lib/flow'
-import type { ChallengeData, CtlFinal, CtlHello, CtlResult, CtlSnapshot, DayMode, FlowPhase } from './types'
+import { buttonKind, dayArgs } from '../lib/flow'
+import type { ChallengeData, CtlHello, CtlResult, CtlSnapshot, DayMode, FlowPhase } from './types'
+
+/** Пример для экранов отладки: id дня в формате платформы, чтобы подпись читалась как «2 ноября», а не «торговый день». */
+const MOCK_DAY = 'D-20261102-1'
 
 /**
- * Управление днём: тема `ctl` (состояние), hello.ctl (csrf соединения), команды по сокету. Только paper, testnet, observe: остальное сервер отклоняет (E_ELEVATE).
- * Ключей и токенов в браузере нет: команда уходит с CSRF соединения, подписывает и ставит её в очередь сервер.
+ * Состояние управления днём: тема `ctl`, hello.ctl (csrf соединения) и запрос условий запуска для выбранного режима (проверки окна запуска).
+ * Сами команды (запуск и остановка дня) идут через общий движок действий entities/action, здесь их нет. Только paper, testnet, observe: остальное сервер отклоняет (E_ELEVATE).
  */
 export const useControlStore = defineStore('control', () => {
   const ctl = ref<CtlSnapshot | null>(null)
@@ -18,11 +21,8 @@ export const useControlStore = defineStore('control', () => {
   const phase = ref<FlowPhase>('idle')
   const mode = ref<DayMode>('paper')
   const challenge = ref<ChallengeData | null>(null)
-  const accepted = ref<Set<string>>(new Set())
   const error = ref<string | null>(null)
-  const final = ref<CtlFinal | null>(null)
-  const pending = ref<string | null>(null)        // id нашего запроса, ответ на который ждём
-  const lastAction = ref<'day.start' | 'day.stop' | null>(null)        // последняя поставленная в очередь команда: от неё зависит текст итога
+  const pending = ref<string | null>(null)        // id нашего запроса условий, ответ на который ждём
   let seq = 0
   let started = false
 
@@ -36,7 +36,7 @@ export const useControlStore = defineStore('control', () => {
     // платформа уже запущена не нами (или после перезагрузки страницы): подстраиваем фазу под реальное состояние
     const st = ctl.value.platform.state
     if (st === 'starting' && phase.value !== 'starting') phase.value = 'starting'
-    if (st === 'running' && phase.value === 'starting' && !pending.value && final.value === null) phase.value = 'done'
+    else if (st !== 'starting' && phase.value === 'starting') phase.value = 'idle'        // запуск кончился (успехом или нет): само окно покажет по состоянию платформы
   }
 
   function applyHello(m: LiveMessage): void {
@@ -45,42 +45,19 @@ export const useControlStore = defineStore('control', () => {
     hello.value = d && typeof d.enabled === 'boolean' ? d : { enabled: false }
   }
 
+  /** Здесь только ответ на запрос условий запуска (challenge). Сами команды и их итоги ведёт общий движок entities/action. */
   function applyResult(m: LiveMessage): void {
     const r = m.data as CtlResult
     if (r.id !== pending.value) return
     pending.value = null
-    if (r.kind === 'challenge') {
-      challenge.value = r.data ?? null
-      accepted.value = new Set()
-      if (r.code === 'OK') phase.value = 'ready'
-      else if (r.code === 'E_GATE' || r.code === 'E_STATE') {
-        phase.value = 'blocked'
-        error.value = failureText(r.code, r.msg)
-      } else {
-        phase.value = 'failed'
-        error.value = failureText(r.code, r.msg)
-      }
-      return
-    }
-    if (r.ok) {
-      lastAction.value = r.action === 'day.stop' ? 'day.stop' : 'day.start'
-      phase.value = r.action === 'day.stop' ? 'stopping' : 'starting'
-      error.value = null
-      return
-    }
-    phase.value = 'failed'
-    error.value = failureText(r.code, r.msg)
-  }
-
-  function applyFinal(m: LiveMessage): void {
-    const f = m.data as CtlFinal
-    final.value = f
-    if (f.code === 'OK' && f.status === 'done') {
-      phase.value = 'done'
-      error.value = null
+    challenge.value = r.data ?? null
+    if (r.code === 'OK') phase.value = 'ready'
+    else if (r.code === 'E_GATE' || r.code === 'E_STATE') {
+      phase.value = 'blocked'
+      error.value = failureText(r.code, r.msg)
     } else {
       phase.value = 'failed'
-      error.value = failureText(f.code, f.msg)
+      error.value = failureText(r.code, r.msg)
     }
   }
 
@@ -91,17 +68,16 @@ export const useControlStore = defineStore('control', () => {
     socket.subscribe('hello', applyHello)
     socket.subscribe('ctl', applyCtl)
     socket.subscribe('ctl_result', applyResult)
-    socket.subscribe('ctl_final', applyFinal)
   }
 
-  function send(kind: 'challenge' | 'command', action: string, args: Record<string, unknown>): boolean {
+  function sendChallenge(action: string, args: Record<string, unknown>): boolean {
     if (!hello.value.enabled || !hello.value.csrf) {
       error.value = 'Управление из этого дашборда недоступно.'
       phase.value = 'failed'
       return false
     }
     const id = `c${++seq}`
-    const ok = useLive().socket.send({ op: 'ctl', id, csrf: hello.value.csrf, kind, action, args })
+    const ok = useLive().socket.send({ op: 'ctl', id, csrf: hello.value.csrf, kind: 'challenge', action, args })
     if (!ok) {
       error.value = failureText('E_LINK')
       phase.value = 'failed'
@@ -116,37 +92,15 @@ export const useControlStore = defineStore('control', () => {
     if (mocked) return
     mode.value = next
     challenge.value = null
-    accepted.value = new Set()
     error.value = null
-    final.value = null
     phase.value = 'checking'
-    send('challenge', 'day.start', { mode: next, session: 'day' })
-  }
-
-  function toggleAccept(id: string): void {
-    const next = new Set(accepted.value)
-    if (!next.delete(id)) next.add(id)
-    accepted.value = next
-  }
-
-  function begin(): void {
-    if (phase.value !== 'ready') return
-    final.value = null
-    send('command', 'day.start', startArgs(mode.value, challenge.value))
-  }
-
-  function stopDay(): void {
-    error.value = null
-    final.value = null
-    send('command', 'day.stop', { mode: 'soft' })
+    sendChallenge('day.start', dayArgs(next))
   }
 
   function reset(): void {
     phase.value = 'idle'
     challenge.value = null
-    accepted.value = new Set()
     error.value = null
-    final.value = null
     pending.value = null
   }
 
@@ -156,9 +110,9 @@ export const useControlStore = defineStore('control', () => {
     hello.value = { enabled: true, csrf: 'mock' }
     const launch = kind === 'launch'
     ctl.value = {
-      alive: true, configured: true, platform: { state: launch ? 'starting' : kind === 'done' ? 'running' : 'stopped', mode: 'paper', session: 'day', health: 'green', day_id: launch ? null : 'D-mock', trading: kind === 'done', observe: false },
+      alive: true, configured: true, platform: { state: launch ? 'starting' : kind === 'done' ? 'running' : 'stopped', mode: 'paper', session: 'day', health: 'green', day_id: launch ? null : MOCK_DAY, trading: kind === 'done', observe: false },
       step: launch ? { name: 'day' } : null, kill: null, risk: { level: 3, name: 'Базовый' }, busy: launch, checks: [], banner: null,
-      day: { day_id: 'D-mock', state: launch ? 'starting' : 'running', mode: 'paper', steps: (launch ? ['S1', 'S2', 'S3', 'S4', 'S5'] : kind === 'done' ? ['S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8', 'S9'] : []).map((name) => ({ name, phase: 'start', ok: true, code: null })) },
+      day: { day_id: MOCK_DAY, state: launch ? 'starting' : 'running', mode: 'paper', steps: (launch ? ['S1', 'S2', 'S3', 'S4', 'S5'] : kind === 'done' ? ['S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8', 'S9'] : []).map((name) => ({ name, phase: 'start', ok: true, code: null })) },
     }
     mode.value = 'paper'
     if (kind === 'pick') {
@@ -168,7 +122,6 @@ export const useControlStore = defineStore('control', () => {
       }
       phase.value = 'ready'
     } else {
-      lastAction.value = 'day.start'
       phase.value = launch ? 'starting' : 'done'
     }
   }
@@ -201,5 +154,5 @@ export const useControlStore = defineStore('control', () => {
     dialogOpen.value = true
   }
 
-  return { ctl, hello, dialogOpen, openDialog, phase, mode, challenge, accepted, error, final, pending, lastAction, button, start, check, toggleAccept, begin, stopDay, reset, mock, mockPlatform, mockApply, applyCtl, applyHello, applyResult, applyFinal }
+  return { ctl, hello, dialogOpen, openDialog, phase, mode, challenge, error, pending, button, start, check, reset, mock, mockPlatform, mockApply, applyCtl, applyHello, applyResult }
 })

@@ -128,7 +128,7 @@ export interface TokTip {
 /**
  * Данные подсказки группы. Семантика (src/tb/llm/types.py): `in` включает кэш (`in_hit` его часть), `out` включает рассуждение (`reasoning` его часть), всего = in + out.
  * Состав: кэш входа, вход мимо кэша, выход-ответ (out минус рассуждение) и рассуждение; части не пересекаются, доли считаются от всего.
- * Скорость вывода = (out / calls) / (p50 в секундах): грубая оценка, p50 включает ожидание и ввод, реальная скорость генерации выше.
+ * Скорость вывода = (out / calls) / (медиана времени ответа в секундах): грубая оценка, время включает ожидание и ввод, реальная скорость генерации выше.
  * Цена: при usd > 0 цена вызова и за 1 млн токенов, иначе «бесплатно». Деление на ноль даёт «–».
  */
 export function toksTip(g: UsageGroup): TokTip {
@@ -151,9 +151,9 @@ export function toksTip(g: UsageGroup): TokTip {
     perCallOut: per(out, calls, toksText),
     mix: parts.map(([key, label, value]) => ({ key, label, value, text: toksText(value), share: total > 0 ? value / total : 0 })),
     stats: [
-      { key: 'p50', label: 'Типичный ответ', value: msText(g.lat_p50_ms), note: 'p50', help: 'Половина ответов приходит быстрее этого времени.', hot: false },
-      { key: 'p95', label: 'Медленный ответ', value: msText(g.lat_p95_ms), note: 'p95', help: 'Медленнее приходит только каждый двадцатый ответ.', hot: false },
-      { key: 'speed', label: 'Скорость вывода', value: secs && calls ? rate(out / calls / secs) : DASH, note: 'ток/с, оценка', help: 'Выход на вызов делим на p50. Это нижняя оценка: p50 включает ожидание.', hot: false },
+      { key: 'p50', label: 'Типичный ответ', value: msText(g.lat_p50_ms), note: '', help: 'Половина ответов приходит быстрее этого времени.', hot: false },
+      { key: 'p95', label: 'Медленный ответ', value: msText(g.lat_p95_ms), note: '', help: 'Медленнее приходит только каждый двадцатый ответ.', hot: false },
+      { key: 'speed', label: 'Скорость вывода', value: secs && calls ? rate(out / calls / secs) : DASH, note: 'токенов в секунду, оценка', help: 'Длину ответа делим на типичное время ответа. Оценка заниженная: в это время входит и ожидание.', hot: false },
       { key: 'err', label: 'Ошибки', value: pctText(g.err_rate), note: `${intText(g.errors ?? 0)} шт.`, help: 'Вызовы, закончившиеся ошибкой.', hot: isHigh(g.err_rate, g.calls) },
       { key: 'fmt', label: 'Неверный формат', value: pctText(g.fmt_err_rate), note: `${intText(g.fmt_errors ?? 0)} шт.`, help: 'Ответы, не принятые по формату.', hot: isHigh(g.fmt_err_rate, g.calls) },
       { key: 'fb', label: 'На запасную модель', value: intText(g.fallbacks ?? 0), note: 'переключений', help: 'Сколько раз вызов ушёл на запасную модель роли.', hot: false },

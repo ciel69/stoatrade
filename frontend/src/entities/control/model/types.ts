@@ -54,7 +54,7 @@ export interface ChallengeData {
   expires_in?: number
 }
 
-/** Ответ на команду по сокету (`ctl_result`). */
+/** Ответ на запрос условий по сокету (`ctl_result`). */
 export interface CtlResult {
   id: string
   kind: 'challenge' | 'command'
@@ -65,14 +65,5 @@ export interface CtlResult {
   data?: ChallengeData
 }
 
-/** Итог исполнения ctl (`ctl_final`): rid это id нашего запроса, id: команды в очереди. */
-export interface CtlFinal {
-  id: string
-  rid: string
-  status: string
-  code: string
-  msg: string
-  data: Record<string, unknown> | null
-}
-
-export type FlowPhase = 'idle' | 'checking' | 'ready' | 'blocked' | 'starting' | 'done' | 'failed' | 'stopping'
+/** Фаза проверки условий запуска в окне дня (сама остановка и итоги команд ведёт entities/action). */
+export type FlowPhase = 'idle' | 'checking' | 'ready' | 'blocked' | 'starting' | 'done' | 'failed'

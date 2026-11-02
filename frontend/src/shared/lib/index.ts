@@ -9,5 +9,5 @@ export { GATE_IDS, PRE_IDS, WARNING_IDS, gateName, h7Parts, humanGate, humanPre,
 export { humanBanner, humanText } from './human-free'
 export { NODE_IDS, humanNode, nodeLabel, nodeStops, nodeValue } from './human-nodes'
 export { TONE_WORD, dayLabel, detailsOf, isPlain, plainify, modeName, modeOn, toneOfLevel, unknownHuman } from './human-text'
-export { actionName, commandStatus, consumerName, contextName, feedState, holdText, planState, proper, sessionName, stopNote, thesisText } from './human-words'
+export { ROLE_IDS, actionName, commandStatus, consumerName, contextName, feedState, holdText, planState, proper, roleAbout, roleTitle, sessionName, stopNote, thesisText } from './human-words'
 export type { Headline, Human, HumanCtx, HumanItem, HumanNodeInput, Tone } from './human-types'

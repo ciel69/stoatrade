@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import { useActionStore } from '@/entities/action'
-import { MAX_FALLBACK, ROLE_INFO, fallbackCandidates, issuesOf, pct, placeOf, roleLabel, useRoleStore, type RoleModel } from '@/entities/role'
+import { MAX_FALLBACK, fallbackCandidates, issuesOf, pct, placeOf, roleLabel, useRoleStore, type RoleModel } from '@/entities/role'
 import { UiChip, UiDetail } from '@/shared/ui'
-import { fixed, useRefocus } from '@/shared/lib'
+import { fixed, roleAbout, useRefocus } from '@/shared/lib'
 import { useRoleEdit, type AppliedEntry } from '../model/useRoleEdit'
 import ProfileList from './ProfileList.vue'
 
@@ -29,7 +29,7 @@ const r = edit.row
 const issues = computed(() => (r.value ? issuesOf(r.value, store.snapshot?.mode ?? null) : []))
 const thinking: Record<string, string> = { off: 'выключено', low: 'немного', medium: 'средне', high: 'много' }
 const params = (m: RoleModel) => [
-  m.params.temperature != null ? `температура ${m.params.temperature}` : null,
+  m.params.temperature != null ? `разброс ответов (температура) ${m.params.temperature}` : null,
   m.params.max_out_tok != null ? `ответ до ${m.params.max_out_tok} токенов` : null,
   m.params.thinking ? `рассуждение: ${thinking[m.params.thinking] ?? m.params.thinking}` : null,
 ].filter(Boolean).join(' · ')
@@ -90,13 +90,15 @@ function apply(): void {
   refocus.mark()
   edit.submit()
 }
-// Панель изменений исчезает вместе с нажатой кнопкой: фокус возвращается на «Сменить» (или на рамку панели). Окно подтверждения рисков вернёт его само, поэтому ждём, пока оно закроется.
+// Панель изменений исчезает вместе с нажатой кнопкой «Применить». Фокус возвращается на заголовок результата «Применено» (его и читает экранный диктор), а если результата нет, на «Сменить» или рамку панели.
+// Окно подтверждения рисков вернёт фокус само, поэтому ждём, пока оно закроется.
 const detail = ref<{ $el: HTMLElement } | null>(null)
 const bar = ref<HTMLElement | null>(null)
+const doneBox = ref<HTMLElement | null>(null)
 const refocus = useRefocus({
   blocked: () => action.riskyRun === true && action.phase !== 'idle',
-  target: () => pBtn.value,
-  fallback: () => detail.value?.$el,
+  target: () => doneBox.value?.querySelector<HTMLElement>('.dt b') ?? pBtn.value,
+  fallback: () => pBtn.value ?? detail.value?.$el,
   lostIn: () => bar.value,
 })
 watch(() => edit.entries.value[0]?.id, (id) => { if (id) refocus.arm() })
@@ -114,11 +116,11 @@ const stateText = (e: AppliedEntry): string =>
   <UiDetail ref="detail" :label="`Роль ${roleLabel(role)}`" @close="$emit('close')">
     <template #title>
       <b class="h">{{ roleLabel(role) }}</b>
-      <UiChip v-if="r?.live_risk">влияет на live</UiChip>
+      <UiChip v-if="r?.live_risk" title="От этой роли зависят решения при торговле на реальные деньги">важна для реальных денег</UiChip>
     </template>
 
     <div v-if="r" class="stack">
-      <p class="what">{{ ROLE_INFO[role]?.what ?? '' }}</p>
+      <p class="what">{{ roleAbout(role) }}</p>
 
       <ul v-if="issues.length" class="issues"><li v-for="(i, k) in issues" :key="k" :class="i.tone">{{ i.text }}</li></ul>
 
@@ -129,8 +131,7 @@ const stateText = (e: AppliedEntry): string =>
         </div>
         <div v-if="r.primary" class="model">
           <b>{{ r.primary.model_name }}</b>
-          <p class="meta">{{ placeOf(r.primary) }} · провайдер {{ r.primary.provider }}{{ r.primary.provider_enabled ? '' : ' (выключен)' }} · {{ r.primary.live_ok ? 'допущена к live' : 'не допущена к live' }}</p>
-          <p class="meta">{{ params(r.primary) }}</p>
+          <p class="meta">{{ placeOf(r.primary) }} · провайдер {{ r.primary.provider }}{{ r.primary.provider_enabled ? '' : ' (выключен)' }} · {{ r.primary.live_ok ? 'допущена к торговле на реальные деньги' : 'не допущена к торговле на реальные деньги' }}</p>
         </div>
         <p v-else class="meta">Модель не назначена.</p>
         <Transition name="pk">
@@ -147,14 +148,14 @@ const stateText = (e: AppliedEntry): string =>
           <span v-if="edit.canEdit.value && !edit.locked.value && !noList" class="count">{{ draftFb.length }} из {{ MAX_FALLBACK }}</span>
         </div>
         <p class="meta">Если основная не ответила, мозг пробует запасные по очереди, сверху вниз.</p>
-        <p v-if="edit.locked.value" class="meta lock">В live запасные и параметры этой роли не меняются.</p>
+        <p v-if="edit.locked.value" class="meta lock">Пока платформа торгует на реальные деньги, запасные модели этой роли не меняются.</p>
 
         <!-- текущие запасные -->
         <TransitionGroup v-if="edit.canEdit.value && !edit.locked.value" name="feed" tag="ul" class="fbs">
           <li v-for="(id, i) in draftFb" :key="id" class="fb">
             <div class="fbt">
               <b>{{ i + 1 }}. {{ fbModel(id)?.model_name ?? id }}</b>
-              <p class="meta" :class="{ warn: fbModel(id) && !fbModel(id)!.provider_enabled }">{{ fbModel(id) ? `${placeOf(fbModel(id)!)} · провайдер ${fbModel(id)!.provider}${fbModel(id)!.provider_enabled ? '' : ' выключен: запасная не сработает'}` : 'профиль не найден в списке' }}</p>
+              <p class="meta" :class="{ warn: fbModel(id) && !fbModel(id)!.provider_enabled }">{{ fbModel(id) ? `${placeOf(fbModel(id)!)} · провайдер ${fbModel(id)!.provider}${fbModel(id)!.provider_enabled ? '' : ' выключен: запасная не сработает'}` : 'эта модель не найдена в списке доступных' }}</p>
             </div>
             <div class="ctl">
               <button type="button" class="ib" :aria-label="`Поднять выше: ${fbModel(id)?.model_name ?? id}`" :disabled="off || i === 0" @click="edit.move(id, -1)">
@@ -193,19 +194,19 @@ const stateText = (e: AppliedEntry): string =>
         </template>
       </section>
 
-      <p v-if="!edit.canEdit.value" class="locked">Изменение моделей выключено: включите расширенное управление (auth.dash2_full в config/control.json).</p>
-      <p v-else-if="noList" class="locked">Список доступных моделей не пришёл от сервера: изменить нельзя. Обновите страницу или перезапустите дашборд.</p>
+      <p v-if="!edit.canEdit.value" class="locked">Менять модели из дашборда пока нельзя: владельцу нужно включить расширенное управление.</p>
+      <p v-else-if="noList" class="locked">Список доступных моделей не пришёл: изменить нельзя. Обновите страницу.</p>
 
-      <section v-if="edit.entries.value.length" class="sec" aria-live="polite">
+      <section v-if="edit.entries.value.length" ref="doneBox" class="sec">
         <h4>Применено в этой сессии</h4>
         <TransitionGroup name="feed" tag="ul" class="done">
           <li v-for="e in edit.entries.value" :key="e.id" class="dn">
             <svg v-if="e.state === 'wait'" class="spin-w" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="none" stroke="var(--line2)" stroke-width="2" /><path class="arc" d="M8 2a6 6 0 0 1 6 6" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" /></svg>
             <svg v-else class="okc" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
             <div class="dt">
-              <b>{{ e.kind === 'revert' ? 'Возвращено' : 'Применено' }}</b>
+              <b tabindex="-1">{{ e.kind === 'revert' ? 'Возвращено' : 'Применено' }}</b>
               <p v-for="l in e.lines" :key="l.label" class="ln">{{ l.label }}: {{ l.from }} <span class="ar">→</span> {{ l.to }}</p>
-              <p class="meta">{{ stateText(e) }}</p>
+              <p class="meta" role="status" aria-live="polite">{{ stateText(e) }}</p>
             </div>
             <button v-if="edit.canEdit.value && !e.reverted" type="button" class="btn" :disabled="off" @click="edit.revert(e)">Вернуть как было</button>
             <span v-else-if="e.reverted" class="meta">откатано</span>
@@ -227,19 +228,24 @@ const stateText = (e: AppliedEntry): string =>
       </Transition>
 
       <section class="sec">
-        <h4>За сутки</h4>
+        <h4>Как справлялась за сутки</h4>
         <dl class="kv">
           <div><dt>Вызовов</dt><dd>{{ r.day.calls ?? 0 }}</dd></div>
           <div><dt>Ошибки</dt><dd>{{ pct(r.day.err_rate) }}</dd></div>
-          <div><dt>Ответ не принят по формату</dt><dd>{{ pct(r.day.fmt_err_rate) }}</dd></div>
-          <div><dt>Переключений на запасную</dt><dd>{{ r.day.fallbacks ?? 0 }}</dd></div>
-          <div><dt>Типичное время ответа</dt><dd>{{ ms(r.day.p50_ms) }}</dd></div>
+          <div><dt>Ответов с неверным форматом</dt><dd>{{ pct(r.day.fmt_err_rate) }}</dd></div>
+          <div><dt>Переходов на запасную модель</dt><dd>{{ r.day.fallbacks ?? 0 }}</dd></div>
+          <div><dt>Обычное время ответа</dt><dd>{{ ms(r.day.p50_ms) }}</dd></div>
           <div><dt>Стоимость</dt><dd>{{ fixed(r.day.usd ?? 0, 4) }} USD</dd></div>
-          <div v-if="r.budget_day_usd != null"><dt>Бюджет в день</dt><dd>{{ fixed(r.budget_day_usd, 2) }} USD, осталось {{ fixed(r.today.budget_left_usd, 2) }}</dd></div>
+          <div v-if="r.budget_day_usd != null"><dt>Лимит расходов в день</dt><dd>{{ fixed(r.budget_day_usd, 2) }} USD, осталось {{ fixed(r.today.budget_left_usd, 2) }}</dd></div>
         </dl>
       </section>
 
-      <p class="tech">профиль {{ r.primary?.id ?? '–' }} · роль {{ r.role }} · {{ edit.target.value }} · {{ r.scope }}{{ r.team ? ' ' + r.team : '' }} · {{ r.io ?? '' }}</p>
+      <details class="tech">
+        <summary>Для специалиста</summary>
+        <p v-if="r.primary">Параметры модели: {{ params(r.primary) || 'по умолчанию' }}</p>
+        <p v-for="f in r.fallback" :key="f.id">Запасная {{ f.model_name }}: {{ params(f) || 'по умолчанию' }}</p>
+        <p>профиль {{ r.primary?.id ?? '–' }} · роль {{ r.role }} · {{ edit.target.value }} · {{ r.scope }}{{ r.team ? ' ' + r.team : '' }} · {{ r.io ?? '' }}</p>
+      </details>
     </div>
     <p v-else class="meta">{{ store.snapshot ? 'Роль не найдена.' : 'Загружаю данные роли…' }}</p>
   </UiDetail>
@@ -271,7 +277,10 @@ const stateText = (e: AppliedEntry): string =>
 dt { color: var(--muted); }
 dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
 .locked { margin: 0; padding: var(--space-3); border-radius: var(--radius-sm); background: var(--panel2); font-size: 12px; color: var(--muted); line-height: 1.5; }
-.tech { margin: 0; font-size: 11px; color: var(--muted); font-family: var(--mono, ui-monospace, monospace); overflow-wrap: anywhere; }
+.tech { font-size: 12px; color: var(--muted); }
+.tech summary { cursor: pointer; min-height: 32px; display: flex; align-items: center; }
+.tech summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+.tech p { margin: 4px 0 0; font-size: 11px; font-family: var(--mono, ui-monospace, monospace); overflow-wrap: anywhere; }
 
 .picker { display: grid; gap: var(--space-2); padding-top: var(--space-1); }
 
@@ -289,6 +298,8 @@ dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
 .dn > svg { margin-top: 2px; }
 .okc { color: var(--pos); }
 .dt b { font-size: 13px; }
+.dt b:focus { outline: none; }
+.dt b:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
 .ln { margin: 2px 0 0; font-size: 12px; overflow-wrap: anywhere; }
 .ar { color: var(--muted); }
 .spin-w .arc { transform-origin: 8px 8px; animation: rp-spin 0.9s linear infinite; }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Challenge } from '../model/types'
-import { ACCEPT_KEYS, acceptLabel, blockReasons, buildCommand, dialogUp, failedGates, timeoutText, isExpired, isRisky, passedGates, risksOf, secondsLeft, unavailableReason, UNAVAILABLE_TEXT } from './flow'
+import { ACCEPT_KEYS, acceptLabel, blockReasons, buildCommand, dialogUp, failedGates, timeoutText, isExpired, isIrreversible, isRisky, ownProgress, passedGates, risksOf, secondsLeft, unavailableReason, UNAVAILABLE_TEXT } from './flow'
 
 const calm: Challenge = { gates: [{ id: 'G1', name: 'Связь', ok: true }], warnings: [], pre_amber: [], phrases: [], danger: false, blocked: false, nonce: 'n1' }
 const risky: Challenge = {
@@ -25,11 +25,40 @@ describe('isRisky', () => {
 })
 
 describe('risksOf', () => {
-  it('опасность сверху, затем предупреждения, затем жёлтые проверки', () => {
-    expect(risksOf(risky).map((r) => [r.level, r.id])).toEqual([['danger', 'danger'], ['warn', 'W1'], ['warn', 'W2'], ['amber', 'P1']])
-    expect(risksOf(risky)[1].text).toMatch(/^На бумаге пока мало опыта/)
-    expect(risksOf(risky)[1].text).not.toMatch(/\bW\d\b/)
-    expect(risksOf(risky)[3].text).toBe('Платформа не готова к запуску дня')
+  it('необратимое: опасность сверху, затем предупреждения, затем жёлтые проверки', () => {
+    expect(risksOf(risky, true).map((r) => [r.level, r.id])).toEqual([['danger', 'danger'], ['warn', 'W1'], ['warn', 'W2'], ['amber', 'P1']])
+    expect(risksOf(risky, true)[0].text).toMatch(/нельзя откатить/)
+  })
+  it('обратимое (уровень риска, режим, модели): строки «нельзя откатить» нет, остальное на месте', () => {
+    const list = risksOf(risky)
+    expect(list.map((r) => r.id)).toEqual(['W1', 'W2', 'P1'])
+    expect(list.some((r) => /нельзя откатить/.test(r.text))).toBe(false)
+    // только флаг опасности без причин: список не пустой, но и без ложного «нельзя откатить»
+    const only = risksOf({ danger: true })
+    expect(only).toHaveLength(1)
+    expect(only[0].text).not.toMatch(/нельзя откатить/)
+  })
+  it('что необратимо: KILL, закрытие позиций, live; risk.set, mode.set, brain.* нет', () => {
+    expect(isIrreversible('kill.set', { flatten: false })).toBe(true)
+    expect(isIrreversible('kill.set', { flatten: true })).toBe(true)
+    expect(isIrreversible('exchange.set', { op: 'mode', mode: 'live' })).toBe(true)
+    expect(isIrreversible('exchange.set', { op: 'mode', mode: 'testnet' })).toBe(false)
+    for (const a of ['risk.set', 'mode.set', 'brain.role', 'brain.use', 'brain.rollback', 'brain.reload', 'day.start', 'day.stop', 'llm.provider']) expect(isIrreversible(a, { level: 5 })).toBe(false)
+    expect(isIrreversible(undefined, undefined)).toBe(false)
+  })
+  it('ход запуска и остановки дня показывает своё окно, остальное общее', () => {
+    expect(ownProgress('day.start', 'sending')).toBe(true)
+    expect(ownProgress('day.stop', 'waiting')).toBe(true)
+    expect(ownProgress('day.stop', 'done')).toBe(true)
+    expect(ownProgress('day.stop', 'confirm')).toBe(false)
+    expect(ownProgress('day.stop', 'failed')).toBe(false)
+    expect(ownProgress('risk.set', 'sending')).toBe(false)
+    expect(ownProgress(undefined, 'sending')).toBe(false)
+  })
+  it('тексты предупреждений словами', () => {
+    expect(risksOf(risky)[0].text).toMatch(/^На бумаге пока мало опыта/)
+    expect(risksOf(risky)[0].text).not.toMatch(/\bW\d\b/)
+    expect(risksOf(risky)[2].text).toBe('Платформа не готова к запуску дня')
     expect(risksOf({ pre_amber: [{ id: 'Z9', name: 'Жёлтая', msg: 'почти предел' }] })[0].text).toBe('Жёлтая: почти предел')
   })
   it('только фразы: один общий пункт, чтобы список не был пустым', () => {

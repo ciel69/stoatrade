@@ -1,4 +1,4 @@
-import { ageText } from '@/shared/lib'
+import { ageText, roleAbout, roleTitle } from '@/shared/lib'
 import type { BrainStatus, DecisionRow } from '../model/types'
 
 /*
@@ -44,19 +44,12 @@ export function emptyNote(loaded: boolean, status: BrainStatus): string {
 
 // ---------------------------------------------------------------- роли
 
-const ROLE: Record<string, { name: string; what: string }> = {
-  entry_scout: { name: 'Поиск входа', what: 'Смотрит сигнал сканера по одной монете и решает: подготовить вход с уровнем и стопом или пропустить.' },
-  position_manager: { name: 'Сопровождение позиции', what: 'Ведёт открытую сделку: подтягивает стоп, фиксирует часть прибыли или закрывает. Увеличить позицию и ослабить стоп не может.' },
-  news_reader: { name: 'Читатель новостей', what: 'Размечает заголовки: тип, важность, направление. Сделок не решает, мозгу отдаёт только метки.' },
-  morning_analyst: { name: 'Утренний обзор', what: 'Оценивает рынок утром и составляет план дня: на что смотреть и сколько новых сделок разрешить.' },
-  day_auditor: { name: 'Аудит дня', what: 'В конце дня решает по каждой открытой позиции: перенести на следующий день или закрыть.' },
-  reviewer: { name: 'Разбор сделок', what: 'Разбирает закрытую сделку: следовала ли правилам, что улучшить. На саму сделку уже не влияет.' },
-}
+// Названия и описания ролей общие с «Система · Настройки»: единственный источник в shared/lib/human-roles.ts.
 
 /** Имя роли для человека; незнакомая роль не показывается кодом. */
-export const roleName = (role: string | null | undefined): string => (role ? ROLE[role]?.name ?? 'Другая роль мозга' : 'Мозг')
+export const roleName = (role: string | null | undefined): string => roleTitle(role)
 /** Одна фраза «чем занимается». */
-export const roleWhat = (role: string): string => ROLE[role]?.what ?? 'Служебная роль мозга, подробностей пока нет.'
+export const roleWhat = (role: string): string => roleAbout(role)
 
 /** Когда роль отвечала в последний раз, словами: «ответила 2 мин назад», «сбой 5 мин назад», «ещё не отвечала». */
 export function roleAnswer(last: { ok: boolean | null; t: number } | null, nowS: number): string {

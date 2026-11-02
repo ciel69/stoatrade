@@ -23,11 +23,11 @@ const emit = defineEmits<{ pick: [id: string] }>()
         <span class="meta">
           <template v-if="profileBlock(p)"><em class="warn">{{ profileBlock(p) }}</em></template>
           <template v-else>провайдер включён</template>
-          · <em :class="{ warn: liveWarn && !p.live_ok }">{{ p.live_ok ? 'допущена к live' : 'не допущена к live' }}</em>
+          · <em :class="{ warn: liveWarn && !p.live_ok }">{{ p.live_ok ? 'допущена к реальным деньгам' : 'не допущена к реальным деньгам' }}</em>
         </span>
       </button>
     </li>
-    <li v-if="!items.length" class="none">Нет подходящих профилей.</li>
+    <li v-if="!items.length" class="none">Подходящих моделей нет.</li>
   </ul>
 </template>
 
