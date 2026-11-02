@@ -5,7 +5,7 @@ import path from 'node:path'
 
 export const E2E_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 export const FRONTEND_DIR = path.resolve(E2E_DIR, '..')
-export const DIST_DIR = path.join(FRONTEND_DIR, 'dist')
+export const DIST_DIR = process.env.E2E_DIST ? path.resolve(process.env.E2E_DIST) : path.join(FRONTEND_DIR, 'dist')
 export const SRC_DIR = path.join(FRONTEND_DIR, 'src')
 export const ARTIFACTS_DIR = path.join(E2E_DIR, 'artifacts')
 

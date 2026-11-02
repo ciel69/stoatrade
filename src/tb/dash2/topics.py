@@ -639,14 +639,40 @@ def plan_detail(root, pid, now=None):
     return {"id": pid, "ok": True, "data": model.scrub(data)}
 
 
-def _pending(rows, now):
-    """Ждущие лимитные входы; срок жизни отдаём моментом (expires_at), по той же причине, что и eta_at."""
+def _plan_orders(v2, mode, now):
+    """Лимитные входы планов v2, уже стоящие на бирже (runtime.entry.state == resting): карточка плана даёт цену лимита (trigger.limit_px), стоп, тейк, риск и плечо.
+    Срок заявки = срок плана (ttl_left_s), своего ttl у входа нет."""
+    out = []
+    for c in ((v2 or {}).get("plans") or {}).get("cards") or []:
+        if not isinstance(c, dict) or c.get("entry_state") != "resting" or c.get("status") not in (None, "armed"):
+            continue
+        if mode != "all" and c.get("mode") != mode:
+            continue
+        px = _num((c.get("trigger") or {}).get("limit_px"))
+        cur = _num(c.get("price"))
+        tgs = [_num(x.get("price")) for x in c.get("targets") or [] if isinstance(x, dict) and _num(x.get("price")) is not None]
+        ttl = _num(c.get("ttl_left_s"))
+        out.append({"id": "plan:%s" % c.get("id"), "src": "plan", "plan": c.get("id"), "sym": c.get("sym"), "side": c.get("side"), "mode": c.get("mode"), "price": px, "cur": cur,
+                    "stale": bool(c.get("price_stale")), "dist_pct": (100.0 * (px / cur - 1.0)) if px and cur else None, "sl": _num(c.get("stop")), "tp": tgs[0] if tgs else None,
+                    "risk": _num(c.get("risk_usdt")), "lev": _num(c.get("leverage")), "ttl_min": None, "expires_at": round(now + ttl) if ttl is not None else None})
+    return out
+
+
+def _pending(rows, now, v2=None, mode="all"):
+    """Ждущие лимитные входы: заявки прежнего пути (state/pending_orders.json, src=cli) и входы планов v2 (src=plan); срок жизни отдаём моментом (expires_at), по той же причине, что и eta_at.
+    Одна и та же заявка в обоих источниках (монета, сторона, цена, режим) показывается один раз, строкой плана."""
     out = []
     for r in rows or []:
         left = _num(r.get("left_s"))
-        out.append({"id": r.get("id"), "sym": r.get("sym"), "side": r.get("side"), "mode": r.get("mode"), "price": _num(r.get("price")), "cur": _num(r.get("cur")), "stale": bool(r.get("price_stale")),
+        out.append({"id": r.get("id"), "src": "cli", "plan": None, "sym": r.get("sym"), "side": r.get("side"), "mode": r.get("mode"), "price": _num(r.get("price")), "cur": _num(r.get("cur")), "stale": bool(r.get("price_stale")),
                     "dist_pct": _num(r.get("dist_pct")), "sl": _num(r.get("sl")), "tp": _num(r.get("tp")), "risk": _num(r.get("risk_usdt")), "lev": _num(r.get("lev")),
                     "ttl_min": _num(r.get("ttl_min")), "expires_at": round(now + left) if left is not None else None})
+
+    def key(o):
+        return (o["sym"], o["side"], o["mode"], round(o["price"], 8) if o["price"] is not None else None)
+    plans = _plan_orders(v2, mode, now)
+    seen = {key(o) for o in plans}
+    out = plans + [o for o in out if key(o) not in seen]
     return {"total": len(out), "items": out[:PENDING_OUT]}
 
 
@@ -705,7 +731,7 @@ def home(root=None, now=None, mode=None):
             "limits": [{"id": r.get("id"), "label": r.get("label"), "limit": _num(r.get("limit")), "used": _num(r.get("used")), "room": _num(r.get("room")), "unit": r.get("unit"), "level": r.get("level")}
                        for r in (rr.get("rows") or []) if isinstance(r, dict)],
             "limits_paper": bool(rr.get("paper")), "allowed": rr.get("allowed"), "positions": pos[:POSITIONS_OUT], "positions_total": len(pos),
-            "curve": _curve(s.get("curve")), "plans": _plans(s.get("v2"), mode, now), "pending": _pending(s.get("pending"), now)}
+            "curve": _curve(s.get("curve")), "plans": _plans(s.get("v2"), mode, now), "pending": _pending(s.get("pending"), now, s.get("v2"), mode)}
 
 
 # ---------------------------------------------------------------- events: лента для плавающего «облака» (шина событий, поля уже из белых списков)

@@ -220,6 +220,9 @@ export interface PendingOrder {
   lev: number | null
   ttl_min: number | null
   expires_at: number | null
+  /** Откуда заявка: 'plan' — лимитный вход плана v2 (plan = id плана), 'cli' — прежний путь `trade open --limit-price`. */
+  src?: 'plan' | 'cli'
+  plan?: string | null
 }
 
 export interface PendingBlock {

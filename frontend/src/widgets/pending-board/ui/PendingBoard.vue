@@ -28,6 +28,7 @@ const gap = (o: PendingOrder) => (o.dist_pct != null ? `${fixed(Math.abs(o.dist_
           <UiChip v-if="o.stale" tone="warn">цена устарела</UiChip>
           <span class="lim">{{ price(o.price) }}</span>
         </div>
+        <p v-if="o.src === 'plan' && o.plan" class="from">из плана {{ o.plan }}</p>
         <p class="sub">сейчас {{ price(o.cur) }} · {{ gap(o) }}<template v-if="o.sl != null"> · стоп {{ price(o.sl) }}</template><template v-if="o.tp != null"> · тейк {{ price(o.tp) }}</template></p>
         <template v-if="fill(o) != null">
           <UiMeter :fill="fill(o)!" :level="level(o)" :label="`${o.sym}: осталось времени заявки`" />
@@ -35,7 +36,7 @@ const gap = (o: PendingOrder) => (o.dist_pct != null ? `${fixed(Math.abs(o.dist_
         </template>
       </li>
     </ul>
-    <p v-else-if="block" class="empty">Ждущих лимитов нет.</p>
+    <p v-else-if="block" class="empty">Сейчас нет заявок на вход, которые ждут цены. Как только план выставит лимитный вход на бирже, он появится здесь.</p>
     <div v-else class="skel" aria-busy="true" />
   </section>
 </template>
@@ -51,6 +52,7 @@ const gap = (o: PendingOrder) => (o.dist_pct != null ? `${fixed(Math.abs(o.dist_
 .sym { font-size: 15px; letter-spacing: -0.01em; }
 .lim { margin-left: auto; font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .sub { margin: 0; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.from { margin: 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
 .left { margin: 0; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; }
 .empty { margin: var(--space-2) 0 0; font-size: 13px; color: var(--muted); }
 .skel { height: 48px; margin-top: var(--space-3); border-radius: var(--radius-sm); background: var(--panel2); }

@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { UiChip, UiRouteStrip, type StripBand, type StripMark } from '@/shared/ui'
+import { UiChip, UiRouteStrip, UiTip, type StripBand, type StripMark } from '@/shared/ui'
 import { duration, price, signed } from '@/shared/lib'
+import { captionHints, roiHint, sideHint, staleHint, stopMoveKind, stopMovedHint } from '../lib/hints'
 import { route } from '../lib/route'
 import type { Position } from '../model/types'
 
@@ -19,6 +20,8 @@ const atTake = computed(() => (props.position.qty != null && props.position.avg 
 const tone = computed(() => ((props.position.upnl ?? 0) > 0 ? 'up' : (props.position.upnl ?? 0) < 0 ? 'down' : ''))
 /** Стоп сдвинут от начального (автозащита или правило): это важнее цифры стопа */
 const protectedStop = computed(() => props.position.stop != null && props.position.stop0 != null && props.position.stop !== props.position.stop0)
+/** Куда подтянут: за вход (прибыль зафиксирована) или ещё на стороне убытка (убыток урезан). */
+const stopMove = computed(() => (protectedStop.value && props.position.avg != null ? stopMoveKind(props.position.side, props.position.stop as number, props.position.avg) : null))
 /** Смещение цены от входа в процентах в пользу позиции (минус: против неё). */
 const pct = (p: number | null | undefined) => (p != null && props.position.avg ? (sign.value * (p - props.position.avg) / props.position.avg) * 100 : null)
 const movePct = computed(() => pct(props.position.price))
@@ -57,22 +60,22 @@ const bands = computed<StripBand[]>(() => {
   <li class="row">
     <div class="head">
       <span class="sym">{{ position.sym }}</span>
-      <UiChip>{{ position.side === 'long' ? 'лонг' : 'шорт' }}{{ position.lev ? ' ' + position.lev + '×' : '' }}</UiChip>
-      <UiChip v-if="position.stale" tone="warn">цена устарела</UiChip>
+      <UiTip :tip="sideHint(position.side, position.lev)"><UiChip>{{ position.side === 'long' ? 'лонг' : 'шорт' }}{{ position.lev ? ' ' + position.lev + '×' : '' }}</UiChip></UiTip>
+      <UiTip v-if="position.stale" :tip="staleHint"><UiChip tone="warn">цена устарела</UiChip></UiTip>
       <span class="pnl" :class="tone">{{ signed(position.upnl) }} <small>USDT</small></span>
-      <span class="r" :class="tone" :title="'Результат к марже с учётом плеча и комиссии входа; цена от входа: ' + signed(movePct) + '%'">{{ signed(roiPct ?? movePct, 1) }}%</span>
+      <UiTip :tip="roiHint(signed(movePct))"><span class="r" :class="tone">{{ signed(roiPct ?? movePct, 1) }}%</span></UiTip>
     </div>
     <p class="sub">вход {{ price(position.avg) }} · сейчас {{ price(position.price) }} ({{ signed(movePct) }}%) · {{ signed(position.r, 2) }}R</p>
 
     <UiRouteStrip v-if="r" class="strip" :marks="marks" :bands="bands" :label="`${position.sym}: от стопа ${price(position.stop)} через вход ${price(position.avg)} к тейку ${price(farTake)}, цена ${price(position.price)}`">
       <template #caption="{ active, set }">
         <span class="rs-i" :class="{ hot: active === 'stop' }" @pointerenter="set('stop')" @pointerleave="set(null)">
-          <span>стоп {{ price(position.stop) }}<template v-if="stopPct != null"> ({{ signed(stopPct) }}%)</template><template v-if="atStop != null"> · <b :class="atStop > 0 ? 'up' : 'down'">{{ signed(atStop) }}</b></template></span>
-          <UiChip v-if="protectedStop" tone="ok">подтянут</UiChip>
+          <span><UiTip :tip="captionHints.stop">стоп</UiTip> {{ price(position.stop) }}<template v-if="stopPct != null"> ({{ signed(stopPct) }}%)</template><template v-if="atStop != null"> · <b :class="atStop > 0 ? 'up' : 'down'">{{ signed(atStop) }}</b></template></span>
+          <UiTip v-if="stopMove" :tip="stopMovedHint(stopMove)"><UiChip tone="ok">подтянут</UiChip></UiTip>
         </span>
         <span v-if="position.held_s != null" class="rs-i rs-mid">{{ duration(position.held_s) }}</span>
         <span v-if="farTake != null" class="rs-i rs-end" :class="{ hot: active === 'take' }" @pointerenter="set('take')" @pointerleave="set(null)">
-          <span>тейк {{ price(farTake) }}<template v-if="takePct != null"> ({{ signed(takePct) }}%)</template><template v-if="atTake != null"> · <b class="up">{{ signed(atTake) }}</b></template></span>
+          <span><UiTip :tip="captionHints.take">тейк</UiTip> {{ price(farTake) }}<template v-if="takePct != null"> ({{ signed(takePct) }}%)</template><template v-if="atTake != null"> · <b class="up">{{ signed(atTake) }}</b></template></span>
         </span>
       </template>
     </UiRouteStrip>

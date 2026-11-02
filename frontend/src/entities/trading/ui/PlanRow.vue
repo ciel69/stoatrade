@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { UiChip, UiRouteStrip, type StripBand, type StripMark } from '@/shared/ui'
-import { countdown, duration, fixed, price } from '@/shared/lib'
+import { UiChip, UiRouteStrip, UiTip, type StripBand, type StripMark } from '@/shared/ui'
+import { countdown, fixed, price } from '@/shared/lib'
+import { RESTING_LABEL, captionHints, distHint, dotsHint, draftHint, planInfoHint, restingHint, sideHint, timerHint } from '../lib/hints'
 import { planRoute } from '../lib/route'
 import { planWait } from '../lib/plan-wait'
 import type { NearPlan } from '../model/types'
@@ -9,7 +10,8 @@ import type { NearPlan } from '../model/types'
 /**
  * План до входа почти без слов. Полоса как у открытой позиции: стоп слева, вход (уровень условия) акцентом с ценой над ним, цели справа, цена белой меткой, а между ценой и входом
  * синий отрезок «осталось дойти» (его длина и есть расстояние). Справа в заголовке процент до уровня и кольцо до закрытия свечи; точки показывают, сколько условий выполнено.
- * Словами остаётся одна строка: невыполненное условие (или причина паузы, блокировки). Остальное (сетап, тезис, риск в USDT, RR, срок плана) в подсказке.
+ * Словами остаётся одна строка: невыполненное условие (или причина паузы, блокировки). Остальное (идея, сетап, риск в USDT, RR, срок плана) в подсказке у названия монеты.
+ * Подсказки (UiTip, тексты в lib/hints.ts) есть у чипа стороны, заявки на бирже, процента, таймера, точек условий и меток полосы; нативного title нет.
  */
 const props = defineProps<{ plan: NearPlan; now: number }>()
 const NEAR = 0.3        // % до триггера, с которого план считается «у входа»
@@ -36,6 +38,7 @@ const fromEntry = (p: number | null | undefined) => (p != null && entry.value ? 
 const stopPct = computed(() => fromEntry(props.plan.stop))
 const takePct = computed(() => fromEntry(farTake.value))
 /** Точки условий: сколько из них выполнено. */
+const dotsDone = computed(() => (props.plan.seq ? props.plan.seq.done : props.plan.met_n))
 const dots = computed(() => {
   const total = props.plan.seq?.total ?? props.plan.leaf_n
   const done = props.plan.seq ? props.plan.seq.done : props.plan.met_n
@@ -90,33 +93,29 @@ const ttlSoon = computed(() => {
   if (left == null || left <= 0 || left > 900) return null
   return eta.value != null && Math.abs(left - eta.value) <= 20 ? null : left
 })
-const tip = computed(() => {
-  const p = props.plan
-  const bits = [p.setup, p.entry_text && `вход: ${p.entry_text}`, p.missing.length > 1 ? `ещё: ${p.missing.slice(1).join('; ')}` : '', p.price != null ? `цена ${price(p.price)}` : '',
-    p.risk != null ? `риск ${fixed(p.risk, 2)} USDT` : '', p.net_rr != null ? `RR ${fixed(p.net_rr, 1)}` : '', p.ttl_at != null && p.ttl_at > props.now ? `план истекает через ${duration(p.ttl_at - props.now)}` : '', p.thesis]
-  return bits.filter(Boolean).join(' · ')
-})
 </script>
 
 <template>
-  <li class="row" :title="tip">
+  <li class="row">
     <div class="head">
-      <span class="sym">{{ plan.sym }}</span>
-      <UiChip>{{ plan.side === 'long' ? 'лонг' : plan.side === 'short' ? 'шорт' : '?' }}{{ plan.leverage ? ' ' + plan.leverage + '×' : '' }}</UiChip>
-      <UiChip v-if="plan.status === 'draft'" tone="warn">черновик</UiChip>
-      <UiChip v-if="plan.entry_state === 'resting'" tone="ok">лимит стоит</UiChip>
-      <span class="dist" :class="{ near, crossed }" :title="crossed ? 'цена за уровнем на столько; вход ждёт закрытия свечи' : 'до уровня входа'">{{ plan.dist_pct != null ? (crossed ? 'за ' : '') + fixed(plan.dist_pct) + '%' : '–' }}</span>
-      <span v-if="eta != null" class="timer" :title="'до закрытия свечи ' + (plan.tf ?? '')">
-        <svg v-if="ring != null" class="ring" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-          <circle class="ring-bg" cx="8" cy="8" r="6" />
-          <circle class="ring-fg" cx="8" cy="8" r="6" :style="{ strokeDasharray: RING, strokeDashoffset: RING * (1 - ring) }" />
-        </svg>
-        {{ countdown(eta) }}
-      </span>
+      <UiTip class="sym-tip" dotted :tip="planInfoHint(plan, now)"><span class="sym">{{ plan.sym }}</span></UiTip>
+      <UiTip :tip="sideHint(plan.side, plan.leverage)"><UiChip>{{ plan.side === 'long' ? 'лонг' : plan.side === 'short' ? 'шорт' : '?' }}{{ plan.leverage ? ' ' + plan.leverage + '×' : '' }}</UiChip></UiTip>
+      <UiTip v-if="plan.status === 'draft'" :tip="draftHint"><UiChip tone="warn">черновик</UiChip></UiTip>
+      <UiTip v-if="plan.entry_state === 'resting'" :tip="restingHint"><UiChip tone="ok">{{ RESTING_LABEL }}</UiChip></UiTip>
+      <UiTip class="push" :tip="distHint(crossed)"><span class="dist" :class="{ near, crossed }">{{ plan.dist_pct != null ? (crossed ? 'за ' : '') + fixed(plan.dist_pct) + '%' : '–' }}</span></UiTip>
+      <UiTip v-if="eta != null" :tip="timerHint(plan.tf)">
+        <span class="timer">
+          <svg v-if="ring != null" class="ring" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+            <circle class="ring-bg" cx="8" cy="8" r="6" />
+            <circle class="ring-fg" cx="8" cy="8" r="6" :style="{ strokeDasharray: RING, strokeDashoffset: RING * (1 - ring) }" />
+          </svg>
+          {{ countdown(eta) }}
+        </span>
+      </UiTip>
     </div>
 
     <p class="line" :class="[`t-${w.tone}`, { 't-crossed': crossed }]">
-      <span v-if="dots.length" class="dots" :title="plan.missing.join('; ')" aria-hidden="true"><i v-for="(d, i) in dots" :key="i" :class="{ on: d }" /></span>
+      <UiTip v-if="dots.length" :tip="dotsHint(dotsDone, dots.length, plan.missing)" :label="`Условия входа: выполнено ${dotsDone} из ${dots.length}`"><span class="dots" aria-hidden="true"><i v-for="(d, i) in dots" :key="i" :class="{ on: d }" /></span></UiTip>
       <span class="txt">{{ line }}</span>
       <span v-if="ttlSoon != null" class="ttl">план {{ countdown(ttlSoon) }}</span>
     </p>
@@ -125,10 +124,10 @@ const tip = computed(() => {
                   :label="`${plan.sym}: от стопа ${price(plan.stop)} через вход ${price(entry)} к цели ${price(farTake)}, цена ${price(plan.price)}`">
       <template #caption="{ active, set }">
         <span class="rs-i" :class="{ hot: active === 'stop' }" @pointerenter="set('stop')" @pointerleave="set(null)">
-          <span class="down">{{ price(plan.stop) }}<template v-if="stopPct != null"> −{{ fixed(stopPct) }}%</template></span>
+          <UiTip :tip="captionHints.stop"><span class="down">{{ price(plan.stop) }}<template v-if="stopPct != null"> −{{ fixed(stopPct) }}%</template></span></UiTip>
         </span>
         <span v-if="farTake != null" class="rs-i rs-end" :class="{ hot: active === 'take' }" @pointerenter="set('take')" @pointerleave="set(null)">
-          <span class="up">{{ price(farTake) }}<template v-if="takePct != null"> +{{ fixed(takePct) }}%</template></span>
+          <UiTip :tip="captionHints.take"><span class="up">{{ price(farTake) }}<template v-if="takePct != null"> +{{ fixed(takePct) }}%</template></span></UiTip>
         </span>
       </template>
     </UiRouteStrip>
@@ -140,7 +139,8 @@ const tip = computed(() => {
 .row:first-child { border-top: 0; padding-top: 0; }
 .head { display: flex; align-items: center; gap: var(--space-2); }
 .sym { font-size: 17px; font-weight: 700; letter-spacing: -0.01em; }
-.dist { margin-left: auto; font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--muted); }
+.head :deep(.push) { margin-left: auto; }        /* у UiTip два корня, поэтому scoped-метка родителя на кнопку не ставится */
+.dist { font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--muted); }
 .dist.near { color: var(--accent); }
 .dist.crossed { color: var(--warn); }
 .t-crossed .txt { color: var(--warn); }
