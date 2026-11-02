@@ -5,7 +5,7 @@ import { UiChip, UiSegment } from '@/shared/ui'
 import { ageText, useNow } from '@/shared/lib'
 
 /**
- * Лента новостей в «Рынке»: очищенные заголовки с разметкой карантинного читателя (тип, важность, направление, монеты). Слева полоса важности (красная от 4, янтарная 3). Монета в разметке
+ * Лента новостей в «Рынке»: очищенные заголовки с разметкой карантинного читателя (тип, важность, направление, монеты). Важность: пометка словом перед временем («важно» от 4, «заметно» 3), у важных жирнее заголовок и очень слабый фон строки (без цветных боковых полос). Монета в разметке
  * выбирает её на карте; клик по заголовку открывает новость боковой панелью (её держит страница). Состояние источников, читателя и календаря показывает виджет news-status над лентой. Заголовки это текст третьих лиц: показываются как текст, мозгу не передаются, ссылок нет (только домен).
  */
 const props = defineProps<{ coin: string | null; selected: string | null }>()
@@ -41,7 +41,7 @@ const typeText = (i: NewsItem): string => (i.cls?.type ? (NEWS_TYPE[i.cls.type] 
       <ul v-if="shown.length" class="list">
         <li v-for="i in shown" :key="i.ref" class="item" :class="[`w-${weightOf(importance(i))}`, { sel: selected === i.ref }]">
           <button type="button" class="hit" :aria-pressed="selected === i.ref" @click="emit('select', i.ref)">
-            <span class="meta">{{ ageText(i.ts, now) }} · {{ i.src }}</span>
+            <span class="meta"><template v-if="weightOf(importance(i)) === 'high'"><b class="flag high">важно</b></template><template v-else-if="weightOf(importance(i)) === 'mid'"><b class="flag mid">заметно</b></template>{{ ageText(i.ts, now) }} · {{ i.src }}</span>
             <span class="head">{{ i.title }}</span>
           </button>
           <span class="chips">
@@ -70,10 +70,13 @@ const typeText = (i: NewsItem): string => (i.cls?.type ? (NEWS_TYPE[i.cls.type] 
 .muted { color: var(--muted); }
 /* заголовки сеткой по 440 px (на широком экране 2-3 колонки); разделитель снизу, нижняя линия последнего ряда срезана clip-path */
 .list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(440px, 100%), 1fr)); column-gap: var(--space-5); clip-path: inset(0 0 1px 0); }
-.item { position: relative; padding: var(--space-3) 0 var(--space-3) var(--space-3); border-bottom: 1px solid var(--line); }
-.item::before { content: ''; position: absolute; left: 0; top: var(--space-3); bottom: var(--space-3); width: 3px; border-radius: 2px; background: var(--line2); }
-.item.w-mid::before { background: var(--warn); }
-.item.w-high::before { background: var(--neg); }
+.item { padding: var(--space-3); border-bottom: 1px solid var(--line); }
+.item.w-high { background: color-mix(in srgb, var(--neg) 6%, transparent); }
+.item.w-mid { background: color-mix(in srgb, var(--warn) 5%, transparent); }
+.item.w-high .head { font-weight: 600; }
+.flag { font-weight: 600; margin-right: 6px; }
+.flag.high { color: var(--neg); }
+.flag.mid { color: var(--warn); }
 .hit { display: grid; gap: 2px; width: 100%; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: var(--radius-sm); }
 .hit:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .meta { font-size: 11px; color: var(--muted); }

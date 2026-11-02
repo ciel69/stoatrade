@@ -49,7 +49,7 @@ const statusTone = computed(() => (props.idea.status === 'taken' || props.idea.s
 <style scoped>
 .row { padding: var(--space-3) 0; border-top: 1px solid var(--line); }
 .row:first-child { border-top: 0; padding-top: 0; }
-.row.sel { box-shadow: inset 3px 0 0 var(--accent); padding-left: var(--space-3); }
+.row.sel { background: color-mix(in srgb, var(--accent) 7%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent); border-radius: var(--radius-sm); padding-inline: var(--space-3); }
 .hit { display: block; width: 100%; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: var(--radius-sm); }
 .hit:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
 .head { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); }

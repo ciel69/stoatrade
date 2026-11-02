@@ -75,7 +75,7 @@ const tip = computed(() => [props.idea.tag, props.idea.note, k.value.rr != null 
 <style scoped>
 .card { position: relative; padding: var(--space-3) 0; border-top: 1px solid var(--line); }
 .card:first-child { border-top: 0; padding-top: 0; }
-.card.sel { box-shadow: inset 3px 0 0 var(--accent); padding-left: var(--space-3); }
+.card.sel { background: color-mix(in srgb, var(--accent) 7%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent); border-radius: var(--radius-sm); padding-inline: var(--space-3); }
 /* Вся карточка кликабельна одной кнопкой под содержимым: внутри полосы свои кнопки-деления, вложенные кнопки недопустимы */
 .hit { position: absolute; inset: 0; width: 100%; padding: 0; border: 0; background: none; cursor: pointer; border-radius: var(--radius-sm); }
 .hit:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }

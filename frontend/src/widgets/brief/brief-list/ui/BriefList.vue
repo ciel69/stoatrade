@@ -59,7 +59,7 @@ const rows = computed<Row[]>(() => {
 .items { list-style: none; margin: 0; padding: 0; overflow-y: auto; min-height: 0; }
 .day { padding: var(--space-3) var(--space-2) var(--space-1); font-size: 11px; color: var(--muted); }
 .row { display: grid; grid-template-columns: 8px auto 1fr; align-items: center; gap: 2px var(--space-2); width: 100%; padding: 7px var(--space-2); background: none; border: 0; border-radius: var(--radius-sm); color: inherit; font: inherit; font-size: 12px; text-align: left; cursor: pointer; transition: background-color var(--dur-fast) ease; }
-.row[aria-pressed='true'] { background: var(--panel2); box-shadow: inset 3px 0 0 var(--accent); }
+.row[aria-pressed='true'] { background: var(--panel2); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
 .row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line2); }
 .dot.ok { background: var(--pos); }

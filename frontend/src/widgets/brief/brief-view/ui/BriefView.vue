@@ -1,19 +1,24 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { briefMs, coinStat, hotRows, scopeText, type Brief, type BriefPosition } from '@/entities/brief'
+import { briefMs, coinStat, compareBriefs, hotRows, posKey, scopeText, type BlockId, type Brief, type BriefPosition } from '@/entities/brief'
 import { planShort, routeFor } from '@/entities/trading'
 import { UiChip, UiRouteStrip, type StripBand, type StripMark } from '@/shared/ui'
 import { ageText, fixed, price, signed, useNow } from '@/shared/lib'
 import BriefLevels from './BriefLevels.vue'
+import BriefMark from './BriefMark.vue'
 
 /**
  * Содержимое одного досье: то, на что смотрел мозг перед решением. Сверху сводка (входы разрешены или нет, запас риска, капитал, KILL), затем блоки; оглавление прыгает к блоку.
  * Показываются только блоки, которые есть в досье (событийное досье неполное). Плану, идее и монете соответствуют ссылки на их страницы. Тексты мозга только свои прошлые тезисы и чек-лист.
  */
-const props = defineProps<{ brief: Brief; id: string }>()
+const props = defineProps<{ brief: Brief; id: string; prev?: Brief | null; prevId?: string | null }>()
 const now = useNow()
 
 const b = computed(() => props.brief)
+/** Сравнение с предыдущим досье из ленты; нет предыдущего (или оно ещё не пришло): блок сравнения скрыт. */
+const diff = computed(() => (props.prev ? compareBriefs(props.prev, b.value) : null))
+const mk = (id: BlockId) => diff.value?.marks[id]
+const fresh = (set: 'pos' | 'pl' | 'hot' | 'id', key: string): 'fresh' | undefined => (diff.value?.fresh[set].has(key) ? 'fresh' : undefined)
 const ms = computed(() => briefMs(b.value.ts))
 const when = computed(() => (ms.value == null ? '' : new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date(ms.value))))
 const tone = (v: number | null | undefined) => (v == null || v === 0 ? '' : v > 0 ? 'up' : 'down')
@@ -102,6 +107,14 @@ const kvLine = (d: Record<string, unknown> | undefined) => Object.entries(d ?? {
       <UiChip v-if="brief.trunc" tone="warn" title="Досье не поместилось в бюджет и было обрезано">обрезано по бюджету</UiChip>
     </header>
 
+    <section v-if="diff" class="chg" aria-label="Что изменилось с прошлого досье">
+      <h3>Что изменилось с прошлого досье<span v-if="prevId" class="pid">{{ prevId }}</span></h3>
+      <ul v-if="diff.lines.length" class="plain">
+        <li v-for="(l, i) in diff.lines" :key="i">{{ l }}</li>
+      </ul>
+      <p v-else class="muted">Существенного не изменилось: позиции, планы, лимиты, режим рынка, горячие монеты и идеи те же.</p>
+    </section>
+
     <nav class="toc" aria-label="Блоки досье">
       <button v-for="s in sections" :key="s.id" type="button" class="toc-b" @click="jump(s.id)">{{ s.label }}</button>
     </nav>
@@ -130,7 +143,7 @@ const kvLine = (d: Record<string, unknown> | undefined) => Object.entries(d ?? {
     </section>
 
     <section v-if="brief.account || brief.session || brief.room" id="bf-acc" class="blk">
-      <h3>Счёт и запас риска</h3>
+      <h3>Счёт и запас риска<BriefMark :mark="mk('acc')" /></h3>
       <dl class="kv">
         <div v-if="brief.account?.dd_pct != null"><dt>Просадка · множитель</dt><dd>{{ fixed(brief.account.dd_pct, 1) }}% · ×{{ fixed(brief.account.dd_mult) }}</dd></div>
         <div v-if="brief.account?.stop_streak != null"><dt>Серия стопов</dt><dd>{{ brief.account.stop_streak }}</dd></div>
@@ -143,11 +156,12 @@ const kvLine = (d: Record<string, unknown> | undefined) => Object.entries(d ?? {
     </section>
 
     <section v-if="brief.positions?.length" id="bf-pos" class="blk">
-      <h3>Позиции</h3>
+      <h3>Позиции<BriefMark :mark="mk('pos')" /></h3>
       <ul class="list">
         <li v-for="p in brief.positions" :key="p.plan ?? p.sym" class="pos">
           <div class="line">
             <router-link class="sym" :to="{ path: '/market', query: { coin: p.sym } }">{{ p.sym }}</router-link>
+            <BriefMark :mark="fresh('pos', posKey(p))" />
             <UiChip>{{ p.side === 'long' ? 'лонг' : 'шорт' }}</UiChip>
             <router-link v-if="p.plan" class="lnk" :to="{ path: '/trading/plans', query: { plan: p.plan } }">{{ planShort(p.plan) }}</router-link>
             <b class="r" :class="tone(p.r)">{{ p.r != null ? signed(p.r) + 'R' : '–' }}</b>
@@ -159,11 +173,12 @@ const kvLine = (d: Record<string, unknown> | undefined) => Object.entries(d ?? {
     </section>
 
     <section v-if="brief.plans?.length" id="bf-pl" class="blk">
-      <h3>Планы</h3>
+      <h3>Планы<BriefMark :mark="mk('pl')" /></h3>
       <ul class="list">
         <li v-for="p in brief.plans" :key="p.id" class="pl">
           <div class="line">
             <router-link class="sym" :to="{ path: '/market', query: { coin: p.sym } }">{{ p.sym }}</router-link>
+            <BriefMark :mark="fresh('pl', p.id)" />
             <UiChip>{{ p.side === 'long' ? 'лонг' : 'шорт' }}</UiChip>
             <UiChip v-if="p.status">{{ p.status }}</UiChip>
             <router-link class="lnk" :to="{ path: '/trading/plans', query: { plan: p.id } }">{{ planShort(p.id) }}{{ p.rev != null ? ' r' + p.rev : '' }}</router-link>
@@ -176,7 +191,7 @@ const kvLine = (d: Record<string, unknown> | undefined) => Object.entries(d ?? {
     </section>
 
     <section v-if="brief.market" id="bf-mkt" class="blk">
-      <h3>Рынок</h3>
+      <h3>Рынок<BriefMark :mark="mk('mkt')" /></h3>
       <div class="coins">
         <div v-for="[name, c] in coinLines" :key="name" class="coin">
           <b>{{ name }}</b>
@@ -201,7 +216,7 @@ const kvLine = (d: Record<string, unknown> | undefined) => Object.entries(d ?? {
     </section>
 
     <section v-if="structKeys.length" id="bf-st" class="blk">
-      <h3>Структура рынка</h3>
+      <h3>Структура рынка<BriefMark :mark="mk('st')" /></h3>
       <div class="scroll">
         <table class="tbl">
           <thead><tr><th>Монета</th><th>Режим</th><th>ATR 5м %</th><th>ATR 1ч %</th><th>1ч %</th><th>24ч %</th><th>Позиция в дне</th><th>Спред бп</th><th>Funding 8ч %</th></tr></thead>
@@ -220,7 +235,7 @@ const kvLine = (d: Record<string, unknown> | undefined) => Object.entries(d ?? {
     </section>
 
     <section v-if="brief.limits || brief.risk_level || brief.economics" id="bf-lim" class="blk">
-      <h3>Лимиты и уровень риска</h3>
+      <h3>Лимиты и уровень риска<BriefMark :mark="mk('lim')" /></h3>
       <dl class="kv">
         <div v-if="brief.limits?.risk_per_trade_usdt != null"><dt>Риск на сделку</dt><dd>{{ usd(brief.limits.risk_per_trade_usdt) }}</dd></div>
         <div v-if="brief.limits?.daily_loss_usdt != null"><dt>Дневной лимит · осталось</dt><dd>{{ fixed(brief.limits.daily_loss_usdt) }} · {{ usd(brief.limits.daily_left_usdt) }}</dd></div>
@@ -233,13 +248,13 @@ const kvLine = (d: Record<string, unknown> | undefined) => Object.entries(d ?? {
     </section>
 
     <section v-if="hot.length" id="bf-hot" class="blk">
-      <h3>Горячие монеты</h3>
+      <h3>Горячие монеты<BriefMark :mark="mk('hot')" /></h3>
       <div class="scroll">
         <table class="tbl">
           <thead><tr><th>Монета</th><th>Счёт</th><th>Причины</th><th>Цена</th><th>5м</th><th>Спред бп</th><th>Funding %</th><th>Лот</th></tr></thead>
           <tbody>
             <tr v-for="h in hot" :key="h.sym">
-              <td><router-link class="sym" :to="{ path: '/market', query: { coin: h.sym } }">{{ h.sym }}</router-link><UiChip v-if="h.tradable === false" tone="warn">нельзя</UiChip></td>
+              <td><router-link class="sym" :to="{ path: '/market', query: { coin: h.sym } }">{{ h.sym }}</router-link><BriefMark :mark="fresh('hot', h.sym)" /><UiChip v-if="h.tradable === false" tone="warn">нельзя</UiChip></td>
               <td>{{ fixed(h.score, 1) }}</td><td class="wrap">{{ (h.reasons ?? []).join(', ') }}</td><td>{{ price(h.px) }}</td>
               <td :class="tone(h.ret_5m_pct)">{{ signed(h.ret_5m_pct, 1) }}</td><td>{{ fixed(h.spread_bps, 1) }}</td><td>{{ fixed(h.funding_pct, 3) }}</td><td>{{ fixed(h.lot_usdt, 1) }}</td>
             </tr>
@@ -266,10 +281,11 @@ const kvLine = (d: Record<string, unknown> | undefined) => Object.entries(d ?? {
     </section>
 
     <section v-if="ideas.length" id="bf-id" class="blk">
-      <h3>Идеи</h3>
+      <h3>Идеи<BriefMark :mark="mk('id')" /></h3>
       <ul class="list">
         <li v-for="i in ideas" :key="i.id" class="line">
           <router-link class="lnk" :to="{ path: '/trading/ideas', query: { idea: i.id } }">{{ i.id }}</router-link>
+          <BriefMark :mark="fresh('id', i.id)" />
           <router-link class="sym" :to="{ path: '/market', query: { coin: i.sym } }">{{ i.sym }}</router-link>
           <span class="muted">{{ i.side }} · уровень {{ price(i.level) }}{{ i.dist_pct != null ? ` (${fixed(i.dist_pct, 1)}%)` : '' }} · {{ i.status ?? '' }}{{ i.age_h != null ? ` · ${fixed(i.age_h, 1)} ч` : '' }}</span>
         </li>
@@ -277,7 +293,7 @@ const kvLine = (d: Record<string, unknown> | undefined) => Object.entries(d ?? {
     </section>
 
     <section v-if="brief.recent?.length" id="bf-ev" class="blk">
-      <h3>Последние события</h3>
+      <h3>Последние события<BriefMark :mark="mk('ev')" /></h3>
       <ul class="list">
         <li v-for="e in brief.recent" :key="e.seq" class="ev"><span class="muted">#{{ e.seq }}</span> {{ [e.type, e.sym, kvLine(e.d)].filter(Boolean).join(' · ') }}</li>
       </ul>
@@ -295,6 +311,11 @@ const kvLine = (d: Record<string, unknown> | undefined) => Object.entries(d ?? {
 .head { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2) var(--space-3); }
 .id { font-family: var(--mono, ui-monospace, monospace); font-size: 13px; }
 .when { font-size: 12px; color: var(--muted); }
+.chg { display: grid; gap: var(--space-2); padding: var(--space-3); border-radius: var(--radius-sm); background: var(--panel2); }
+.chg h3 { margin: 0; font-size: 12px; font-weight: 600; color: var(--text); }
+.pid { margin-left: var(--space-2); font-weight: 400; font-family: var(--mono, ui-monospace, monospace); color: var(--muted); }
+.tbl :deep(.mk) { margin-left: var(--space-2); }
+.blk h3 :deep(.mk) { margin-left: var(--space-2); font-weight: 400; }
 .toc { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; gap: var(--space-1); padding: var(--space-2) 0; margin: calc(var(--space-2) * -1) 0; background: var(--panel); }
 .toc-b { padding: 3px 10px; border: 1px solid var(--line2); border-radius: 99px; background: none; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; transition: color var(--dur-fast) ease, border-color var(--dur-fast) ease; }
 .toc-b:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

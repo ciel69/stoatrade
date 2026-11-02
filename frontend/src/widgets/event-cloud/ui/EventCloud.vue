@@ -150,7 +150,7 @@ watch(() => events.lastSeq, () => open.value && events.markSeen())
 .x { background: transparent; border: 0; color: var(--muted); font-size: 20px; line-height: 1; cursor: pointer; padding: 0 var(--space-1); }
 .list { list-style: none; margin: 0; padding: var(--space-1) 0; overflow-y: auto; position: relative; scrollbar-gutter: stable; }
 .item { display: grid; grid-template-columns: 58px minmax(0, 1fr); column-gap: var(--space-3); width: 100%; padding: 7px var(--space-3) 7px var(--space-4); background: transparent; border: 0; color: inherit; font: inherit; font-size: 12px; line-height: 1.35; text-align: left; cursor: pointer; transition: background-color var(--dur-fast) ease; }
-.item[aria-pressed='true'] { background: var(--panel2); box-shadow: inset 3px 0 0 var(--accent); }
+.item[aria-pressed='true'] { background: var(--panel2); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
 @media (hover: hover) and (pointer: fine) {
   .item:hover { background: var(--panel2); }
 }

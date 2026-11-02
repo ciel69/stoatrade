@@ -172,7 +172,7 @@ dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; min-width
 .links a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .lm { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; font-size: 11px; font-variant-numeric: tabular-nums; }
 .lm li { display: grid; grid-template-columns: 70px 1fr auto; align-items: center; gap: var(--space-2); padding: 1px 4px; border-radius: 3px; }
-.lm li.cur { background: color-mix(in srgb, var(--accent) 14%, transparent); box-shadow: inset 2px 0 0 var(--accent); }
+.lm li.cur { background: color-mix(in srgb, var(--accent) 14%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
 .lpx { color: var(--muted); }
 .bars { position: relative; height: 8px; }
 .bars::before { content: ''; position: absolute; left: 50%; top: -1px; bottom: -1px; width: 1px; background: var(--line2); }

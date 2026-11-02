@@ -6,10 +6,12 @@
     <meta name="color-scheme" content="dark light" />
     <title>Open Trader</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <script src="/theme-init.js"></script>
     <style>
       /* до загрузки стилей: фон без белой вспышки */
       html { background: #0b121a; }
       @media (prefers-color-scheme: light) { html:not([data-theme="dark"]) { background: #eef2f6; } }
+      html[data-theme="light"] { background: #eef2f6; }
     </style>
   </head>
   <body>

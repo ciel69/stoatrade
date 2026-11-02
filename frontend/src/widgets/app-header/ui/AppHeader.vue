@@ -2,6 +2,7 @@
 import { onMounted } from 'vue'
 import { useTradingStore, type TradingMode } from '@/entities/trading'
 import { UiSegment } from '@/shared/ui'
+import ThemeToggle from './ThemeToggle.vue'
 
 /** Шапка: переключатель режима слева, справа слот `status` (индикатор состояния платформы подставляет app-слой: виджеты друг друга не импортируют). */
 const MODE_OPTIONS: ReadonlyArray<{ value: TradingMode; label: string }> = [
@@ -19,6 +20,7 @@ onMounted(() => trading.start())
   <header class="bar">
     <UiSegment :model-value="trading.mode" :options="MODE_OPTIONS" label="Режим" @update:model-value="trading.setMode" />
     <span class="grow" />
+    <ThemeToggle />
     <slot name="status" />
   </header>
 </template>
