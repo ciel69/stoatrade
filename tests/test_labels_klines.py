@@ -114,6 +114,18 @@ class FetchTest(unittest.TestCase):
             klines.fetch("X", "1", 0, 60, mk(clk), http, now_s=10 ** 6)
         self.assertEqual(len(n), 1)
 
+    def test_unknown_symbol_is_empty_not_error(self):
+        """Реальный ответ Bybit для контракта, которого нет (снят с биржи): retCode 10001 + 'params error: Symbol Is Invalid', result={}.
+        Это отсутствие свечей (метка no_data), а не сбой: иначе метка 5 раз откладывается кодом FETCH и становится failed."""
+        raw = json.dumps({"retCode": 10001, "retMsg": "params error: Symbol Is Invalid", "result": {}, "retExtInfo": {}, "time": 1})
+        n = []
+
+        def http(url):
+            n.append(1)
+            return 200, raw
+        self.assertEqual(klines.fetch("ZZZ", "1", 0, 60, mk(Clock()), http, now_s=10 ** 6), [])
+        self.assertEqual(len(n), 1)
+
     def test_rate_limited_pauses_everything(self):
         for code in (403, 429):
             clk = Clock()

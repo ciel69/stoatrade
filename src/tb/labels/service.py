@@ -20,6 +20,7 @@ from tb.platform import services as S
 EXIT_LOCKED = 2
 EXIT_SCHEMA = 4             # в fatal_codes супервизора: быстрый выход с этим кодом не перезапускается
 HB_EVERY_S = 5.0
+LABEL_BUDGET_S = 45.0       # длиннее проход разметки не тянется (захват и heartbeat не ждут дольше); остаток пачки уйдёт в следующий проход
 STATS_EVERY_S = 30.0        # тяжёлые счётчики 24 ч не чаще
 DAY_S = 86400
 IDLE_S = 1.0
@@ -143,7 +144,14 @@ class Service(object):
             return 0
         rows = label.due(self.conn, now, int(self.cfg.get("label_batch", 20)))
         n = 0
+        t_step = self.clock()
+        budget = float(self.cfg.get("label_budget_s", LABEL_BUDGET_S))
         for row in rows:
+            el = self.clock() - t_step
+            if n and el >= budget:         # пачка из 20 меток по ~2-7 с (при сбое сети по 22+ с) дольше hb_stale_s=120 с без heartbeat: супервизор убил бы сервис
+                break
+            if el >= HB_EVERY_S:
+                self.heartbeat(now + el)
             try:
                 st = label.label_one(self.conn, self.root, row, self.cfg, self.pols, self.geom, self.fetch, self.btc, now)
             except Exception as e:  # noqa: BLE001 - сбой одной метки не роняет сервис; транзакция уже откатилась

@@ -93,6 +93,8 @@ def _page(url, limiter, http):
         if code == 10002:
             last = "retCode 10002"
             continue
+        if code == 10001 and "symbol" in str(d.get("retMsg") or "").lower():
+            return []                                           # "params error: Symbol Is Invalid": контракта нет на бирже (снят) -> свечей нет, не сбой сети
         if code != 0:
             raise FetchError("retCode %s" % code)
         lst = (d.get("result") or {}).get("list")

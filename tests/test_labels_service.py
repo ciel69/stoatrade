@@ -127,6 +127,33 @@ class TestLoop(Base):
         self.assertEqual(s.tick(mature + 31 * 60), 1)
         self.assertEqual(self.count("SELECT COUNT(*) FROM signals WHERE status='done'"), 1)
 
+    def test_slow_batch_keeps_heartbeat_fresh_and_is_cut_by_budget(self):
+        """Реальная сеть: ~2 с на метку, при сбое 22+ с. Пачка из 20 меток без heartbeat дольше hb_stale_s=120 с: супервизор убил бы сервис.
+        Внутри прохода heartbeat пишется не реже HB_EVERY_S, а сам проход обрывается по label_budget_s (остаток уйдёт в следующий)."""
+        class Clk(object):
+            t = float(H.T0 + 10)
+        clk = Clk()
+
+        def slow_fetch(sym, interval, start_s, end_s):
+            clk.t += 10.0                                                   # 3 запроса на метку -> 30 с на метку
+            return self.mk.fetch(sym, interval, start_s, end_s)
+        s = self.mkservice(fetch=slow_fetch, clock=lambda: clk.t)
+        H.write_events(self.root, [H.hot_event(i, sym="C%dUSDT" % i) for i in range(6)])
+        s.tick(H.T0 + 10)
+        mature = self.count("SELECT MAX(mature_ts) FROM signals")
+        clk.t = float(mature)
+        beats = []
+        real_hb = s.heartbeat
+        s.heartbeat = lambda now, force=False: (beats.append(now), real_hb(now, force))[1]
+        n = s.tick()
+        done = self.count("SELECT COUNT(*) FROM signals WHERE status='done'")
+        self.assertEqual(n, done)
+        self.assertLess(done, 6)                                            # бюджет 45 с оборвал проход после 2 меток (по 30 с)
+        self.assertGreaterEqual(done, 1)
+        self.assertTrue(any(b > mature + service.HB_EVERY_S for b in beats), beats)   # heartbeat писался внутри прохода
+        s.tick()
+        self.assertGreater(self.count("SELECT COUNT(*) FROM signals WHERE status='done'"), done)
+
     def test_disabled_does_not_capture(self):
         with open(os.path.join(self.root, "config", "labels.json"), encoding="utf-8") as f:
             cfg = json.load(f)
