@@ -1,5 +1,5 @@
 import { estView, plainView, type EstView, type PolicyRow, type VsPolicyBlock } from '@/entities/learning'
-import { LEARN_CAVEAT, LEARN_POLICY_SUMMARY, LEARN_POLICY_VERDICT, fixed, learnLevel, plural } from '@/shared/lib'
+import { LEARN_CAVEAT, LEARN_POLICY_SUMMARY, LEARN_POLICY_VERDICT, LEARN_RESULT_PF_INF, fixed, learnLevel, plural } from '@/shared/lib'
 
 /** Мозг против теневой политики: готовые к показу строки. Числа приходят с сервера; здесь только слова и подписи. */
 export type PolicyTone = 'neutral' | 'ok' | 'warn' | 'bad'
@@ -52,7 +52,7 @@ export function policyRowView(r: PolicyRow, minN: number): PolicyRowView {
     filled: `${r.n_filled}`,
     fill: r.fill_rate == null ? '' : `заполнено ${Math.round(r.fill_rate * 100)}%`,
     r: estView(r.r, 'r', 2, minN),
-    pf: r.pf == null ? '–' : plainView(r.pf, 2),
+    pf: r.pf_inf === true ? LEARN_RESULT_PF_INF : r.pf == null ? '–' : plainView(r.pf, 2),
     diff: estView(r.diff, 'r', 2, 0),
     p: r.p == null ? '–' : `p = ${fixed(r.p, r.p < 0.01 ? 3 : 2)}`,
     verdict: LEARN_POLICY_VERDICT[r.verdict] ?? LEARN_POLICY_VERDICT.few_data,

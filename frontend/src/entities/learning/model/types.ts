@@ -72,6 +72,11 @@ export interface PolicyRow {
   fill_rate: number | null
   r: Est | null
   pf: number | null
+  /** PF бесконечен (нет убыточных сделок): тогда pf пуст */
+  pf_inf?: boolean
+  n_runs?: number
+  alpha_adj?: number | null
+  k?: number
   diff: Est | null
   p: number | null
   verdict: 'better' | 'worse' | 'unclear' | 'few_data'
