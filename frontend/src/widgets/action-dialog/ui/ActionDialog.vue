@@ -112,16 +112,27 @@ function release(): void {
   if (action.phase === 'done') armClose(1200)
 }
 
+/** Кто запустил действие: запоминаем при выходе из покоя, пока кнопка ещё в фокусе (во время проверки она блокируется и фокус уходит на body, окно открывается позже). */
+let starter: HTMLElement | null = null
+watch(() => action.phase, (p, prev) => {
+  if (p !== 'idle' && (prev === 'idle' || prev === undefined)) {
+    const a = document.activeElement as HTMLElement | null
+    starter = a && a !== document.body ? a : null
+  }
+})
+
 watch(visible, (v) => {
   if (v) {
-    opener = document.activeElement as HTMLElement | null
+    opener = starter ?? (document.activeElement as HTMLElement | null)
+    starter = null
     document.addEventListener('keydown', onKey, true)
     focusMain()
   } else {
     document.removeEventListener('keydown', onKey, true)
     holding.value = false
-    opener?.focus?.()
+    const back = opener
     opener = null
+    nextTick(() => back?.focus?.())       // кнопка-открыватель на время действия заблокирована: фокус возвращаем после перерисовки, когда она снова активна
   }
 })
 watch(() => action.phase, (p) => {
