@@ -23,6 +23,18 @@ LIVE_ACTIONS = ("day.start", "risk.set", "brain.use", "carry.decide", "platform.
 
 ROLL_FILE = "auto_roll.json"      # ожидание автостарта следующего paper-дня (переживает перезапуск ctl)
 ROLL_RETRY_S = 600
+ROLL_RETRY_FAST_S = (90, 180, 300)   # первые повторы быстрые: после перезапуска платформы фид исполнителя прогревается за секунды (2026-11-02 D-20261102-1: P3 через 3 с после старта ctl)
+
+
+def _mmss(s):
+    s = int(s)
+    return "%d мин" % (s // 60) if s % 60 == 0 else "%d:%02d мин" % (s // 60, s % 60)
+
+
+def roll_retry_s(tries):
+    """Пауза до следующей попытки автостарта по номеру неудачной попытки (0 = первая): 90, 180, 300 с, дальше ROLL_RETRY_S."""
+    t = max(0, int(tries or 0))
+    return ROLL_RETRY_FAST_S[t] if t < len(ROLL_RETRY_FAST_S) else ROLL_RETRY_S
 
 class Reject(Exception):
     def __init__(self, code, data=None):
@@ -569,12 +581,13 @@ class Ctl(object):
         ok, _msg, args = protocol.validate_args("day.start", a)
         if not ok:
             return None
-        # ждём старта: если попытка отклонится (в том числе в фоновом потоке старта), ctl повторит через ROLL_RETRY_S, пока платформа остановлена (2026-11-01: день не стартовал из-за P15)
+        # ждём старта: если попытка отклонится (в том числе в фоновом потоке старта), ctl повторит через roll_retry_s(tries), пока платформа остановлена (2026-11-01: день не стартовал из-за P15)
+        wait = roll_retry_s(tries)
         ctlstate.write_json(paths.control_dir(ROLL_FILE, root=self.root), {"args": {k: a.get(k) for k in ("mode", "session", "allow_amber", "team") if a.get(k) is not None},
-                                                                          "next": round(self.now() + ROLL_RETRY_S, 1), "tries": tries + 1})
+                                                                          "next": round(self.now() + wait, 1), "tries": tries + 1})
         req = self.requirements("day.start", args)
         if req["blocked"] or exec_cfg.kill_state(self.root) is not None:
-            self.banner = {"level": "warn", "text": "Paper-день закрыт по концу дня, следующий не запущен: есть запрет (см. проверки старта); повтор через %d мин" % (ROLL_RETRY_S // 60), "day_report": None}
+            self.banner = {"level": "warn", "text": "Paper-день закрыт по концу дня, следующий не запущен: есть запрет (см. проверки старта); повтор через %s" % _mmss(wait), "day_report": None}
             return None
         args["accepted"] = sorted(w["id"] for w in req["warnings"])
         cmd = {"id": "K-%s-%s" % (time.strftime("%Y%m%dT%H%M%S", time.gmtime(self.now())), uuid.uuid4().hex[:6]), "action": "day.start", "args": args, "src": "auto", "sess": None}
@@ -583,7 +596,7 @@ class Ctl(object):
         except Reject as e:
             res = {"status": "rejected", "code": e.code}
         if isinstance(res, dict) and res.get("status") in ("rejected", "failed"):
-            self.banner = {"level": "warn", "text": "Автостарт следующего paper-дня отклонён (%s): повтор через %d мин или кнопка «Старт»" % (res.get("code"), ROLL_RETRY_S // 60), "day_report": None}
+            self.banner = {"level": "warn", "text": "Автостарт следующего paper-дня отклонён (%s): повтор через %s или кнопка «Старт»" % (res.get("code"), _mmss(wait)), "day_report": None}
         return res
 
     def downgrade(self, bad):

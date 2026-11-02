@@ -7,7 +7,7 @@ from unittest import mock
 import _bootstrap  # noqa: F401
 import _lc
 from test_lifecycle_close import audit, auditor, policy
-from tb.control import ctlstate, lifecycle
+from tb.control import ctlstate, handlers, lifecycle
 from tb.core import exec_cfg, session
 from tb.lifecycle import api, days
 
@@ -207,16 +207,38 @@ class TestRealLifecycleViaCtl(Base):
         self.assertIn("Автостарт", (self.c.banner or {}).get("text", ""))
         pend = self.e.r("state/control/auto_roll.json")                            # ждём старта: повтор переживает перезапуск ctl
         self.assertEqual((pend["args"]["mode"], pend["args"]["allow_amber"], pend["tries"]), ("paper", True, 1))
+        self.assertAlmostEqual(pend["next"] - self.e.t[0], handlers.roll_retry_s(0), delta=5.0)   # первый повтор быстрый (90 с): фид после рестарта прогревается за секунды
         self.e.advance_t(60)
         self.e.ready()
         self.c.watch()
-        self.assertEqual(self.plat()["state"], "stopped")                           # до повтора 10 мин
-        self.e.advance_t(600)
+        self.assertEqual(self.plat()["state"], "stopped")                           # до первого повтора ещё ~30 с
+        self.e.advance_t(40)
         self.e.ready()
         self.c.watch()
         self.assertEqual((self.plat()["state"], self.plat()["mode"]), ("running", "paper"))
         self.c.watch()
         self.assertFalse(self.e.exists("state/control/auto_roll.json"))             # день идёт: ожидание снято
+
+    def test_paper_roll_retry_backoff_grows(self):
+        """Повторы автостарта: 90, 180, 300 с, затем 10 мин; каждая неудача пишет tries+1 и следующую паузу."""
+        self.assertEqual([handlers.roll_retry_s(i) for i in range(5)], [90, 180, 300, 600, 600])
+        self.e.w("config/lifecycle.json", {"preflight": {"require_supervisor": False}, "max_day_hours": 1})
+        self.start()
+        self.e.brain.avail = False
+        self.e.advance_t(3700)
+        self.c.watch()
+        api._LAST_CLOSE.clear()
+        self.e.advance_t(3)
+        self.c.watch()
+        for i in range(1, 4):
+            pend = self.e.r("state/control/auto_roll.json")
+            self.assertEqual(pend["tries"], i)
+            self.e.advance_t(handlers.roll_retry_s(i - 1) + 1)
+            self.c.watch()
+            self.assertEqual(self.plat()["state"], "stopped")
+        pend = self.e.r("state/control/auto_roll.json")
+        self.assertEqual(pend["tries"], 4)
+        self.assertAlmostEqual(pend["next"] - self.e.t[0], 600, delta=5.0)
 
     def test_kill_halts_day_and_writes_emergency_report(self):
         day = self.start()
