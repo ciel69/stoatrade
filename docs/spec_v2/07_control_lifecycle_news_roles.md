@@ -89,7 +89,7 @@ state/llm_calls.jsonl        учёт каждого вызова LLM           
 | `intel.refresh` | `source` или `all` | нет | intel |
 | `notify.test` | нет | нет | lifecycle |
 | `platform.shutdown` | нет | да; выключено по умолчанию | ctl |
-Снятие KILL (`exec resume`) из дашборда НЕ предусмотрено (`control.allow_clear_kill_from_dash=false`); только `./tb exec resume` владельца (решение: разблокировка = осознанное действие в терминале после разбора причины).
+Снятие KILL: по умолчанию только `./tb exec resume` владельца (`control.allow_clear_kill_from_dash=false`). Решение владельца 2026-11-02 (меняет прежнее «из дашборда не предусмотрено»): в новом дашборде (dash2, не в старом) есть действие ctl `kill.clear`, включается тем же флагом `allow_clear_kill_from_dash=true` (выключен: `E_DISABLED`), только в расширенном режиме (`auth.dash2_full`). Предусловия: исполнитель жив, день не идёт и не закрывается, стоп на бирже у каждой позиции (при flatten позиций нет), для live все жёсткие ворота старта live (кроме H1 и H8); всегда challenge -> nonce, для live ещё фраза; аудит с причиной и режимом (`tb.control.killclear`, `docs/CONTROL.md`).
 
 Результат (`state/control/_outbox/<id>.json`, ctl пишет атомарно, хранит 7 суток):
 ```json

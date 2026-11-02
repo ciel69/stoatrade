@@ -74,7 +74,11 @@ CODES = {
 ACTIONS = ("challenge", "day.start", "day.stop", "stop.emergency", "kill.set", "mode.set", "risk.set", "carry.decide", "report.ack", "day.resume",
            "brain.use", "brain.rollback", "brain.reload", "intel.refresh", "notify.test", "notify.set", "platform.shutdown",
            "llm.provider", "brain.profile", "brain.role", "exchange.set")
-NO_NONCE_ACTIONS = ("challenge", "day.stop", "day.resume", "kill.set", "stop.emergency", "report.ack", "intel.refresh", "notify.test", "notify.set", "brain.reload")
+# действия только нового дашборда (решение владельца 2026-11-02): в ACTIONS их нет, поэтому старый дашборд (ctlweb: client.ACTIONS) и CLI `control send` их не принимают;
+# ctl принимает и проверяет их по ALL_ACTIONS. Включает флаг control.allow_clear_kill_from_dash (по умолчанию false -> E_DISABLED).
+DASH2_ACTIONS = ("kill.clear",)
+ALL_ACTIONS = ACTIONS + DASH2_ACTIONS
+NO_NONCE_ACTIONS =("challenge", "day.stop", "day.resume", "kill.set", "stop.emergency", "report.ack", "intel.refresh", "notify.test", "notify.set", "brain.reload")
 
 # категории уведомлений ОС (WP-N): ключ -> подпись; критичные по умолчанию обходят тихие часы
 NOTIFY_CATEGORIES = (("day_start", "Старт дня"), ("day_report", "Итог дня"), ("emergency", "Аварийная остановка / KILL"),
@@ -253,7 +257,7 @@ def validate_args(action, args):
             return False, "source", {}
     elif action == "challenge":
         inner = a.get("action")
-        if inner not in ACTIONS or inner == "challenge":
+        if inner not in ALL_ACTIONS or inner == "challenge":
             return False, "action: неизвестное действие", {}
         ok, msg, ia = validate_args(inner, a.get("args") or {})
         if not ok:
@@ -263,7 +267,7 @@ def validate_args(action, args):
         ok, msg, a = validate_notify(a)
         if not ok:
             return False, msg, {}
-    elif action in ("notify.test", "platform.shutdown", "day.resume"):
+    elif action in ("notify.test", "platform.shutdown", "day.resume", "kill.clear"):
         a = {}
     else:
         return False, "неизвестное действие", {}
@@ -282,7 +286,7 @@ def validate_command(cmd, max_bytes=MAX_COMMAND_BYTES):
         return False, "E_ARGS"
     if not isinstance(cmd.get("mac"), str) or not re.match(r"^[0-9a-f]{64}$", cmd["mac"]):
         return False, "E_MAC"
-    if cmd.get("action") not in ACTIONS:
+    if cmd.get("action") not in ALL_ACTIONS:
         return False, "E_UNKNOWN"
     for k in ("nonce", "phrase_hash", "sess"):
         v = cmd.get(k)

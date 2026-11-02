@@ -24,7 +24,7 @@ export function sortNodes(nodes: SysNode[]): SysNode[] {
 
 /** Короткий вывод для шапки страницы: что с платформой и на что смотреть. */
 export function verdict(s: SystemSnapshot): { title: string; detail: string } {
-  if (s.kill) return { title: 'Аварийная остановка активна', detail: s.kill.reason ? `Причина: ${s.kill.reason}. Снять: ./tb exec resume в терминале.` : 'Снять: ./tb exec resume в терминале.' }
+  if (s.kill) return { title: 'Аварийная остановка активна', detail: s.kill.reason ? `Причина: ${s.kill.reason}. Снять: на странице «Система · Управление» или ./tb exec resume в терминале.` : 'Снять: на странице «Система · Управление» или ./tb exec resume в терминале.' }
   const bad = s.nodes.filter((n) => n.level === 'bad' || n.level === 'warn')
   const title = s.level === 'ok' ? 'Всё работает' : s.level === 'warn' ? 'Есть замечания' : 'Нужно внимание'
   const detail = bad.length ? `Проверьте: ${bad.map((n) => n.label).join(', ')}.` : s.warnings.find((w) => w.text)?.text ?? 'Узлы отвечают, данные свежие.'

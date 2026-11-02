@@ -135,6 +135,25 @@ export const useControlStore = defineStore('control', () => {
     if (ctl.value) ctl.value = { ...ctl.value, platform: { ...ctl.value.platform, mode: running ? 'testnet' : 'paper' } }
   }
 
+  /** Отладка снятия аварийной остановки (?kill=mock|mock-live|mock-blocked|mock-off): платформа остановлена аварийно, KILL активен (live: режим live). off: кнопка выключена в настройках платформы. */
+  function mockKill(live: boolean, off = false): void {
+    mock('pick')
+    if (!ctl.value) return
+    ctl.value = {
+      ...ctl.value, kill: { flatten: false, reason: 'ручная остановка' }, clear_kill: !off,
+      platform: { ...ctl.value.platform, state: 'halted', mode: live ? 'live' : 'paper', day_id: null, trading: false, health: 'red' },
+    }
+  }
+
+  /** Отладка: через несколько секунд после снятия «сервер» убирает KILL, платформа остановлена (так обновляется тема ctl). */
+  function mockKillCleared(delayMs = 2500): void {
+    if (!mocked) return
+    setTimeout(() => {
+      if (!ctl.value) return
+      ctl.value = { ...ctl.value, kill: null, platform: { ...ctl.value.platform, state: 'stopped', health: 'green' } }
+    }, delayMs)
+  }
+
   /** Отладка: «сервер» применяет смену уровня или режима через несколько секунд, как обновляется тема ctl. */
   function mockApply(p: { level?: number; mode?: string }, delayMs = 2500): void {
     if (!mocked) return
@@ -154,5 +173,5 @@ export const useControlStore = defineStore('control', () => {
     dialogOpen.value = true
   }
 
-  return { ctl, hello, dialogOpen, openDialog, phase, mode, challenge, error, pending, button, start, check, reset, mock, mockPlatform, mockApply, applyCtl, applyHello, applyResult }
+  return { ctl, hello, dialogOpen, openDialog, phase, mode, challenge, error, pending, button, start, check, reset, mock, mockPlatform, mockApply, mockKill, mockKillCleared, applyCtl, applyHello, applyResult }
 })

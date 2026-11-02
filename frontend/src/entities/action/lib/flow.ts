@@ -1,5 +1,5 @@
-import { humanize, plainify } from '@/shared/lib'
-import type { ActionCommand, ActionHello, ActionSpec, Challenge, ChallengeGate, RiskItem } from '../model/types'
+import { humanize, plainify, type HumanCtx } from '@/shared/lib'
+import type { ActionCommand, ActionHello, ActionSpec, Challenge, ChallengeGate, KillInfo, RiskItem } from '../model/types'
 
 /**
  * Какие ключи подтверждения принимает схема действия на сервере. Сервер строго отбрасывает лишние ключи args, а часть действий отвергает их целиком,
@@ -57,9 +57,9 @@ export function isRisky(ch: Challenge | null | undefined): boolean {
 }
 
 /** Одна проверка или предупреждение простым языком: известные коды (H1–H8, W1–W9, P1–P16) переводит словарь, прочее проходит, только если уже написано простым русским. */
-export function plainLine(id: string | undefined, name: string | undefined, msg: string | undefined, ok: boolean, sev?: string): { title: string; todo: string } {
-  const h = humanize({ kind: 'gate', id: id ?? '', name, ok, msg, sev })
-  const known = !!id && /^[HWP]\d{1,2}$/.test(id) && !/не умеем объяснить/.test(h.title)
+export function plainLine(id: string | undefined, name: string | undefined, msg: string | undefined, ok: boolean, sev?: string, ctx?: HumanCtx): { title: string; todo: string } {
+  const h = humanize({ kind: 'gate', id: id ?? '', name, ok, msg, sev }, ctx)
+  const known = !!id && /^[HWPK]\d{1,2}$/.test(id) && !/не умеем объяснить/.test(h.title)
   if (known) return { title: h.title, todo: ok ? '' : h.todo }
   const own = plainify([name, msg].filter(Boolean).join(': '))
   if (own) return { title: own, todo: '' }
@@ -78,11 +78,21 @@ export function isIrreversible(action: string | undefined, args: Record<string, 
   return false
 }
 
+/** Последствия снятия аварийной остановки. Для реальных денег текст жёстче и стоит первым. Причина остановки в самом окне есть в строке «что изменится». */
+export function killRisks(kill: KillInfo): RiskItem[] {
+  const out: RiskItem[] = []
+  if (kill.mode === 'live') out.push({ id: 'kill-live', level: 'danger', text: 'Это реальные деньги: после снятия остановки можно будет запустить торговый день на реальные деньги. Подтверждайте, только если разобрались, почему остановка была включена.' })
+  out.push({ id: 'kill-open', level: 'warn', text: 'Защитная остановка перестанет действовать: платформа снова сможет открывать сделки. Торговля сама не начнётся, пока вы не запустите новый день.' })
+  if (kill.flatten) out.push({ id: 'kill-flat', level: 'amber', text: 'Остановка была с закрытием позиций: убедитесь, что на бирже не осталось лишнего.' })
+  return out
+}
+
 /** Последствия по-человечески, важное сверху: опасность, предупреждения, жёлтые проверки. noUndo: показать строку «нельзя откатить» (только для isIrreversible). */
 export function risksOf(ch: Challenge | null | undefined, noUndo = false): RiskItem[] {
   if (!ch) return []
   const out: RiskItem[] = []
   if (ch.danger && noUndo) out.push({ id: 'danger', level: 'danger', text: 'Это действие нельзя откатить одним нажатием: прочтите последствия ниже.' })
+  if (ch.kill?.active) out.push(...killRisks(ch.kill))
   for (const w of warnings(ch)) {
     const known = /^W\d$/.test(w.id) ? humanize({ kind: 'warning', id: w.id, msg: w.msg }) : null
     const own = known ? null : plainify(w.msg)
@@ -106,8 +116,10 @@ export function passedGates(ch: Challenge | null | undefined): ChallengeGate[] {
 
 /** Причины блокировки: непройденные условия простым языком и что делать; если сервер их не перечислил, понятный текст по коду ответа. */
 export function blockReasons(ch: Challenge | null | undefined, fallback: string): string[] {
+  // при снятии аварийной остановки непройденная проверка серьёзна всегда («это справка для бумаги» здесь неуместно)
+  const ctx: HumanCtx | undefined = ch?.kill ? { mode: 'live' } : undefined
   const list = failedGates(ch).map((g) => {
-    const l = plainLine(g.id, g.name, g.msg, false)
+    const l = plainLine(g.id, g.name, g.msg, false, undefined, ctx)
     return l.todo ? `${l.title}. ${l.todo}` : l.title
   })
   return list.length ? list : [plainify(fallback) ?? 'Условия для выполнения пока не выполнены.']

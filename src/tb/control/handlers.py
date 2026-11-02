@@ -10,7 +10,7 @@ import time
 import uuid
 
 from tb import paths
-from tb.control import audit, auth, brain_iface, ctlstate, gates, lifecycle, protocol, riskstore, settings_args, settings_ctl
+from tb.control import audit, auth, brain_iface, ctlstate, gates, killclear, lifecycle, protocol, riskstore, settings_args, settings_ctl
 from tb.core import exec_cfg
 from tb.platform import services as S
 
@@ -199,6 +199,11 @@ class Ctl(object):
         elif action == "platform.shutdown":
             req["danger"] = True
             req["phrases"] = ["ВЫКЛЮЧАЮ ПЛАТФОРМУ"]
+        elif action == "kill.clear":       # снятие защиты: всегда с nonce; для live ещё и фраза (её подставляет движок дашборда)
+            ev = killclear.evaluate(self.root, now, self.cfg, st)
+            req["gates"], req["blocked"], req["danger"] = ev["gates"], not ev["ok"], True
+            req["phrases"] = ["СНИМАЮ KILL LIVE %s" % ctlstate.utc_day(now)] if ev["mode"] == "live" else []
+            req["kill"] = {"reason": (ev["kill"] or {}).get("reason", ""), "flatten": bool((ev["kill"] or {}).get("flatten")), "mode": ev["mode"], "active": ev["active"]}
         return req
 
     def check_confirm(self, cmd, req):
@@ -225,7 +230,7 @@ class Ctl(object):
             return self.h_challenge(cmd)
         if a == "platform.shutdown" and not self.cfg.get("allow_shutdown"):
             raise Reject("E_DISABLED")
-        handler = {"day.start": self.h_day_start, "day.stop": self.h_day_stop, "stop.emergency": self.h_kill, "kill.set": self.h_kill, "mode.set": self.h_mode_set,
+        handler = {"kill.clear": self.h_kill_clear,"day.start": self.h_day_start, "day.stop": self.h_day_stop, "stop.emergency": self.h_kill, "kill.set": self.h_kill, "mode.set": self.h_mode_set,
                    "risk.set": self.h_risk_set, "carry.decide": self.h_pass, "report.ack": self.h_pass, "day.resume": self.h_resume, "notify.test": self.h_pass, "notify.set": self.h_notify_set,
                    "brain.use": self.h_brain, "brain.rollback": self.h_brain, "brain.reload": self.h_brain, "intel.refresh": self.h_intel,
                    "platform.shutdown": self.h_shutdown}.get(a)
@@ -237,12 +242,16 @@ class Ctl(object):
 
     def h_challenge(self, cmd):
         inner, iargs = cmd["args"]["action"], cmd["args"]["args"]
+        if inner == "kill.clear":
+            self.kill_clear_precheck()
         req = self.requirements(inner, iargs)
         data = {"action": inner, "danger": req["danger"], "phrases": req["phrases"], "gates": req["gates"], "warnings": req["warnings"], "blocked": req["blocked"],
                 "expires_in": int(self.cfg["nonce_ttl_s"]), "min_delay": int(self.cfg["min_delay_s"]), "nonce": None}
         if inner == "day.start" and iargs.get("mode") != "live" and not req["blocked"]:
             pv = lifecycle.preflight_preview(self.root, dict(iargs), self.now())
             data["pre_amber"] = (pv or {}).get("amber") or []         # жёлтые предстартовые проверки: окно «Старт» просит принять каждую (allow_amber + accepted)
+        if inner == "kill.clear":
+            data["kill"] = req.get("kill")
         if inner == "day.start" and self.platform()["state"] != "stopped":
             return self.finish(cmd, "rejected", "E_STATE", data)
         if req["blocked"]:
@@ -394,6 +403,26 @@ class Ctl(object):
             self.check_confirm(cmd, req)
         self.apply_kill(args.get("flatten"), args.get("reason") or "emergency")
         return self.finish(cmd, "done", "OK", {"flatten": bool(args.get("flatten"))})
+
+    def kill_clear_precheck(self):
+        """Флаг читается заново при каждом обращении (выключение вступает в силу сразу). -> Reject(E_DISABLED | E_STATE)."""
+        if ctlstate.load_cfg(self.root).get("allow_clear_kill_from_dash") is not True:       # строго true: "true", 1, "yes" не включают
+            raise Reject("E_DISABLED")
+        if exec_cfg.kill_state(self.root) is None:
+            raise Reject("E_STATE", {"why": "no_kill"})
+
+    def h_kill_clear(self, cmd):
+        """Снятие KILL из нового дашборда (решение владельца 2026-11-02). То же действие, что `./tb exec resume` (exec_cfg.clear_kill), но только после предусловий
+        killclear.evaluate (исполнитель жив, день не идёт, стоп на бирже у каждой позиции; live: все жёсткие ворота старта) и подтверждения: nonce всегда, для live ещё фраза."""
+        self.kill_clear_precheck()
+        req = self.requirements("kill.clear", cmd["args"])
+        if req["blocked"]:
+            raise Reject("E_GATE", {"gates": [g for g in req["gates"] if not g["ok"]] or req["gates"]})
+        self.check_confirm(cmd, req)
+        info = req["kill"]
+        was = exec_cfg.clear_kill(self.root)
+        note = ("KILL снят; причина: %s; flatten=%s" % (info["reason"] or "-", "да" if info["flatten"] else "нет"))[:200]
+        return self.finish(cmd, "done", "OK", {"was_killed": bool(was), "mode": info["mode"]}, {"note": note, "mode": info["mode"]})
 
     def apply_kill(self, flatten, reason):
         """KILL на диске (если его создал не дашборд) и переход платформы в halted."""
@@ -642,7 +671,8 @@ class Ctl(object):
                 "team": {"live_team": bs.get("live_team"), "agent": bs.get("agent"), "profiles": bs.get("profiles") or {}, "available": brain_iface.available()},
                 "risk": {"level": rl["level"], "name": rl["name"], "source": rl["source"], "levels": riskstore.levels_list(self.root)},
                 "pending": [{"id": self.busy, "action": "day.start"}] if self.busy else [], "last": list(self.last), "banner": self.banner or lifecycle.banner(self.root),
-                "config": {"allow_shutdown": bool(self.cfg.get("allow_shutdown")), "nonce_ttl_s": self.cfg["nonce_ttl_s"], "min_delay_s": self.cfg["min_delay_s"],
+                "config": {"allow_shutdown": bool(self.cfg.get("allow_shutdown")), "allow_clear_kill": ctlstate.load_cfg(self.root).get("allow_clear_kill_from_dash") is True,
+"nonce_ttl_s": self.cfg["nonce_ttl_s"], "min_delay_s": self.cfg["min_delay_s"],
                            "min_type_s": self.cfg["min_type_s"]}}
 
     def write_status(self):

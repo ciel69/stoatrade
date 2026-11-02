@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { humanize } from './human'
-import { CODE_IDS, DECISION_CODES, STEP_NAMES, decisionReason, humanCode, stepLabel } from './human-codes'
-import { GATE_IDS, PRE_IDS, WARNING_IDS, h7Parts } from './human-gates'
+import { CODE_IDS, DECISION_CODES, STEP_NAMES, decisionReason, failureText, humanCode, stepLabel } from './human-codes'
+import { GATE_IDS, KILL_GATE_IDS, PRE_IDS, WARNING_IDS, gateName, h7Parts } from './human-gates'
 import { NODE_IDS } from './human-nodes'
 import { dayLabel } from './human-text'
 import type { Human, HumanCtx } from './human-types'
-import { ROLE_IDS, roleAbout, roleTitle } from './human-words'
+import { ROLE_IDS, actionName, roleAbout, roleTitle } from './human-words'
 
 /** Служебные следы, которых не должно быть в основном тексте: коды проверок и шагов, коды ответов, snake_case, имена файлов. */
 const CODE_LIKE = [/\b[HSWP]\d{1,2}\b/, /E_[A-Z_]+/, /\b[a-z]+_[a-z_]+\b/, /\.json/, /\.py\b/, /\bpid\b/i]
@@ -152,5 +152,30 @@ describe('роли мозга словами', () => {
     expect(roleAbout('some_new_role')).not.toContain('some_new_role')
     expect(roleTitle(null)).toBe('Мозг')
     expect(roleAbout(undefined)).toBe('')
+  })
+})
+
+describe('снятие аварийной остановки: проверки K1–K3 и отказы', () => {
+  it('идентификаторы, названия и действие', () => {
+    expect(KILL_GATE_IDS).toEqual(['K1', 'K2', 'K3'])
+    for (const id of KILL_GATE_IDS) expect(gateName(id)).toBeTruthy()
+    expect(actionName('kill.clear')).toBe('Снятие аварийной остановки')
+  })
+  it('каждая проверка объясняется словами: пройдена и не пройдена, не пройденная не справка', () => {
+    for (const id of KILL_GATE_IDS) {
+      for (const ok of [true, false]) {
+        const h = humanize({ kind: 'gate', id, ok, msg: 'исполнитель жив, режим paper' })
+        expect(h.title).toBeTruthy()
+        expect(h.title).not.toMatch(/не умеем объяснить/)
+        clean(h)
+      }
+      expect(humanize({ kind: 'gate', id, ok: false, msg: 'x' }).tone).not.toBe('info')
+    }
+  })
+  it('отказы снятия по-человечески: отключено, условия, состояние, подтверждение', () => {
+    expect(failureText('E_DISABLED')).toMatch(/отключено в настройках/)
+    expect(failureText('E_GATE')).toMatch(/Условия безопасности/)
+    expect(failureText('E_STATE')).toMatch(/нельзя/)
+    expect(failureText('E_NONCE')).toMatch(/подтвердить заново/)
   })
 })

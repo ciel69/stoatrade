@@ -92,7 +92,8 @@ class TestWhitelist(Base):
     def test_dangerous_and_unknown_actions_never_reach_the_queue(self):
         cases = [("day.start", {"mode": "live", "session": "day"}), ("risk.set", {"level": 5}), ("kill.set", {"flatten": True, "reason": "x"}),
                  ("stop.emergency", {"flatten": True}), ("mode.set", {"mode": "live"}), ("brain.use", {"profile": "ds-pro", "all": True}), ("platform.shutdown", {}),
-                 ("llm.provider", {"op": "key_clear", "id": "x"}), ("exchange.set", {"op": "mode", "id": "bybit", "mode": "live"}), ("report.ack", {})]
+                 ("llm.provider", {"op": "key_clear", "id": "x"}), ("exchange.set", {"op": "mode", "id": "bybit", "mode": "live"}), ("report.ack", {}),
+                 ("kill.clear", {})]           # снятие KILL только в расширенном режиме
         for action, args in cases:
             for kind in ("command", "challenge"):
                 r = self.b.handle(WS, self.msg(kind=kind, action=action, args=args))
@@ -230,6 +231,13 @@ class TestFull(FullBase):
         self.assertEqual(sorted((c["action"], c["args"].get("level")) for c in q if c["action"] == "risk.set"), [("risk.set", 5)])
         rows = [(r["action"], r["src"], r["code"]) for r in self.audit_rows()]
         self.assertIn(("risk.set", "dash2", "OK"), rows)
+
+    def test_kill_clear_is_full_only_and_not_in_base(self):
+        self.assertIn("kill.clear", self.info["modes"])
+        self.assertIn("kill.clear", ctlbridge.FULL_ACTIONS)
+        self.assertEqual(ctlbridge.CtlBridge.allowed_full("kill.clear", {"force": True, "applied": True}), ({}, None))
+        self.assertEqual(ctlbridge.CtlBridge.allowed("kill.clear", {}), (None, "E_ELEVATE"))
+        self.assertEqual(ctlbridge.CtlBridge.allowed_full("platform.shutdown", {}), (None, "E_ELEVATE"))
 
     def test_allowed_full_filters_args(self):
         f = ctlbridge.CtlBridge.allowed_full
@@ -445,6 +453,66 @@ class TestFullPipeline(FullBase):
         r = self.b.handle(WS, self.msg(kind="challenge", action="risk.set", args={"level": 9}))
         self.assertIn("gates", r["data"], r)
         self.assertIn("expires_in", r["data"])
+
+
+class TestFullKillClear(FullBase):
+    """Снятие KILL через мост и настоящий ctl (фейковые файлы во временном корне): флаг, challenge с причиной, nonce, снятие, отказ при позиции без стопа."""
+
+    def setUp(self):
+        super().setUp()
+        self.c = self.e.ctl(clock=time.time)
+        self.e.good_exec(profile="paper", now=time.time())
+        self.stop = threading.Event()
+        _ctl.pump(self.c, self.stop)
+        self.addCleanup(self.stop.set)
+        self.flag(True)
+        from tb.core import exec_cfg
+        self.exec_cfg = exec_cfg
+        exec_cfg.set_kill(False, "тест моста", self.e.root)
+
+    def flag(self, on):
+        self.e.w("config/control.json", {"version": 1, "auth": {"mode": "open_local", "dash2_full": True}, "allow_clear_kill_from_dash": on})
+
+    def final(self, cid):
+        for _ in range(100):
+            res = self.b.result_of(cid)
+            if res:
+                return res
+            time.sleep(0.05)
+        return None
+
+    def test_flag_off_is_disabled_and_kill_stays(self):
+        self.flag(False)
+        r = self.b.handle(WS, self.msg(kind="challenge", action="kill.clear", args={}))
+        self.assertEqual((r["ok"], r["code"]), (False, "E_DISABLED"))
+        self.assertIsNotNone(self.exec_cfg.kill_state(self.e.root))
+
+    def test_position_without_stop_blocks_with_checks(self):
+        self.e.w("runtime/exec_snapshot.json", {"ts_epoch": time.time(), "positions": [{"sym": "ETHUSDT", "qty": 1}], "orders": []})
+        r = self.b.handle(WS, self.msg(kind="challenge", action="kill.clear", args={}))
+        self.assertEqual((r["ok"], r["code"]), (False, "E_GATE"))
+        self.assertIn("H2", [g["id"] for g in r["data"]["gates"] if not g["ok"]])
+        self.assertNotIn("nonce", r["data"])
+
+    def test_full_flow_clears_kill_and_audits_reason(self):
+        ch = self.b.handle(WS, self.msg(kind="challenge", action="kill.clear", args={}))
+        self.assertTrue(ch["ok"], ch)
+        d = ch["data"]
+        self.assertEqual((d["danger"], d["phrases"], d["kill"]["reason"]), (True, [], "тест моста"))
+        time.sleep(d["min_delay"] + 0.3)
+        r = self.b.handle(WS, self.msg(action="kill.clear", args={}, nonce=d["nonce"]))
+        self.assertTrue(r["ok"] and r.get("accepted_id"), r)
+        res = self.final(r["accepted_id"])
+        self.assertEqual((res["status"], res["code"]), ("done", "OK"), res)
+        self.assertIsNone(self.exec_cfg.kill_state(self.e.root))
+        rows = [x for x in audit.tail(self.e.root, 100) if x["action"] == "kill.clear" and x["result"] == "ok"]
+        self.assertTrue(any("тест моста" in x.get("note", "") and x.get("mode") == "paper" for x in rows), rows)
+
+    def test_no_nonce_is_refused_by_ctl(self):
+        r = self.b.handle(WS, self.msg(action="kill.clear", args={}))
+        res = self.final(r["accepted_id"]) if r.get("accepted_id") else r
+        self.assertEqual(res["code"], "E_NONCE")
+        self.assertIsNotNone(self.exec_cfg.kill_state(self.e.root))
 
 
 @unittest.skipUnless(HAVE_WS, "нужна библиотека websockets")

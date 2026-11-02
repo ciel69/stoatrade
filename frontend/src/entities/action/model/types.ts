@@ -41,8 +41,17 @@ export interface ChallengePreAmber {
   msg?: string
 }
 
+/** Что платформа знает о снимаемой аварийной остановке (только у kill.clear): причина, закрывались ли позиции, режим исполнителя (live, paper, testnet, observe). */
+export interface KillInfo {
+  active?: boolean
+  reason?: string
+  flatten?: boolean
+  mode?: string
+}
+
 /** Данные challenge: условия, предупреждения, фразы и nonce, которые интерфейс сам возвращает в команду. */
 export interface Challenge {
+  kill?: KillInfo | null
   action?: string
   danger?: boolean
   gates?: ChallengeGate[]

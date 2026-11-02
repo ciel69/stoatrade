@@ -25,6 +25,8 @@ export interface CtlSnapshot {
   platform: { state: PlatformState | null; mode: string | null; session: string | null; health: string | null; day_id: string | null; trading: boolean | null; observe: boolean | null }
   step: { name: string; i?: number; n?: number } | null
   kill: { flatten: boolean; reason: string } | null
+  /** снятие аварийной остановки кнопкой включено владельцем (флаг control.allow_clear_kill_from_dash); без него остаётся только команда в терминале */
+  clear_kill?: boolean
   risk: { level: number | null; name: string | null }
   busy: boolean
   checks: CtlCheck[]

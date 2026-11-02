@@ -126,7 +126,7 @@ export function buttonKind(ctl: CtlSnapshot | null, enabled: boolean): { kind: B
   if (!ctl) return { kind: 'unavailable', why: 'Платформа пока не прислала данные.' }
   if (!enabled) return { kind: 'unavailable', why: 'Запуск и остановка из этого дашборда выключены. Включает их владелец в настройках дашборда.' }
   if (!ctl.alive) return { kind: 'unavailable', why: 'Служба управления не отвечает. Платформа, возможно, не запущена: запустите её в терминале.' }
-  if (ctl.kill) return { kind: 'blocked', why: 'Включена аварийная остановка. Снять её можно только в терминале платформы.' }
+  if (ctl.kill) return { kind: 'blocked', why: 'Включена аварийная остановка. Снять её можно на странице «Система · Управление» (если кнопка включена) или командой в терминале платформы.' }
   const st = ctl.platform.state
   if (st === 'starting') return { kind: 'starting', why: null }
   if (st === 'running') return { kind: 'running', why: null }

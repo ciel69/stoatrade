@@ -397,13 +397,17 @@ class TestModeAndKill(Base):
         self.assertEqual(r["code"], "OK")
         self.assertTrue(exec_cfg.kill_state(self.e.root)["flatten"])
 
-    def test_no_clear_kill_action_exists(self):
+    def test_clear_kill_action_is_dash2_only(self):
+        """Снятие KILL (решение владельца 2026-11-02) есть только как действие нового дашборда: в общем списке ACTIONS (старый дашборд, CLI) его нет;
+        подробные проверки: test_control_clear_kill.py."""
         from tb.control import protocol
         for a in protocol.ACTIONS:
             if a == "day.resume":          # возобновление торгового флага дня (не KILL): отдельный тест в test_lifecycle_ctl
                 continue
             self.assertNotIn("resume", a)
             self.assertNotIn("clear", a)
+        self.assertEqual(protocol.DASH2_ACTIONS, ("kill.clear",))
+        self.assertIn("kill.clear", protocol.ALL_ACTIONS)
 
 
 class TestRisk(Base):

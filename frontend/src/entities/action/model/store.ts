@@ -8,7 +8,7 @@ import type { KeyOutcome } from '../lib/key'
 import type { ActionFinal, ActionHello, ActionPhase, ActionResult, ActionSpec, ActionToast, Challenge } from './types'
 
 type Transport = (payload: Record<string, unknown>) => boolean
-export type ActionMock = 'confirm' | 'blocked' | 'done' | 'fail' | 'toast' | 'full'
+export type ActionMock = 'confirm' | 'blocked' | 'done' | 'fail' | 'toast' | 'full' | 'kill' | 'kill-live' | 'kill-blocked'
 
 const ACTIVE: ReadonlySet<ActionPhase> = new Set(['checking', 'confirm', 'blocked', 'sending', 'waiting'])
 const MAX_TOASTS = 3
@@ -229,6 +229,16 @@ export const useActionStore = defineStore('action', () => {
       { id: 'G1', name: 'Исполнитель жив', ok: true }, { id: 'G2', name: 'Сверка свежая', ok: true, msg: '4 с назад' },
       { id: 'G3', name: 'Чистый KILL', ok: true }, { id: 'G4', name: 'Связь с биржей', ok: true },
     ]
+    if (action === 'kill.clear') {
+      // снятие KILL: проверки K1–K2 и H2 (в live ещё H3–H7); live требует фразу, блокировка: позиция без стопа
+      const live = kind === 'kill-live'
+      const kill = { active: true, reason: 'ручная остановка', flatten: false, mode: live ? 'live' : 'paper' }
+      const ok = (id: string, name: string, msg: string) => ({ id, name, ok: true, msg })
+      const head = [ok('K1', 'Исполнитель на связи', 'исполнитель жив'), ok('K2', 'День не идёт и не закрывается', 'платформа остановлена')]
+      if (kind === 'kill-blocked') return { blocked: true, danger: false, warnings: [], pre_amber: [], kill, gates: [...head, { id: 'H2', name: 'Стоп на бирже у каждой позиции', ok: false, msg: 'позиции без стопа на бирже: ETHUSDT' }] }
+      const tail = [ok('H2', 'Стоп на бирже у каждой позиции', 'позиций 2, стоп у каждой'), ...(live ? [ok('H3', 'Связь', 'в порядке'), ok('H4', 'Сверка', 'расхождений нет'), ok('H5', 'Лимит убытка', 'убыток 0.00 из 1.00 USDT'), ok('H6', 'Мозг', 'отвечает'), ok('H7', 'Настройки защиты', 'в порядке')] : [])]
+      return { danger: true, blocked: false, warnings: [], pre_amber: [], kill, gates: [...head, ...tail], phrases: live ? ['СНИМАЮ KILL LIVE 2026-11-02'] : [], nonce: 'mock', min_delay: 2, expires_in: 60 }
+    }
     if (kind === 'blocked') {
       return { blocked: true, gates: [{ id: 'G1', name: 'Исполнитель жив', ok: true }, { id: 'G2', name: 'Сверка свежая', ok: false, msg: 'последняя сверка 3 минуты назад' }, { id: 'G3', name: 'Нет открытых позиций', ok: false, msg: 'открыта позиция BTCUSDT, сначала закройте её' }], warnings: [], pre_amber: [], danger: false }
     }
@@ -302,7 +312,7 @@ export const useActionStore = defineStore('action', () => {
       const base = { id: p.id as string, action: p.action as string }
       setTimeout(() => {
         if (p.kind === 'challenge') {
-          applyResult(live({ ...base, kind: 'challenge', ok: true, code: kind === 'blocked' ? 'E_GATE' : 'OK', msg: kind === 'blocked' ? 'условия не выполнены' : '', data: mockChallenge(kind, p.args as Record<string, unknown>, p.action as string) }))
+          applyResult(live({ ...base, kind: 'challenge', ok: true, code: kind === 'blocked' || kind === 'kill-blocked' ? 'E_GATE' : 'OK', msg: kind === 'blocked' || kind === 'kill-blocked' ? 'условия не выполнены' : '', data: mockChallenge(kind, p.args as Record<string, unknown>, p.action as string) }))
         } else {
           applyResult(live({ ...base, kind: 'command', ok: true, code: 'OK', msg: 'принято' }))
           setTimeout(() => applyFinal(live({ id: 'q1', rid: base.id, status: 'done', code: 'OK', msg: 'Выполнено (пример: на сервер ничего не отправлялось).' })), 700)
@@ -343,6 +353,13 @@ export const useActionStore = defineStore('action', () => {
     transport = mockTransport(calm ? 'full' : 'confirm')
   }
 
+  /** Отладка снятия аварийной остановки (?kill=mock|mock-live|mock-blocked|mock-off): доступно kill.clear, ответы изображает mockTransport; на сервер ничего не уходит. */
+  function mockKill(kind: Extract<ActionMock, 'kill' | 'kill-live' | 'kill-blocked'>): void {
+    mocked = true
+    hello.value = { enabled: true, csrf: 'mock', full: true, modes: ['kill.clear', 'kill.set', 'day.start', 'day.stop'] }
+    transport = mockTransport(kind)
+  }
+
   /** Отладка страницы уведомлений (?notify=mock...): доступны notify.set и notify.test, безрисковый поток; на сервер ничего не уходит. */
   function mockNotify(): void {
     mocked = true
@@ -364,5 +381,5 @@ export const useActionStore = defineStore('action', () => {
     transport = mockTransport('full')
   }
 
-  return { hello, phase, spec, challenge, receivedAt, error, errorDetails, resultText, riskyRun, toasts, active, risks, start, can, run, sendKey, accept, recheck, cancel, reset, dismissToast, mock, mockEdit, mockNotify, mockDay, mockNews, applyHello, applyResult, applyFinal }
+  return { hello, phase, spec, challenge, receivedAt, error, errorDetails, resultText, riskyRun, toasts, active, risks, start, can, run, sendKey, accept, recheck, cancel, reset, dismissToast, mock, mockEdit, mockKill, mockNotify, mockDay, mockNews, applyHello, applyResult, applyFinal }
 })

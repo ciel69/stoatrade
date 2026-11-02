@@ -31,10 +31,11 @@ FINAL = ("done", "rejected", "failed", "expired")
 # Сессия соединения становится «full» (new_session уровня full), токен не нужен; подтверждения (nonce, фразы, шлюзы) остаются в силе: их проверяет ctl и CtlWeb.
 SRC = "dash2"                                         # пометка источника в аудите (audit.append обрезает до 8 символов)
 FULL_ACTIONS = ("day.start", "day.stop", "day.resume", "kill.set", "stop.emergency", "risk.set", "mode.set", "carry.decide", "brain.use", "brain.rollback",
-                "brain.reload", "brain.role", "brain.profile", "llm.provider", "exchange.set", "notify.set", "notify.test", "intel.refresh", "report.ack")
+                "brain.reload", "brain.role", "brain.profile", "llm.provider", "exchange.set", "notify.set", "notify.test", "intel.refresh", "report.ack",
+                "kill.clear")      # снятие KILL (решение владельца 2026-11-02): ctl сам проверяет флаг allow_clear_kill_from_dash, предусловия и подтверждение; нет в BASE (open) и в старом дашборде
 # какие ключи аргументов пропускаем до validate_args (лишние отбрасываются; для настроечных и notify.set строгая проверка у самого validate_args)
 FULL_KEYS = {
-    "day.start": DAY_KEYS, "day.stop": (), "day.resume": (), "kill.set": ("flatten", "reason"), "stop.emergency": ("flatten", "reason"),
+    "day.start": DAY_KEYS, "day.stop": (), "day.resume": (), "kill.clear": (), "kill.set": ("flatten", "reason"), "stop.emergency": ("flatten", "reason"),
     "risk.set": ("level", "accepted"), "mode.set": ("mode",), "carry.decide": ("plan", "decision"),
     "brain.use": ("team", "profile", "agent", "role", "accepted", "to", "from_config", "all"),
     "brain.rollback": ("team", "profile", "agent", "role", "accepted", "to", "from_config", "all"),
@@ -60,10 +61,22 @@ def clean(x, depth=0):
     return None
 
 
+class Web2(ctlweb.CtlWeb):
+    """CtlWeb нового дашборда: дополнительно знает действия только dash2 (protocol.DASH2_ACTIONS, сейчас kill.clear). У экземпляра старого дашборда `_norm` их не принимает
+    (E_UNKNOWN), поэтому там такого действия нет. Допускает их только мост, и только в расширенном режиме (allowed_full); остальной конвейер (CSRF, nonce, фразы) общий."""
+
+    def _norm(self, data):
+        action = data.get("action")
+        if action in protocol.DASH2_ACTIONS:
+            ok, _msg, args = client.validate_args(action, data.get("args") if data.get("args") is not None else {})
+            return (action, args, None) if ok else (None, None, "E_ARGS")
+        return ctlweb.CtlWeb._norm(self, data)
+
+
 class CtlBridge(object):
     def __init__(self, root=None, environ=None, clock=time.time):
         self.root, self.environ, self.clock = root, environ, clock
-        self.web = ctlweb.CtlWeb(root, environ)
+        self.web = Web2(root, environ)
         self.sess = {}                  # соединение -> (cookie, сессия CtlWeb)
 
     # ---- состояние входа
@@ -155,7 +168,7 @@ class CtlBridge(object):
         if kind == "challenge":
             d = obj.get("data") or {}
             if full:
-                out["data"] = clean({k: d.get(k) for k in ("action", "danger", "gates", "warnings", "blocked", "pre_amber", "expires_in", "min_delay", "phrases")})
+                out["data"] = clean({k: d.get(k) for k in ("action", "danger", "gates", "warnings", "blocked", "pre_amber", "expires_in", "min_delay", "phrases", "kill")})
                 n = d.get("nonce")
                 if isinstance(n, str) and 0 < len(n) <= 200:       # nonce нужен клиенту для подтверждения; привязан к соединению и аргументам, в аудит и логи не идёт
                     out["data"]["nonce"] = n
@@ -264,6 +277,8 @@ class CtlBridge(object):
     @staticmethod
     def allowed(action, args):
         """Белый список. -> (аргументы для CtlWeb, код отказа или None)."""
+        if action in protocol.DASH2_ACTIONS:
+            return None, "E_ELEVATE"                      # только расширенный режим (auth.dash2_full)
         if action not in client.ACTIONS or action == "challenge":
             return None, "E_UNKNOWN"
         args = args if isinstance(args, dict) else {}

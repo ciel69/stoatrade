@@ -3,6 +3,7 @@ import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useControlStore } from '@/entities/control'
 import { useSystemStore } from '@/entities/system'
+import { KillRelease } from '@/widgets/system/kill-release'
 import { PlatformHero } from '@/widgets/system/platform-hero'
 import { RiskLevel } from '@/widgets/system/risk-level'
 import { SystemLimits } from '@/widgets/system/system-limits'
@@ -33,7 +34,7 @@ function close(): void {
 
 <template>
   <main class="page">
-    <div class="w-hero"><PlatformHero :headline="summary.headline" /></div>
+    <div class="w-hero"><PlatformHero :headline="summary.headline" /><KillRelease /></div>
     <div class="w-risk"><RiskLevel /></div>
     <div class="w-nodes"><SystemNodes /></div>
     <div class="w-lim"><SystemLimits /></div>
@@ -47,6 +48,7 @@ function close(): void {
 <style scoped>
 .page { gap: var(--space-5); }
 .w-hero, .w-risk, .w-nodes, .w-lim, .w-more { min-width: 0; }
+.w-hero { display: grid; gap: var(--space-5); }        /* состояние и (при аварийной остановке) блок её снятия одной группой: ряды сетки на широком экране не сдвигаются */
 /* от 1500 px: состояние на всю ширину, под ним уровень риска, ниже слева узлы, справа подробности, под ними сессия, запас и капитал тремя колонками */
 @media (min-width: 1500px) {
   .page { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); column-gap: var(--space-5); align-items: start; }

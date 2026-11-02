@@ -730,6 +730,7 @@ def ctl(root=None, now=None):
             "platform": {k: plat.get(k) for k in ("state", "mode", "session", "health", "day_id", "trading", "observe")}, "step": ({k: step.get(k) for k in ("name", "i", "n")} if step else None),
             "kill": ({"flatten": bool(kill.get("flatten")), "reason": str(kill.get("reason") or "")[:80]} if kill and kill.get("active") else None),
             "risk": {"level": risk.get("level"), "name": risk.get("name")}, "busy": bool(st.get("pending")),
+            "clear_kill": (st.get("config") or {}).get("allow_clear_kill") is True,       # снятие KILL из дашборда включено флагом control.allow_clear_kill_from_dash (решение владельца)
             "checks": [{"id": c.get("id"), "name": str(c.get("name") or "")[:90], "sev": c.get("sev"), "ok": bool(c.get("ok")), "msg": str(c.get("msg") or "")[:160]}
                        for c in (st.get("checks") or []) if isinstance(c, dict)][:16],
             "banner": ({"level": banner.get("level"), "text": str(banner.get("text") or "")[:160]} if banner else None), "day": day,
