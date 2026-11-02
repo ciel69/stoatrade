@@ -10,6 +10,14 @@ import { NAV_GROUPS, isActive } from '@/shared/config'
  * Узкий экран: колонка скрыта, кнопка в левом верхнем углу выдвигает её поверх страницы, фон и Esc закрывают, переход по разделу закрывает сам.
  * Движение (animate): раскрытие и сворачивание редкое действие, ширина меняется за 200 мс ease-out, подписи проявляются opacity; на узком экране колонка выезжает transform.
  */
+/* Локап E (docs/brand/stoa/concept-2b-lockup.svg): знак на две строки, справа «Stoa» контурами и подпись «agentic trading» живым текстом 11 px.
+ * Всё в единицах слова: WORD px на единицу, краска S от CAP, база подписи BASE. Краска знака (25.5 из 32 ед.) встаёт ровно от верха S до базы подписи,
+ * отсюда размер коробки знака MARK ≈ 38.6 px; в CSS то же число в --mark. */
+const WORD = 0.86
+const CAP = 4.5
+const BASE = 40.3
+const MARK = (32 * (BASE - CAP) / 25.5) * WORD
+const TAGLINE = 'agentic trading'
 const KEY = 'tb.nav.collapsed'
 const read = (): boolean => {
   try { return localStorage.getItem(KEY) === '1' } catch { return false }
@@ -46,9 +54,9 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
   <div v-if="drawer" class="backdrop" @click="drawer = false" />
 
   <aside id="app-nav" class="nav" :class="{ collapsed, drawer }" aria-label="Разделы">
-    <div class="brand">
-      <UiLogo :size="30" />
-      <UiWordmark class="name" :height="17" />
+    <div class="brand" :style="{ '--mark': `${MARK}px` }">
+      <UiLogo :size="MARK" :stroke="2.7" />
+      <UiWordmark class="name" :unit="WORD" :stroke="3" :tagline="TAGLINE" :tagline-px="11" :tagline-base="BASE" />
       <button v-if="drawer" ref="closeBtn" type="button" class="icon-btn close" aria-label="Закрыть разделы" @click="drawer = false">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
       </button>
@@ -80,14 +88,23 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
 /* Плавающая карточка со скруглением и значками-плитками цвета раздела, как в боковой панели старого дашборда. */
 .nav {
   position: sticky; top: 12px; align-self: start; height: calc(100vh - 24px); width: 220px; margin: 12px 0 12px 12px; box-sizing: border-box; display: flex; flex-direction: column; gap: 24px;
-  padding: 20px 12px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 20px; box-shadow: var(--lift); overflow: hidden;
+  padding: 17px 12px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 20px; box-shadow: var(--lift); overflow: hidden;
   transition: width var(--dur-enter) var(--ease-out);
 }
 .nav.collapsed { width: 80px; }        /* пункт 48 (плитка 32 + поля по 8) в содержимом 54 (80 - рамка 2 - поля 24): по 3 px запаса с каждой стороны, чтобы рамка и фокус не резались */
 .nav.collapsed .action, .nav.collapsed .group { justify-items: center; }
 .nav.collapsed .item { width: 48px; box-sizing: border-box; }
-.brand { display: flex; align-items: center; gap: 10px; min-height: 34px; padding: 0 8px; }
+/* Локап E. В коробке знака 32×32 краска отступает от боков на 5.25 ед. (--inset) и от верха на 3.25 ед. (--inset-top), поэтому поля считаются от краски:
+ * левый край знака на 0.5 px левее плитки пункта (x = 8, свес круглой дуги), между краской знака и S 7 px. Вертикаль: верх слова (его viewBox начинается
+ * с краски S) опущен на --inset-top, так верх S совпадает с верхом знака, а база подписи (BASE) — с низом знака. Верх: поле 17 px, до краски ~21 px, как слева. */
+.brand { --mark: 38.64px; --inset: calc(var(--mark) * 5.25 / 32); --inset-top: calc(var(--mark) * 3.25 / 32); --pad: calc(8px - var(--inset) - 0.5px);
+  display: flex; align-items: flex-start; gap: calc(7px - var(--inset)); min-height: var(--mark); padding: 0 0 0 var(--pad); }
+.brand .name { margin-top: var(--inset-top); }
+.brand .close { align-self: center; }
 .brand :deep(svg) { flex: none; }
+.brand .logo { transition: transform var(--dur-enter) var(--ease-out); }
+/* свёрнутая: знак едет в центр колонки (содержимое 54 = 80 - рамка 2 - поля 24) вместе с изменением ширины, transform без перекладки */
+.nav.collapsed .brand .logo { transform: translateX(calc((54px - var(--mark)) / 2 - var(--pad))); }
 .name { color: var(--text); white-space: nowrap; transition: opacity var(--dur-enter) var(--ease-out); }
 .action { display: grid; }
 .action:empty { display: none; }
@@ -114,7 +131,6 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
 /* свёрнутая: подписи не только невидимы, но и не занимают места, иначе пункт шире колонки и его рамка обрезается */
 .nav.collapsed .name, .nav.collapsed .label { opacity: 0; width: 0; overflow: hidden; }
 .nav.collapsed .brand, .nav.collapsed .item { gap: 0; }
-.nav.collapsed .brand { justify-content: center; padding: 0; }
 .nav.collapsed .cap { opacity: 0; }
 .icon-btn { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; background: transparent; border: 0; border-radius: var(--radius-sm); color: var(--muted); cursor: pointer; transition: color var(--dur-fast) ease; }
 .fold { align-self: flex-end; }
@@ -132,11 +148,15 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
   .nav, .nav.collapsed { position: fixed; z-index: 41; top: 0; left: 0; bottom: 0; width: 248px; max-width: 86vw; height: auto; margin: 0; border-radius: 0 20px 20px 0; transform: translateX(-102%); transition: transform var(--dur-enter) var(--ease-out); box-shadow: none; }
   .nav.drawer { transform: none; box-shadow: 0 0 40px rgba(0, 0, 0, 0.45); }
   .nav.collapsed .name, .nav.collapsed .label, .nav.collapsed .cap { opacity: 1; }
+  .nav.collapsed .name, .nav.collapsed .label { width: auto; overflow: visible; }        /* выдвижная колонка всегда развёрнута, даже если на широком экране её свернули */
+  .nav.collapsed .brand { gap: calc(7px - var(--inset)); }
+  .nav.collapsed .item { gap: 12px; width: auto; }
+  .nav.collapsed .brand .logo { transform: none; }
   .fold { display: none; }
   .backdrop { display: block; position: fixed; z-index: 40; inset: 0; background: rgba(0, 0, 0, 0.5); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .nav, .name, .cap, .label, .chev, .tile { transition: none; }
+  .nav, .name, .cap, .label, .chev, .tile, .brand .logo { transition: none; }
   .badge-enter-from { transform: none; }
 }
 </style>

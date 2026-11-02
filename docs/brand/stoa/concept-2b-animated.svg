@@ -11,6 +11,6 @@
 @keyframes sb-fade{from{opacity:0}}
 @media (prefers-reduced-motion:reduce){.sb-h{animation:sb-fade 200ms ease both}}
   </style>
-  <path class="sb-h sb-t" d="M18 5H13A6 6 0 0 0 13 17"/>
-  <path class="sb-h sb-b" d="M19 15A6 6 0 0 1 19 27H14"/>
+  <path class="sb-h sb-t" d="M19.5 5H13A6 6 0 0 0 13 17"/>
+  <path class="sb-h sb-b" d="M19 15A6 6 0 0 1 19 27H12.5"/>
 </svg>
