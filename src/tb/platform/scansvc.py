@@ -2,7 +2,8 @@
 
 Оборачивает существующие hotscan (горячие монеты), ideawatch (будильник по идеям), outcomes и tradepath БЕЗ изменений их поведения и порогов
 (пороги берутся из config/platform.json, раздел "scan", и совпадают с умолчаниями hotscan). Вместо печати в stdout для Monitor события уходят в
-шину `core/bus` типом `scanner_signal` (kind: range_5m, turnover_surge, hot_enter, idea_near, idea_level, idea_invalidated, idea_tp, idea_expired):
+шину `core/bus` типом `scanner_signal` (kind: range_5m, turnover_surge, hot_enter, idea_near, idea_level, idea_invalidated, idea_tp, idea_expired, idea_stale):
+  - idea_stale: ревизия живой идеи (ideawatch, флаг stale_code): d.stale = причина (bus.STALE_CODES), d.idea = id; окно дедупликации 4 ч на идею;
   - источник событий тот же файл runtime/hot_events.jsonl, что пишет hotscan (хвост с конца файла, без истории при старте);
   - белый список полей d: kind, px, score, dir, range_5m_pct, ret_5m_pct, turn_surge_5m, spread_bps, funding_pct, idea, wake (reasons/note/idea_note
     и любой текст сканера НЕ попадают в шину; финальную очистку делает bus.sanitize);
@@ -110,6 +111,10 @@ class Publisher(object):
         iid = r.get("idea") if isinstance(r.get("idea"), str) else (r.get("id") if kind.startswith("idea_") else None)
         if isinstance(iid, str) and _IDEA.match(iid):
             d["idea"] = iid
+        if kind == "idea_stale":
+            if r.get("stale") not in bus.STALE_CODES or "idea" not in d:
+                return None                           # ревизия без идеи или с неизвестной причиной не нужна: нечего ревизовать
+            d["stale"] = r["stale"]
         d["wake"] = wake
         if r.get("big") is True:
             d["big"] = True                       # крупное событие: диспетчер даёт класс 1, лимит сигналов сканера его не съедает

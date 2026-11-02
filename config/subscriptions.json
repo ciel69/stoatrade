@@ -41,6 +41,7 @@
           "turnover_surge",
           "patrol",
           "idea_level",
+          "idea_stale",
           "oi_spike",
           "oi_flush",
           "funding_extreme",

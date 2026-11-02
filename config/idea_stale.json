@@ -1,0 +1,14 @@
+{
+  "schema": "tb.idea_stale/1",
+  "_comment": "Пороги ревизии живых идей (marketdata/ideawatch.py; читает core/ideas.stale_cfg, умолчания в коде равны этому файлу). Сторож без LLM ставит на идею флаг stale_code и шлёт событие idea_stale; решает мозг инструментом revise_idea (keep|update|cancel). Структура и BTC берутся из runtime/structure.json. Стоп идеи пробит (до или после касания уровня) -> идея сразу invalidated, это не флаг.",
+  "min_age_s": 300,
+  "struct_max_age_s": 600,
+  "max_per_hour": 4,
+  "keep": {"cooldown_h": 4, "max_renewals": 3},
+  "level_gone": {"enabled": true, "tol_pct": 0.35, "min_age_s": 600},
+  "rr_changed": {"enabled": true, "min_rr_net": 1.5, "stop_floor_a5": 1.5},
+  "price_far": {"enabled": true, "atr_1h": 6.0, "min_pct": 3.0, "grow": 1.5},
+  "regime_flip": {"enabled": true, "hold_s": 600},
+  "btc_drift": {"enabled": true, "r1h_pct": 1.5},
+  "hit_idle": {"enabled": true, "after_s": 1800}
+}
