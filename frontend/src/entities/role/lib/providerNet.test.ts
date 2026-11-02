@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { addArgs, addErrors, addReflects, addressPatch, addressReflects, emptyAdd, envName, filterIds, looksPrivate, modelAddReflects, modelKey, modelsNote, modelsOutcome, netErrorText, netReady, pingLine, pingOutcome, urlProblem } from './providerNet'
+import { addArgs, addErrors, addressPatch, addressReflects, emptyAdd, envName, filterIds, looksPrivate, modelAddReflects, modelKey, modelsNote, modelsOutcome, netErrorText, netReady, pingLine, pingOutcome, urlProblem } from './providerNet'
 import type { ProviderRow } from '../model/types'
 
 const ok = { ...emptyAdd(), id: 'mine', baseUrl: 'https://api.example.com/v1/', model: 'gpt-4o-mini' }
@@ -53,10 +53,6 @@ describe('форма «Свой провайдер»', () => {
     expect(modelKey('x'.repeat(50), [])).toHaveLength(30)
     expect(modelKey('///', [])).toBe('model')
     expect(modelKey('a', ['a', 'a-2'])).toBe('a-3')
-  })
-  it('провайдер отражён, когда есть в списке', () => {
-    expect(addReflects([{ id: 'mine' }], 'mine')).toBe(true)
-    expect(addReflects(undefined, 'mine')).toBe(false)
   })
 })
 

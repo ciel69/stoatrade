@@ -20,6 +20,8 @@ export const MAX_SHOWN_MODELS = 100
 
 export interface AddDraft {
   id: string
+  /** название для людей; пусто: берётся id */
+  name?: string
   adapter: string
   baseUrl: string
   /** пусто: имя файла ключа берётся по id провайдера */
@@ -114,7 +116,7 @@ export interface AddArgs {
 export function addArgs(d: AddDraft, existingIds: readonly string[]): AddArgs | null {
   if (Object.keys(addErrors(d, existingIds)).length) return null
   const spec: Record<string, unknown> = {
-    name: d.id, adapter: d.adapter, base_url: d.baseUrl.trim().replace(/\/+$/, ''), key_file: d.keyFile.trim() || d.id,
+    name: d.name?.trim() || d.id, adapter: d.adapter, base_url: d.baseUrl.trim().replace(/\/+$/, ''), key_file: d.keyFile.trim() || d.id,
     models: { [modelKey(d.model, [])]: newModelSpec(d.model) },
   }
   if (d.adapter !== 'openai_compat') spec.key_env = envName(d.id)
@@ -122,12 +124,10 @@ export function addArgs(d: AddDraft, existingIds: readonly string[]): AddArgs | 
   return { op: 'add', id: d.id, spec }
 }
 
-export const addReflects = (providers: readonly Pick<ProviderRow, 'id'>[] | undefined, id: string): boolean => (providers ?? []).some((p) => p.id === id)
-
 /** Строки «что будет» для подтверждения добавления. */
 export function addLines(d: AddDraft): string {
   const a = ADAPTERS.find((x) => x.id === d.adapter)?.label ?? d.adapter
-  return `провайдер «${d.id}» (${a}), адрес ${d.baseUrl.trim()}, модель ${d.model.trim()}; добавится выключенным, без ключа${d.allowPrivate ? '; внутренняя сеть разрешена' : ''}.`
+  return `провайдер «${d.name?.trim() || d.id}» (${a}), адрес ${d.baseUrl.trim()}, модель ${d.model.trim()}; добавится выключенным, без ключа${d.allowPrivate ? '; внутренняя сеть разрешена' : ''}.`
 }
 
 // ---------------------------------------------------------------- смена адреса
