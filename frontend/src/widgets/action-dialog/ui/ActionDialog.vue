@@ -26,15 +26,19 @@ watch(() => action.phase, (p) => {
   if (p === 'checking') checkTimer = setTimeout(() => { checkShown.value = true }, CHECK_DELAY_MS)
 }, { immediate: true })
 
+/** Запуск дня показывает себя сам: окно запуска с мозгом ведёт по этапам, общее окно поверх него закрывало бы анимацию. Подтверждение и отказ остаются за общим окном. */
+const ownProgress = computed(() => action.spec?.action === 'day.start' && (action.phase === 'sending' || action.phase === 'waiting' || action.phase === 'done'))
+
 const visible = computed(() => {
   const p = action.phase
   if (p === 'confirm' || p === 'blocked') return true
+  if (ownProgress.value) return false
   if (p === 'checking') return action.riskyRun === true || checkShown.value
   if (p === 'sending' || p === 'waiting' || p === 'done' || p === 'failed') return action.riskyRun === true
   return false
 })
 /** Безрисковая команда в пути: окна нет, но выполнение не должно быть невидимым. */
-const busy = computed(() => !visible.value && (action.phase === 'sending' || action.phase === 'waiting'))
+const busy = computed(() => !visible.value && !ownProgress.value && (action.phase === 'sending' || action.phase === 'waiting'))
 
 /** Снимок для показа: при закрытии окно успевает плавно исчезнуть с прежним содержимым, а не пустым. */
 interface View { phase: ActionPhase; title: string; what: string; risks: RiskItem[]; passed: Array<{ id: string; text: string }>; reasons: string[]; text: string; details: string | null }
