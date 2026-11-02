@@ -30,6 +30,7 @@ from tb.core import portfolio
 from tb.core import plan_schema
 from tb.core import tradectx
 from tb.core.stops import loss_stop
+from tb.logic import costs as costs_mod
 
 DEFAULT_BUDGET = 2500
 EVENT_BUDGET = 900
@@ -418,18 +419,7 @@ def _cost_rt_pct(c, maker=False):
     """Издержки круга (вход + выход по рынку) в % номинала по площадке активной сессии: 2 x (fee + slip) из risk_profile.costs, как guard.round_trip_cost_pct.
     maker=True: вход лимитом post-only (maker_fee площадки), выход по стопу рынком; нет maker_fee -> None (валидатор берёт обычные издержки)."""
     venue = (c.active or {}).get("venue") if isinstance(c.active, dict) else None
-    costs = c.prof.get("costs") if isinstance(c.prof.get("costs"), dict) else {}
-    cc = costs.get(venue) if isinstance(costs.get(venue), dict) else None
-    if cc is None:
-        fee = common.num(c.prof.get("taker_fee_pct"))
-        cc = {"fee": fee, "slip": 0.0005} if fee is not None else None
-    if cc is None or common.num(cc.get("fee")) is None:
-        return None
-    slip = common.num(cc.get("slip")) or 0.0
-    if maker:
-        mf = common.num(cc.get("maker_fee"))
-        return None if mf is None else _r((mf + cc["fee"] + 2.0 * slip) * 100.0)
-    return _r(2.0 * (cc["fee"] + slip) * 100.0)
+    return costs_mod.round_trip_pct(c.prof, venue, maker)      # чистый расчёт в tb.logic.costs (его же берёт tb.labels.policies)
 
 
 def _is_paper(c):
@@ -1085,7 +1075,10 @@ def h_exec_dead(c):
     return not c.health["alive"]
 
 
-def _b_ideas(c):
+def _b_ideas(c, want=()):
+    """Блок `ideas`: активные идеи (до 8, новые первыми) + статистика. Поля: level/stop/tp/dist_pct, status, age_h, hit (уровень задет), stale_code (флаг ревизии кода: level_gone,
+    rr_changed, price_far, regime_flip, btc_drift, hit_idle), ttl_left_h (часов до конца срока; нет поля = без срока), note (до 60 символов; только заметки, которые собрал код: идеи src=entry_scout, текст других авторов в досье не идёт). want: id идей-целей события idea_stale,
+    они попадают в блок всегда (даже за пределами 8)."""
     items = []
     book = ideas_core.price_book(c.root, c.now)
     allr = ideas_core.load_ideas(c.root)
@@ -1104,10 +1097,16 @@ def _b_ideas(c):
         lvl = common.num(i.get("level"))
         dist = 100.0 * (cur[0] / lvl - 1.0) if cur and lvl else None
         ts = common.num(i.get("ts_epoch"))
+        exp = ideas_core.expires_epoch(i)
+        code = i.get("stale_code") if i.get("stale_code") in bus.STALE_CODES else None
         items.append(_drop_none({"id": iid, "sym": sym, "side": i.get("side") if i.get("side") in ("long", "short", "watch") else None,
                                  "level": _p(lvl), "stop": _p(i.get("stop")), "tp": _p(i.get("tp")), "dist_pct": _r(dist),
-                                 "status": i.get("status") or "idea", "age_h": None if ts is None else round((c.now - ts) / 3600.0, 1)}))
-    items = items[:8]
+                                 "status": i.get("status") or "idea", "age_h": None if ts is None else round((c.now - ts) / 3600.0, 1),
+                                 "hit": True if i.get("hit") else None, "stale_code": code,
+                                 "ttl_left_h": None if exp is None else max(0.0, round((exp - c.now) / 3600.0, 1)),
+                                 "note": (common.clean_text(i.get("note"), 60) or None) if i.get("src") == "entry_scout" else None}))      # свободный текст других авторов в досье не идёт
+    must = [x for x in items if x["id"] in set(want)]
+    items = (must + [x for x in items if x not in must])[:max(8, len(must))] if must else items[:8]
     n_closed = sum(v for k, v in by_status.items() if k not in ideas_core.ACTIVE)
     stats = {"total": len(allr), "n_closed": n_closed, "by_status": by_status}
     if n_closed < ideas_core.SMALL_N:
@@ -1115,9 +1114,11 @@ def _b_ideas(c):
     return {"active": items, "stats": stats}
 
 
-def _ideas_of(block, syms):
-    """Активные идеи только по монетам события (до 3): блок `ideas` досье события | None."""
-    act = [x for x in (block or {}).get("active", []) if x.get("sym") in syms][:3]
+def _ideas_of(block, syms, want=()):
+    """Активные идеи только по монетам события (до 3): блок `ideas` досье события | None. want: идеи-цели события idea_stale, идут первыми и не отсекаются."""
+    allv = [x for x in (block or {}).get("active", []) if x.get("sym") in syms]
+    must = [x for x in allv if x.get("id") in set(want)]
+    act = (must + [x for x in allv if x not in must])[:max(3, len(must))]
     return {"active": act} if act else None
 
 
@@ -1412,7 +1413,9 @@ def build(scope="start", since=None, budget_tokens=None, root=None, now=None, co
         b["levels"] = _safe("levels", lambda: _b_levels(c, list(dict.fromkeys(wanted))[:4]), missing)
         ev_syms = prio[:2]
         b["day"] = _safe("day", lambda: _b_day(c), missing)
-        b["ideas"] = _safe("ideas", lambda: _ideas_of(_b_ideas(c), syms), missing)      # idea_level: уровень, стоп и цель идеи по монете события
+        stale_ids = {(e.get("d") or {}).get("idea") for e in (b["recent"] or []) if e.get("type") == "scanner_signal" and isinstance(e.get("d"), dict)
+                     and e["d"].get("kind") == "idea_stale" and (job_seqs is None or not job_seqs or e.get("seq") in job_seqs)}
+        b["ideas"] = _safe("ideas", lambda: _ideas_of(_b_ideas(c, stale_ids), syms, stale_ids), missing)      # idea_level / idea_stale: уровень, стоп, цель, флаг ревизии идеи по монете события
         b["struct"] = _safe("struct", lambda: _b_struct(c, ev_syms + wanted, limit=3, budget=STRUCT_EVENT_BUDGET, base_first=False, pin=("BTC",)), missing)
         b["struct_missing"] = _struct_missing(c, ev_syms, root, now)
         b["market"] = _safe("market", lambda: {k: v for k, v in _b_market(c).items() if k in ("risk_off", "blackout")}, missing)
@@ -1453,14 +1456,46 @@ def build(scope="start", since=None, budget_tokens=None, root=None, now=None, co
     return b
 
 
+SNAP_MAX_BYTES = 300
+
+
+def snap_of(brief, root=None):
+    """Компактный блок `snap` (<= 300 байт) для памяти случаев (R1, Requirement 11.1): fng = sources.fear_greed.value и dvol = sources.dvol_ETH.value из
+    runtime/context.json, risk_off оттуда же (bool), blackout = есть ли блок blackout в market досье (нет market -> ключа нет). Недоступное опускается."""
+    ctx = common.read_json(paths.runtime("context.json", root=root))
+    ctx = ctx if isinstance(ctx, dict) else {}
+    src = ctx.get("sources") if isinstance(ctx.get("sources"), dict) else {}
+
+    def val(name):
+        s = src.get(name)
+        return common.num(s.get("value")) if isinstance(s, dict) else None
+    snap = {}
+    fng, dvol = val("fear_greed"), val("dvol_ETH")
+    if fng is not None and 0 <= fng <= 100:
+        snap["fng"] = int(round(fng))
+    if dvol is not None and dvol >= 0:
+        snap["dvol"] = round(dvol, 2)
+    if isinstance(ctx.get("risk_off"), bool):
+        snap["risk_off"] = ctx["risk_off"]
+    mk = brief.get("market") if isinstance(brief, dict) else None
+    if isinstance(mk, dict):
+        snap["blackout"] = bool(mk.get("blackout"))
+    while len(common.dumps(snap).encode("utf-8")) > SNAP_MAX_BYTES and snap:
+        snap.popitem()
+    return snap
+
+
 def save(brief, root=None, now=None):
-    """Сохраняет досье в state/briefs/B-*.json (сжатый JSON, <= 12 КБ) и удаляет старше 14 дней. Ошибки записи не фатальны -> путь или None."""
+    """Сохраняет досье в state/briefs/B-*.json (сжатый JSON, <= 12 КБ) и удаляет старше 14 дней. Ошибки записи не фатальны -> путь или None.
+    Блок `snap` (snap_of) пишется всегда, в том числе в урезанной версии; в возвращаемое моделью досье он не попадает."""
     now = time.time() if now is None else now
     d = paths.briefs(root=root)
-    text = common.dumps(brief)
+    snap = snap_of(brief, root)
+    text = common.dumps(dict(brief, snap=snap))
     if len(text.encode("utf-8")) > BRIEF_MAX_BYTES:
         slim = {k: v for k, v in brief.items() if k in ("brief_id", "ts", "scope", "system", "account", "room", "positions", "plans", "session")}
         slim["trunc"] = True
+        slim["snap"] = snap
         text = common.dumps(slim)
     try:
         os.makedirs(d, exist_ok=True)

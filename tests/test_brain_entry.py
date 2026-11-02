@@ -54,6 +54,25 @@ def check(obj, brief=None, ev=None):
     return [], validate.semantic("entry/1", o, validate.entry_context(SCAN_BRIEF if brief is None else brief, EV if ev is None else ev))
 
 
+REPLY_CAND = {"n": 1, "side": "long", "level": 145.0, "stop": 143.4, "tp": [148.2, 150.5], "horizon": "intraday", "setup": "level_reclaim", "confirm": "candle",
+              "ok": True, "geometry_ver": "g1"}           # кандидат, равный умолчаниям propose(): ответ модели называет только номер (entry_reply/1)
+
+
+def rp(**kw):
+    """Ответ модели entry_reply/1: propose кандидата 1 (после R1.11 модель не пишет цены, полный tb.entry/1 отклоняется PRICE_KEY)."""
+    o = {"decision": "propose", "candidate": 1, "setup": "level_reclaim", "thesis": "возврат выше дневного уровня 145.0 после прокола, оборот 3.1x",
+         "why": "возврат уровня | RR 2.3, a5 0.25% | стоп 1.1%", "conf": 0.6}
+    o.update(kw)
+    return o
+
+
+def rs(**kw):
+    """Ответ модели entry_reply/1: skip."""
+    o = {"decision": "skip", "skip_code": "no_setup", "why": "нет сетапа | цена между уровнями 145.2 | риск не оправдан", "conf": 0.7}
+    o.update(kw)
+    return o
+
+
 def with_brief(**over):
     b = copy.deepcopy(SCAN_BRIEF)
     b.update(over)
@@ -306,6 +325,7 @@ class Scout(BrainBase):
         BrainBase.setUp(self)
         self.set_platform(mode="paper")
         self.gw.brief = copy.deepcopy(SCAN_BRIEF)
+        self.gw.brief["cands"] = [copy.deepcopy(REPLY_CAND), dict(copy.deepcopy(REPLY_CAND), n=2, tp=[145.5], rr_net=0.3)]          # 1: годный; 2: цель близко (RR_LOW в смысловой проверке)
         self.gw.responses["list_plans"] = {"ok": True, "plans": []}
 
     def scan_job(self, jid="J-s1", sym="SOL", kinds=("hot_enter",), **kw):
@@ -319,7 +339,7 @@ class Scout(BrainBase):
         return r, self.get_job(j["id"]), s
 
     def test_propose_submits_paper_plan(self):
-        r, j, s = self.run_job(propose(event_seq=1))
+        r, j, s = self.run_job(rp())
         self.assertEqual(j["status"], "done")
         self.assertEqual(j["result"]["roles"][0]["role"], "entry_scout")
         c = self.gw.tool_calls("submit_plan")
@@ -384,7 +404,7 @@ class Scout(BrainBase):
         """Структуры по монете события ещё нет: задание откладывается (модель не зовём), а не получает skip no_levels; после STRUCT_WAIT_MAX_S без структуры:
         NO_DATA без вызова модели (UAI 2026-11-01: на «последней попытке» модель выдумала уровень)."""
         self.gw.brief = with_brief(struct_missing=["SOL"], levels={})
-        r = self.runner({"ds-flash": [skip()]})
+        r = self.runner({"ds-flash": [rs()]})
         j, _s = self.scan_job()
         r.step()
         j1 = self.get_job(j["id"])
@@ -392,7 +412,7 @@ class Scout(BrainBase):
         self.assertEqual(j1["result"]["code"], "STRUCT")
         self.assertEqual(self.factory.calls(), 0)
         self.assertEqual([x for x in self.decisions() if x["what"] == "brain_decision"], [])      # в ленте решений шума нет
-        r2 = self.runner({"ds-flash": [propose(event_seq=1)]})
+        r2 = self.runner({"ds-flash": [rp()]})
         j2, _s2 = self.scan_job(jid="J-old", ts_first=self.t - 1000)                          # задание старше окна ожидания структуры
         r2.step()
         j3 = self.get_job(j2["id"])
@@ -430,11 +450,11 @@ class Scout(BrainBase):
         self.assertTrue(all(r["horizon"] in validate.SESSION_ORDER for r in cands.candidates(ns, "SOL") or []))   # кандидат без горизонта модели не показывается
 
     def test_model_mode_never_used(self):
-        r, j, s = self.run_job(propose(event_seq=1))
+        r, j, s = self.run_job(rp())
         self.assertEqual(self.gw.tool_calls("submit_plan")[0]["args"]["plan"]["mode"], "paper")        # в схеме ответа поля mode нет, режим ставит код
 
     def test_skip_does_not_call_gateway(self):
-        r, j, s = self.run_job(skip())
+        r, j, s = self.run_job(rs())
         self.assertEqual(self.gw.tool_calls("submit_plan"), [])
         self.assertEqual(j["result"]["outcome"], "hold")
         self.assertEqual([x["res"]["code"] for x in self.decisions()], ["SKIP"])
@@ -442,14 +462,16 @@ class Scout(BrainBase):
     def test_skip_with_watch_writes_idea_once(self):
         """Пропуск с уровнем становится идеей watching (ttl 4 ч); повтор того же уровня дубль не создаёт."""
         from tb.core import ideas
-        w = {"side": "long", "level": 144.0, "stop": 142.8, "tp": 147.0, "setup": "level_reclaim"}
-        r, j, s = self.run_job(skip(skip_code="rr_low", watch=w))
+        w = {"side": "long", "level": 144.0, "stop": 142.8, "tp": [147.0], "setup": "level_reclaim", "ok": False, "fail": "rr_low:1.1"}
+        self.gw.brief["cands"].append(dict(copy.deepcopy(REPLY_CAND), n=3, **{k: v for k, v in w.items() if k != "side"}))
+        r, j, s = self.run_job(rs(skip_code="rr_low", watch={"candidate": 3}))
         rows = [i for i in ideas.load_ideas(self.root) if i.get("src") == "entry_scout"]
         self.assertEqual(len(rows), 1, rows)
         i = rows[0]
         self.assertEqual((i["sym"], i["side"], i["level"], i["stop"], i["tp"], i["status"], i["ttl_h"]), ("SOL", "long", 144.0, 142.8, 147.0, "watching", 4.0))
         self.assertIn(i["id"], [x["why"] for x in self.decisions()][-1])
-        r, j, s = self.run_job(skip(skip_code="rr_low", watch=dict(w, level=144.2)), jid="J-s2")
+        self.gw.brief["cands"][2]["level"] = 144.2
+        r, j, s = self.run_job(rs(skip_code="rr_low", watch={"candidate": 3}), jid="J-s2")
         self.assertEqual(len([i for i in ideas.load_ideas(self.root) if i.get("src") == "entry_scout"]), 1)
 
     def test_propose_links_idea_to_plan(self):
@@ -457,7 +479,7 @@ class Scout(BrainBase):
         from tb.core import ideas
         ideas.add_idea("SOL", "long", "ждём", level=145.0, stop=143.4, tp=148.2, status="watching", src="entry_scout", root=self.root, mode="paper")
         self.gw.responses["submit_plan"] = {"ok": True, "plan_id": "PL-1029-SOL-01", "cmd_id": "C-1"}
-        r, j, s = self.run_job(propose(event_seq=1))
+        r, j, s = self.run_job(rp())
         i = ideas.load_ideas(self.root)[0]
         self.assertEqual((i["status"], i["plan"]), ("planned", "PL-1029-SOL-01"))
         self.assertIn("идея %s" % i["id"], [x["why"] for x in self.decisions()][-1])
@@ -465,7 +487,7 @@ class Scout(BrainBase):
     def test_exhausted_role_budget_skips_job_acks_events_and_logs_once(self):
         """Суточный бюджет роли поиска входа исчерпан: модель не зовём, задание done (не копится в очереди), события подтверждены, в ленте одна запись раз в 15 минут."""
         from tb.llm import usage
-        r = self.runner({"ds-flash": [propose(event_seq=1)]})
+        r = self.runner({"ds-flash": [rp()]})
         r.conf.role_opts["entry_scout"] = {"params": {}, "budget": {"day_usd": 0.01}}
         usage.record({"role": "entry_scout", "job": "J-old"}, "deepseek", "m", usd=0.02, root=self.root, now=self.t - 60)
         j1, s1 = self.scan_job("J-b1")
@@ -485,7 +507,7 @@ class Scout(BrainBase):
 
     def test_role_budget_not_exhausted_still_calls_model(self):
         from tb.llm import usage
-        r = self.runner({"ds-flash": [skip()]})
+        r = self.runner({"ds-flash": [rs()]})
         r.conf.role_opts["entry_scout"] = {"params": {}, "budget": {"day_usd": 1.0}}
         usage.record({"role": "entry_scout"}, "deepseek", "m", usd=0.02, root=self.root, now=self.t - 60)
         j1, s1 = self.scan_job("J-ok")
@@ -502,7 +524,7 @@ class Scout(BrainBase):
         for k in range(lim):
             audit.record("api", "submit_plan", {"k": k}, True, "OK", 5, root=self.root, now=now - 60)
         audit.record("api", "submit_plan", {"k": 9}, False, "E_RATE_PLANS", 5, root=self.root, now=now - 30)
-        r, j, s = self.run_job(propose(event_seq=1))
+        r, j, s = self.run_job(rp())
         self.assertEqual(j["result"]["roles"][0]["code"], "RATE_PLANS")
         self.assertEqual(self.factory.calls(), 0)
         self.assertEqual(self.gw.tool_calls("submit_plan"), [])
@@ -513,19 +535,19 @@ class Scout(BrainBase):
         self.w("config/agents.json", {"agents": self.agents})
         audit.record("api", "submit_plan", {"k": 1}, True, "OK", 5, root=self.root, now=time.time() - 60)
         audit.record("api", "submit_plan", {"k": 2}, False, "E_RATE_PLANS", 5, root=self.root, now=time.time() - 30)
-        r, j, s = self.run_job(propose(event_seq=1))
+        r, j, s = self.run_job(rp())
         self.assertEqual(len(self.gw.tool_calls("submit_plan")), 1)
 
     def test_skip_without_watch_writes_no_idea(self):
         from tb.core import ideas
-        self.run_job(skip())
+        self.run_job(rs())
         self.assertEqual([i for i in ideas.load_ideas(self.root) if i.get("src") == "entry_scout"], [])
 
     def test_not_paper_blocks_without_llm_call(self):
         for mode in ("live", "testnet", "observe"):
             self.set_platform(mode=mode)
             self.gw.calls[:] = []
-            r, j, s = self.run_job(propose(event_seq=1), jid="J-%s" % mode, sym="SOL")
+            r, j, s = self.run_job(rp(), jid="J-%s" % mode, sym="SOL")
             self.assertEqual(j["result"]["roles"][0]["code"], "NOT_PAPER", mode)
             self.assertEqual(self.gw.tool_calls("submit_plan"), [], mode)
             self.assertEqual(self.factory.calls(), 0, mode)                   # до модели не дошло
@@ -534,7 +556,7 @@ class Scout(BrainBase):
         """Право live у агента не запирает paper-день: план paper. Режим плана = режим дня в границах modes агента (указание владельца 2026-11-01)."""
         self.agents["api"]["limits"]["modes"] = ["paper", "live"]
         self.w("config/agents.json", {"agents": self.agents})
-        r, j, s = self.run_job(propose(event_seq=1))
+        r, j, s = self.run_job(rp())
         c = self.gw.tool_calls("submit_plan")
         self.assertEqual(len(c), 1)
         self.assertEqual(c[0]["args"]["plan"]["mode"], "paper")
@@ -543,28 +565,28 @@ class Scout(BrainBase):
         """День live + право live у агента + исполнитель live: план mode=live уходит в шлюз (торговый флаг дня и лимиты проверяет шлюз). Без права: NOT_PAPER."""
         self.set_platform(mode="live")
         self.gw.brief["system"]["exec"]["mode"] = "live"
-        r, j, s = self.run_job(propose(event_seq=1), jid="J-l0")
+        r, j, s = self.run_job(rp(), jid="J-l0")
         self.assertEqual(j["result"]["roles"][0]["code"], "NOT_PAPER")
         self.agents["api"]["limits"]["modes"] = ["paper", "live"]
         self.w("config/agents.json", {"agents": self.agents})
         self.gw.calls[:] = []
-        r, j, s = self.run_job(propose(event_seq=1), jid="J-l1")
+        r, j, s = self.run_job(rp(), jid="J-l1")
         c = self.gw.tool_calls("submit_plan")
         self.assertEqual(len(c), 1, j["result"])
         self.assertEqual(c[0]["args"]["plan"]["mode"], "live")
         self.gw.brief["system"]["exec"]["mode"] = "paper"                      # исполнитель не в режиме дня: вход запрещён
         self.gw.calls[:] = []
-        r, j, s = self.run_job(propose(event_seq=1), jid="J-l2")
+        r, j, s = self.run_job(rp(), jid="J-l2")
         self.assertEqual(j["result"]["roles"][0]["code"], "NOT_PAPER")
 
     def test_brief_exec_mode_live_blocks_execution(self):
         self.gw.brief["system"]["exec"]["mode"] = "live"
-        r, j, s = self.run_job(propose(event_seq=1))
+        r, j, s = self.run_job(rp())
         self.assertEqual(j["result"]["roles"][0]["code"], "NOT_PAPER")
         self.assertEqual(self.gw.tool_calls("submit_plan"), [])
 
     def test_protect_only_blocks(self):
-        r = self.runner({"ds-flash": [propose(event_seq=1)]})
+        r = self.runner({"ds-flash": [rp()]})
         r.health.set_protect(True, "тест", "brain_down", self.t)
         j, s = self.scan_job()
         r.step()
@@ -574,40 +596,40 @@ class Scout(BrainBase):
     def test_kill_blocks(self):
         os.makedirs(os.path.dirname(paths.kill_file(root=self.root)), exist_ok=True)
         open(paths.kill_file(root=self.root), "w").close()
-        r, j, s = self.run_job(propose(event_seq=1))
+        r, j, s = self.run_job(rp())
         self.assertEqual(j["result"]["roles"][0]["code"], "KILL")
         self.assertEqual(self.gw.tool_calls("submit_plan"), [])
 
     def test_kill_in_brief_rejected_by_semantic_and_blocked(self):
         self.gw.brief["system"]["kill"] = True
-        r, j, s = self.run_job(propose(event_seq=1))
+        r, j, s = self.run_job(rp())
         self.assertEqual(self.gw.tool_calls("submit_plan"), [])
 
     def test_no_session_blocks(self):
         self.gw.brief.pop("session")
-        r, j, s = self.run_job(propose(event_seq=1))
+        r, j, s = self.run_job(rp())
         self.assertEqual(j["result"]["roles"][0]["code"], "NO_SESSION")
         self.assertEqual(self.gw.tool_calls("submit_plan"), [])
 
     def test_active_plan_on_symbol_blocks_second_plan(self):
         self.gw.responses["list_plans"] = {"ok": True, "plans": [{"id": "PL-1028-SOL-01", "sym": "SOL", "status": "armed", "mode": "paper"}]}
-        r, j, s = self.run_job(propose(event_seq=1))
+        r, j, s = self.run_job(rp())
         self.assertEqual(j["result"]["roles"][0]["code"], "SYM_BUSY")
         self.assertEqual(self.gw.tool_calls("submit_plan"), [])
         self.gw.responses["list_plans"] = {"ok": True, "plans": [{"id": "PL-1028-SOL-01", "sym": "SOL", "status": "closed", "mode": "paper"}]}
-        r2 = self.runner({"ds-flash": [propose(event_seq=1)]})
+        r2 = self.runner({"ds-flash": [rp()]})
         j2, _ = self.scan_job("J-s2")
         r2.step()
         self.assertEqual(len(self.gw.tool_calls("submit_plan")), 1)           # завершённый план не мешает
 
     def test_unknown_plan_list_fails_closed(self):
         self.gw.responses["list_plans"] = {"ok": False, "errors": [{"code": "E_X"}]}
-        r, j, s = self.run_job(propose(event_seq=1))
+        r, j, s = self.run_job(rp())
         self.assertEqual(j["result"]["roles"][0]["code"], "BUSY_UNKNOWN")
         self.assertEqual(self.gw.tool_calls("submit_plan"), [])
 
     def test_repeat_guard_covers_entry(self):
-        r = self.runner({"ds-flash": [propose(event_seq=1)]})
+        r = self.runner({"ds-flash": [rp()]})
         key = guards.decision_key("entry_scout", "SOL", "propose", {"side": "long", "level": 145.0, "stop": 143.4, "tp": [148.2, 150.5]})
         for _ in range(3):
             self.assertTrue(r.repeat.allow(key, self.t))
@@ -617,12 +639,12 @@ class Scout(BrainBase):
         self.assertEqual(self.gw.tool_calls("submit_plan"), [])
 
     def test_semantic_reject_retries_then_no_action(self):
-        r, j, s = self.run_job(propose(event_seq=1, tp=[145.5]))
+        r, j, s = self.run_job(rp(candidate=2))
         self.assertEqual(self.gw.tool_calls("submit_plan"), [])
         self.assertEqual(j["result"]["roles"][0]["outcome"], "no_action")
 
     def test_idea_kinds_do_not_wake_role(self):
-        r = self.runner({"ds-flash": [skip()]})
+        r = self.runner({"ds-flash": [rs()]})
         j, _ = self.scan_job("J-i1", kinds=("idea_near",))
         r.step()
         self.assertEqual(self.get_job("J-i1")["status"], "skipped")
@@ -632,7 +654,7 @@ class Scout(BrainBase):
         self.brain_doc["runtime"]["guards"]["role_jobs_per_hour"] = {"entry_scout": 2}
         self.brain_doc["runtime"]["guards"]["loop_jobs_max"] = 50
         self.write_conf()
-        r = self.runner({"ds-flash": [skip()]})
+        r = self.runner({"ds-flash": [rs()]})
         res = []
         for i, sym in enumerate(("SOL", "ETH", "BTC")):
             j, _ = self.scan_job("J-r%d" % i, sym=sym)
@@ -644,11 +666,11 @@ class Scout(BrainBase):
     def test_no_plan_dossier_error_is_not_entry_issue(self):
         # NO_PLAN-проверка относится только к pm/1: скан без планов и позиций для entry_scout доходит до модели
         self.gw.brief["plans"], self.gw.brief["positions"] = [], []
-        r, j, s = self.run_job(skip())
+        r, j, s = self.run_job(rs())
         self.assertEqual(self.factory.calls(), 1)
 
     def test_dossier_contains_scan_blocks(self):
-        r, j, s = self.run_job(skip())
+        r, j, s = self.run_job(rs())
         txt = self.factory.clients["ds-flash"].calls[0]["req"].messages[0]["content"]
         for k in ('"struct"', '"risk_level"', '"limits"', '"recent"', '"hot_enter"'):
             self.assertIn(k, txt)
@@ -662,9 +684,10 @@ class RoleFiles(unittest.TestCase):
         self.assertFalse(r.live_risk)
         self.assertEqual(r.output_schema, "entry/1")
         self.assertEqual(r.wake_on, ["scanner_signal", "news_flash"])
-        self.assertEqual(r.wake_kinds, ["hot_enter", "range_5m", "turnover_surge", "patrol", "idea_level", "oi_spike", "oi_flush", "funding_extreme", "liq_cascade", "cvd_divergence", "book_wall"])
+        self.assertEqual(r.wake_kinds, ["hot_enter", "range_5m", "turnover_surge", "patrol", "idea_level", "idea_stale", "oi_spike", "oi_flush", "funding_extreme", "liq_cascade", "cvd_divergence", "book_wall"])
         self.assertEqual(r.scope, "team")
-        self.assertEqual([k for k in r.wake_kinds if k.startswith("idea_")], ["idea_level"])      # цена у уровня идеи (план дня) будит роль; idea_near/invalidated/tp нет
+        self.assertEqual([k for k in r.wake_kinds if k.startswith("idea_")], ["idea_level", "idea_stale"])      # цена у уровня идеи и ревизия идеи (R-ревизия, idea_stale) будят роль; idea_near/invalidated/tp нет
+        self.assertEqual((r.version, "revise_idea" in r.tools), (4, True))
         brain = jl(os.path.join(ROOT, "config", "brain.json"))
         self.assertEqual(brain["teams"]["A"]["roles"]["entry_scout"]["primary"], "ds-flash")
         self.assertEqual(brain["role_opts"]["entry_scout"]["params"]["thinking"], "low")
@@ -1048,20 +1071,20 @@ class ScoutPipeline(BrainBase):
     setUp, scan_job, run_job = Scout.setUp, Scout.scan_job, Scout.run_job
 
     def test_get_brief_receives_job_seqs_and_sym(self):
-        r, j, s = self.run_job(skip())
+        r, j, s = self.run_job(rs())
         a = self.gw.tool_calls("get_brief")[0]["args"]
         self.assertEqual((a["scope"], a["seqs"], a["sym"]), ("event", [s], "SOL"))
 
     def test_precheck_skips_without_llm_call(self):
         self.gw.brief["day"] = {"id": "D-20261028-1", "setups": [], "max_new_plans": 0}
-        r, j, s = self.run_job(propose(event_seq=1))
+        r, j, s = self.run_job(rp())
         self.assertEqual(j["result"]["roles"][0]["code"], "DAY_NO_PLANS")
         self.assertEqual(self.factory.calls(), 0)
         self.assertEqual(self.gw.tool_calls("submit_plan"), [])
         self.assertEqual([x["res"]["code"] for x in self.decisions()], ["DAY_NO_PLANS"])
 
     def test_truncated_answer_retried_with_bigger_limit_not_hint(self):
-        r = self.runner({"ds-flash": ['{"schema":"tb.entry/1","event_seq":1,"dec', propose(event_seq=1)]})
+        r = self.runner({"ds-flash": ['{"decision":"propose","cand', rp()]})
         c = r.client_for("ds-flash")
         c.on_call = lambda f, req: setattr(f, "finish", "length" if f.n == 0 else "stop")
         j, s = self.scan_job()

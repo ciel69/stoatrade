@@ -35,6 +35,11 @@ def propose(**kw):
     return o
 
 
+REPLY = {"decision": "propose", "candidate": 1, "setup": "level_reclaim", "thesis": "возврат выше дневного уровня 145.0 после прокола, оборот 3.1x",
+         "why": "возврат уровня | RR 2.3, a5 0.25% | стоп 1.1%", "conf": 0.6}          # ответ entry_reply/1: после R1.11 модель называет кандидата, цен не пишет
+CAND = {"n": 1, "side": "long", "level": 145.0, "stop": 143.4, "tp": [148.2, 150.5], "horizon": "intraday", "setup": "level_reclaim", "confirm": "candle", "ok": True, "geometry_ver": "g1"}
+
+
 def with_data(**data):
     b = copy.deepcopy(SCAN_BRIEF)
     b["data"] = dict({"struct": True, "levels": 2, "ready": True, "px": True}, **data)
@@ -79,7 +84,7 @@ class StaleRunner(BrainBase):
         self.gw.responses["list_plans"] = {"ok": True, "plans": []}
 
     def run_scan(self, brief, answer, jid="J-s1"):
-        self.gw.brief = brief
+        self.gw.brief = dict(brief, cands=[dict(CAND)])
         r = self.runner({"ds-flash": [answer]})
         s = self.emit("scanner_signal", {"kind": "patrol", "px": 145.2, "wake": True}, plan=None, sym="SOL")
         j = self.job(jid, seqs=[s], types=("scanner_signal",), key="sym:SOL", plan=None, kinds=["patrol"])
@@ -87,7 +92,7 @@ class StaleRunner(BrainBase):
         return self.get_job(j["id"])
 
     def test_stale_data_skips_without_llm_and_is_journaled(self):
-        j = self.run_scan(with_data(px_age_s=5421), propose(event_seq=1))
+        j = self.run_scan(with_data(px_age_s=5421), REPLY)
         self.assertEqual(j["result"]["roles"][0]["code"], "STALE_DATA", j["result"])
         self.assertEqual(self.factory.calls(), 0)                                        # модель не зовём
         self.assertEqual(self.gw.tool_calls("submit_plan"), [])
@@ -95,14 +100,14 @@ class StaleRunner(BrainBase):
         self.assertEqual((d[-1]["kind"], d[-1]["res"]["code"]), ("skip", "STALE_DATA"))    # как прочие коды предпроверки
 
     def test_fresh_data_proposes_as_before(self):
-        j = self.run_scan(with_data(px_age_s=5), propose(event_seq=1))
+        j = self.run_scan(with_data(px_age_s=5), REPLY)
         self.assertEqual(len(self.gw.tool_calls("submit_plan")), 1, j["result"])
         self.assertEqual(self.factory.calls(), 1)
 
     def test_threshold_from_brain_json(self):
         self.brain_doc["runtime"]["max_data_age_s"] = 600
         self.write_conf()
-        self.run_scan(with_data(px_age_s=300), propose(event_seq=1))
+        self.run_scan(with_data(px_age_s=300), REPLY)
         self.assertEqual(len(self.gw.tool_calls("submit_plan")), 1)                      # 300 с < порога владельца 600 с
 
 

@@ -82,8 +82,7 @@ def review_answer(user):
 
 
 def entry_answer(user):
-    ev = tag_json(user, "event") or {}
-    return {"schema": "tb.entry/1", "event_seq": int(ev.get("seq_last") or 0), "decision": "skip", "skip_code": "no_setup",
+    return {"decision": "skip", "skip_code": "no_setup",         # entry_reply/1: без schema и event_seq (полный tb.entry/1 от модели отклоняется PRICE_KEY)
             "why": "нет сетапа | сценарный фейковый LLM не входит | риск не берётся", "conf": 0.3}
 
 
