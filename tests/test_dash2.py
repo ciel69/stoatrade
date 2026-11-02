@@ -367,6 +367,7 @@ class ServerTest(Fx, unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("SECRET", repr(t))                                                                                                     # поля вне белого списка не уходят
         p = t["provider_list"][0]
         self.assertEqual((p["base_host"], p["cred"]["present"], t["exchange_list"][0]["creds"], t["swaps"][0]["target"], t["revisions"]), ("api.deepseek.com", True, ["read"], ["reviewer"], 3))
+        self.assertIs(p["allow_private"], False)                                                                                                 # флаг внутренней сети доходит до формы настроек (по умолчанию выключен)
         self.assertEqual((r["target"], t["profile_list"][0]["id"], t["profile_list"][0]["used_by"]), ("A.entry_scout", "lm", ["A.entry_scout"]))     # имя роли для действий ctl и список профилей для выбора
         self.assertNotIn("SECRET2", repr(t))
         self.assertNotIn("1d1c", repr(t))                                                                                                      # маски ключа в данных нет, только «есть или нет»

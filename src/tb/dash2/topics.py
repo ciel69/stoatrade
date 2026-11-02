@@ -521,6 +521,7 @@ def settings(root=None, now=None):
         cred, lim = p.get("cred") if isinstance(p.get("cred"), dict) else {}, p.get("limits") if isinstance(p.get("limits"), dict) else {}
         providers.append({"id": str(p.get("id"))[:40], "name": str(p.get("name") or p.get("id"))[:60], "adapter": str(p.get("adapter") or "")[:40], "enabled": bool(p.get("enabled")), "local": bool(p.get("local")),
                           "verified": bool(p.get("verified")), "note": _txt(p.get("note"), 200), "error": _txt(p.get("error"), 160), "base_host": _host(p.get("base_url")),
+                          "allow_private": bool(p.get("allow_private")),
                           "cred": {"needed": bool(cred.get("needed")), "present": bool(cred.get("present")), "perms_ok": cred.get("perms_ok") if isinstance(cred.get("perms_ok"), bool) else None, "env": _txt(cred.get("env"), 40)},       # ни ключа, ни маски: только «есть или нет»
                           "limits": {k: _num(lim.get(k)) for k in ("concurrent", "rpm", "day_usd", "hour_usd", "day_toks")},
                           "models": [{"id": str(m.get("id"))[:30], "name": str(m.get("name"))[:60], "ctx": _num(m.get("ctx")), "tools": bool(m.get("tools")), "tags": [str(t)[:20] for t in (m.get("tags") or [])[:4]],
