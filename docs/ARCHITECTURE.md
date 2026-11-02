@@ -11,6 +11,7 @@ marketdata/    feed, wsclient, features, history, funding_history, watch, contex
 research/      research_*.py (в т.ч. research_patterns: `./tb research patterns`), compare_venues, backtest, paper_donchian (не торгуют)
 dash2/         дашборд по умолчанию (`./tb dash`, порт 8765): server.py (статика `frontend/dist` и WebSocket `/ws`), topics.py (темы), ctlbridge.py (мост команд в ctl); фронт Vue в `frontend/`
 dash/          слой чтения и управления для dash2 (старый веб-интерфейс удалён 2026-11-02): model.py и model2.py (чтение файлов и расчёты), ctlweb.py (проверки и очередь ctl, база моста), keyweb.py (запись ключей LLM), server.py (только `api_payload` и реестр `EXT_API` без HTTP)
+learn/         страница «Учится ли мозг» (R0.2): статистика, блоки и сборка отчёта `tb.learning/1`, только чтение; операция сокета `learning` (раздел ниже «Страница «Учится ли мозг»»)
 legacy_engine/ signals, risk, state, tick, sizing: старый автоматический движок, живой торговлей не используется
 paths.py       ЕДИНСТВЕННОЕ место с путями: корень от расположения файла или TB_ROOT
 launcher.py    платформенная логика входа: env-файл ключа Bybit, снятие прокси, UTF-8 консоль; fsutil.py: os.replace с повторами для Windows
@@ -147,6 +148,40 @@ service.py   цикл сервиса labels
 **Сервис `labels`** (`python -m tb.labels.service run`, запускает супервизор; `platform/services.py`: `ORDER`, `SERVICE_NAMES`, `DEFAULTS`, `service_cmd`, профили paper/testnet/trade). Heartbeat `runtime/platform/labels.hb.json` (поля `captured_24h`, `labeled_24h`, `pending`, `due`, `failed_24h`, `no_data_24h`, `rate_limited_24h`, `req_per_min`, `bad_lines`, `last_error`, `db_mb`, `missing_share_24h`, `warnings`, `enabled`), `wal_checkpoint(PASSIVE)` раз в 10 мин и `TRUNCATE` раз в сутки, блокировка второй копии `runtime/platform/labels.lock` (код выхода 2). Окружение сервиса очищается шире общего: `BYBIT_*`, `ANTHROPIC_*`, `DEEPSEEK_*`, `OPENAI_*`, `*_API_KEY`, `*_SECRET`, `*_TOKEN` (`services.labels_secret`, `child_env`; сам процесс тоже вычищает их при старте). События в шину сервис не публикует; жёлтый статус в `./tb status` ставит `platform/status.py` (`due` > 500 или `failed_24h` > 5% захваченных за 24 ч, `DB_CORRUPT`, `W_LABELS_SYNC_DIR`). Эксплуатация: `docs/RUNBOOK.md`.
 
 **Слои.** `tb.labels` не импортирует `tb.venues`, `tb.executor`, `tb.gateway`, `tb.llm`, `tb.brain`, `tb.control`, `tb.intel.items` ни прямо, ни транзитивно; `tb.logic.bars|geometry|sim|costs` подчиняются правилам чистоты `tb.logic` (`tests/test_layering.py`). Метки читают признаки через `tb.memory.cfg|features` и `tb.logic.candles|levels`, свечи берут сами из публичного REST. Лимиты, `risk_profile.json`, `risk_levels.json`, плечо и размер фабрика не читает на запись и не меняет.
+
+## Страница «Учится ли мозг» (R0.2, `.opencode/specs/R0.2-learning-page/`)
+Задача: показать владельцу одним словом, лучше ли мозг стал работать, и дать числа с n и интервалом. Страница только читает: ордеров, планов, записей журнала и изменений лимитов нет. Числа и тексты вердикта считает код, модель не участвует. Режимы paper, testnet, live не смешиваются ни в одном числе.
+
+**Пакет `src/tb/learn/`** (чистые расчёты плюс сборка отчёта; пишет только в память процесса):
+```
+conf.py            config/learning.json: строгая загрузка, умолчания, предупреждения E_CONF:<поле>
+stats.py           чистая статистика: est (v, lo, hi, n, lvl), t-интервал, Уилсон, Уэлч по сводкам, z пропорций, бутстреп PF (random.Random(seed)), rolling, ISO-недели
+load.py            данные: сделки мозга (expstats.load_trades минус shadow, manual*, без plan_id, без R), случаи режима, пропуски, журнал вызовов LLM, подпись источников
+cache.py           Cache (ttl, min_interval, блокировка на ключ) и Flight (один фоновый поток на ключ); REPORT и MEMORY на процесс
+verdict.py         правило вердикта и таблица шаблонов текста (state, reason) -> строка
+result.py exits.py discipline.py skips.py economics.py vs_policy.py memory_vs_base.py stages.py    по одному блоку
+report.py          build (без кеша), get (с кешем), sanitize, изоляция ошибок блоков, лимит ответа 64 КБ
+dashapi.py         api(path, query, root, now) для EXT_API, detail, follow, is_computing
+```
+Схема ответа `tb.learning/1`: `verdict` (`state` `few_data|no_difference|confirmed`, `reason`, `text`, `n`, `n_recent`, `n_prev`, `diff_r`, `p`, `alpha_adj`, `trend`, `guards`, `params`), `order` (девять блоков), `blocks` (`result`, `vs_policy`, `discipline`, `skips`, `exits`, `economics`, `memory`, `lessons`, `versions`; у каждого `id`, `title`, `status` `ok|few_data|no_data|stage|computing|error`, `reason`, `note`), `meta` (`built_ms`, `cached`, `excluded`, `warnings`, `sources`). Эталонные ответы: `tests/fixtures_learning/payload_full.json`, `payload_few.json`; по ним фронт сверяет контракт. Имена полей не содержат `key|secret|token|passw|signature` (иначе `model.scrub` вырезал бы их), токены обозначены `tok_in`/`tok_out`. Сумм в USDT в ответе нет: результат только в R.
+
+**Поток данных.** Тема в `TOPICS` не заведена: отчёт тяжелее остальных тем и меняется при закрытии сделки, поэтому считается по запросу клиента.
+```
+store.request(mode) -> сокет {"op":"learning","mode"} -> dash2.server.learning_op (asyncio.to_thread)
+  -> topics.learning_detail -> tb.learn.dashapi.detail -> tb.learn.report.get -> REPORT.get (кеш)
+     промах: report.build -> load.* -> блоки -> sanitize -> model.scrub -> сообщение learning_detail (только этому соединению)
+```
+Недопустимый режим заменяется на `paper`; сбой сборки даёт `{"ok": false, "mode", "error": "failed"}` без разрыва соединения. Тот же отчёт отдаёт `tb.dash.server.api_payload("/api/learning")` через реестр `EXT_API` (запись `tb.learn.dashapi`); настоящего HTTP-пути у dash2 нет, это логический путь поверх тех же функций.
+
+**Кеш и single-flight.** Ключ кеша (корень, режим), подпись источников `load.source_signature` (размер и mtime `trades.jsonl`, `cases.jsonl`, `exclude_trades.json`, журнала вызовов LLM и `config/learning.json`). Отчёт живёт `cache.ttl_s` (60 с); при смене подписи пересчёт не чаще `cache.min_interval_s` (10 с). Параллельные запросы одного ключа ждут один расчёт, исключение загрузчика не кешируется, время кеша монотонное. Ответ отдаётся копией; при попадании в кеш `meta.cached = true`.
+
+**Фоновый блок памяти.** Ретро-тест памяти (`tb.memory.backtest.walk_forward`) растёт квадратично, поэтому идёт в потоке `Flight` по ключу (корень, режим, подпись `cases.jsonl`). `learning_op` ждёт его `memory.budget_s` (3 с); не уложились: блок `memory` получает `status=computing`, такой отчёт в кеш не кладётся (`REPORT.drop`), результат walk-forward кешируется на `memory.ttl_s` (15 мин). После ответа с `computing` сервер запускает `_learning_follow`: в потоке ждёт расчёт до `dashapi.FOLLOW_TIMEOUT_S` (30 с) и шлёт тому же соединению повторное `learning_detail`. Закрытое соединение и упавший расчёт игнорируются, клиент остаётся с «Считается…» и может перезапросить. Больше `memory.max_trades` (600) сделок: walk-forward не запускается, блок `no_data` с причиной `too_many_for_request`.
+
+**Правило вердикта** (`verdict.decide`, пороги `expstats.MIN_N` = 30 и `expstats.ALPHA` = 0.05 из кода, K = 1; в конфиг вынесены только `recent_n` и `guard_trades_ratio`): n < 30 даёт `few_data/n_lt_min`; 30 <= n < 60 даёт `no_difference/no_baseline`; дальше последние `min(recent_n, n - 30)` сделок («недавние») сравниваются с остальными («прежние») тестом Уэлча. `confirmed/improved` только при разности > 0, p < alpha и пройденных защитах: доля нарушений правил (`rule_followed = no`) у недавних не выросла (односторонний тест, p < 0.05; при менее чем 10 известных отметках в любой части защита не блокирует и помечена `guard_unknown`), сделок в сутки у недавних не меньше `guard_trades_ratio` от прежних. Иначе `no_difference` с причиной `guard_viol`, `guard_trades` или `not_significant`. `trend = down` при значимом ухудшении добавляет к тексту предупреждение. Блоки «против политики», «экономика», «память» в вердикт не входят. Применённые пороги лежат в `verdict.params`.
+
+**Фронт** (`frontend/src/`): `entities/learning` (типы, приведение ответа, стор), `widgets/learning/{verdict,intro,result,vs-policy,discipline,skips,exits,economics,memory,stages}`, `pages/learning/ui/LearningPage.vue`, маршрут `/brain/learning` (`app/router/index.ts`), вкладка «Учится ли мозг» в разделе «Мозг» (`shared/config/nav.ts`), `learning_detail` в `EPHEMERAL` (`shared/api/live-socket.ts`: сообщение не кешируется сокетом), график `shared/ui/UiBandChart.vue`, тексты `shared/lib/human-pages/learning/`. Запрос уходит при заходе, смене режима, возвращении связи и росте `trades.total`; таймеров нет. Запоздавший ответ другого режима стор отбрасывает, повторное сообщение того же режима заменяет прежнее.
+
+**Слои.** `tb.learn` не импортирует `tb.venues`, `tb.executor`, `tb.gateway`, `tb.control`, `tb.brain`, `tb.intel.items`, `tb.dash`, `tb.dash2` ни прямо, ни транзитивно; из `tb.llm` берёт только `usage` (журнал вызовов); не пишет на диск и не открывает SQLite на запись (база меток только через `tb.labels.store.open_ro`); сети и процессов нет (`tests/test_layering.py`). Тесты: `tests/test_learn_*.py`, `tests/test_dash2_learning.py`; фронт: vitest рядом с кодом (в том числе сверка с эталонами бэкенда, `pages/learning/ui/contract.test.ts`) и `frontend/e2e/specs/10-learning.mjs`.
 
 ## Фигуры и уровни (опционально)
 `marketdata/patterns.py` (чистые функции) -> `patterns_scan.py` (`./tb patterns scan --sym ETH [--tf 1h|4h|1d]`, только чтение `data/` и `runtime/market.json`).
