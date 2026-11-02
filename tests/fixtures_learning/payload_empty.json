@@ -1,0 +1,336 @@
+{
+ "alpha": 0.05,
+ "asof": 1793620800,
+ "blocks": {
+  "discipline": {
+   "err_total": [],
+   "id": "discipline",
+   "n_cases": 0,
+   "note": "Доля случаев с нарушением правил (rule_followed = no) и доля случаев с ошибкой по неделям UTC; неизвестная отметка в долю нарушений не входит.",
+   "reason": "no_cases",
+   "signal": null,
+   "status": "no_data",
+   "title": "Дисциплина",
+   "weeks": []
+  },
+  "economics": {
+   "ci": null,
+   "derived": [
+    "tok_per_trade",
+    "usd_per_trade",
+    "usd_per_r"
+   ],
+   "id": "economics",
+   "note": "Журнала вызовов модели нет или он пуст: расход не посчитать.",
+   "reason": "no_usage",
+   "scope": "platform",
+   "signal": null,
+   "status": "no_data",
+   "title": "Экономика",
+   "weeks": []
+  },
+  "exits": {
+   "all": {
+    "capture": {
+     "hi": null,
+     "lo": null,
+     "lvl": 0.95,
+     "n": 0,
+     "v": null
+    },
+    "mfe": {
+     "hi": null,
+     "lo": null,
+     "lvl": 0.95,
+     "n": 0,
+     "v": null
+    },
+    "n": 0,
+    "n_path": 0,
+    "path_share": null,
+    "small": true
+   },
+   "id": "exits",
+   "note": "У закрытых сделок нет данных о пути цены (MFE).",
+   "reason": "no_path",
+   "series": {
+    "200": [],
+    "50": []
+   },
+   "status": "no_data",
+   "title": "Выходы",
+   "windows": {
+    "200": {
+     "capture": {
+      "hi": null,
+      "lo": null,
+      "lvl": 0.95,
+      "n": 0,
+      "v": null
+     },
+     "mfe": {
+      "hi": null,
+      "lo": null,
+      "lvl": 0.95,
+      "n": 0,
+      "v": null
+     },
+     "n": 0,
+     "n_path": 0,
+     "path_share": null,
+     "small": true
+    },
+    "50": {
+     "capture": {
+      "hi": null,
+      "lo": null,
+      "lvl": 0.95,
+      "n": 0,
+      "v": null
+     },
+     "mfe": {
+      "hi": null,
+      "lo": null,
+      "lvl": 0.95,
+      "n": 0,
+      "v": null
+     },
+     "n": 0,
+     "n_path": 0,
+     "path_share": null,
+     "small": true
+    }
+   }
+  },
+  "lessons": {
+   "id": "lessons",
+   "note": "появится на этапе 2",
+   "reason": null,
+   "roadmap": "R2.6",
+   "stage": 2,
+   "status": "stage",
+   "title": "Уроки"
+  },
+  "memory": {
+   "acc_base": null,
+   "acc_mem": null,
+   "better": null,
+   "brier_base": null,
+   "brier_mem": null,
+   "covered": null,
+   "d_brier": null,
+   "history": {
+    "note": "история по дням появится на этапе 3",
+    "roadmap": "R3.4",
+    "stage": 3,
+    "status": "stage"
+   },
+   "id": "memory",
+   "n_eval": 0,
+   "n_trades": 0,
+   "note": "закрытых сделок в памяти меньше 5: проверять нечего",
+   "reason": "no_trades",
+   "status": "no_data",
+   "title": "Память против базы"
+  },
+  "result": {
+   "all": {
+    "fees_share": null,
+    "n": 0,
+    "pf": {
+     "hi": null,
+     "lo": null,
+     "lvl": 0.9,
+     "n": 0,
+     "v": null
+    },
+    "pf_inf": false,
+    "r": {
+     "hi": null,
+     "lo": null,
+     "lvl": 0.95,
+     "n": 0,
+     "v": null
+    },
+    "small": true,
+    "win": {
+     "hi": null,
+     "lo": null,
+     "lvl": 0.95,
+     "n": 0,
+     "v": null
+    }
+   },
+   "id": "result",
+   "note": "Закрытых сделок мозга в этом режиме пока нет.",
+   "reason": "no_trades",
+   "series": {
+    "200": [],
+    "50": []
+   },
+   "signal": {
+    "200": false,
+    "50": false
+   },
+   "status": "no_data",
+   "title": "Результат",
+   "windows": {
+    "200": {
+     "fees_share": null,
+     "n": 0,
+     "pf": {
+      "hi": null,
+      "lo": null,
+      "lvl": 0.9,
+      "n": 0,
+      "v": null
+     },
+     "pf_inf": false,
+     "r": {
+      "hi": null,
+      "lo": null,
+      "lvl": 0.95,
+      "n": 0,
+      "v": null
+     },
+     "small": true,
+     "win": {
+      "hi": null,
+      "lo": null,
+      "lvl": 0.95,
+      "n": 0,
+      "v": null
+     }
+    },
+    "50": {
+     "fees_share": null,
+     "n": 0,
+     "pf": {
+      "hi": null,
+      "lo": null,
+      "lvl": 0.9,
+      "n": 0,
+      "v": null
+     },
+     "pf_inf": false,
+     "r": {
+      "hi": null,
+      "lo": null,
+      "lvl": 0.95,
+      "n": 0,
+      "v": null
+     },
+     "small": true,
+     "win": {
+      "hi": null,
+      "lo": null,
+      "lvl": 0.95,
+      "n": 0,
+      "v": null
+     }
+    }
+   }
+  },
+  "skips": {
+   "id": "skips",
+   "note": "Упущенный ход показан в процентах цены после издержек, а не в R: у пропущенного сетапа нет стопа, и перевод в R был бы выдуманным числом. Рядом число сделок по неделям: рост доли верных при падении сд",
+   "reason": "no_whatif",
+   "signal": null,
+   "status": "no_data",
+   "title": "Пропуски",
+   "total": null,
+   "weeks": []
+  },
+  "versions": {
+   "id": "versions",
+   "note": "появится на этапе 2",
+   "reason": null,
+   "roadmap": "R2.6",
+   "stage": 2,
+   "status": "stage",
+   "title": "Версии мозга до/после"
+  },
+  "vs_policy": {
+   "alpha_adj": 0.0125,
+   "brain": {
+    "n": 0,
+    "r": {
+     "hi": null,
+     "lo": null,
+     "lvl": 0.95,
+     "n": 0,
+     "v": null
+    }
+   },
+   "caveats": [
+    "unpaired",
+    "selection",
+    "costs_model",
+    "correlated"
+   ],
+   "id": "vs_policy",
+   "k": 4,
+   "note": "База меток пуста или недоступна (сервис labels не писал в неё).",
+   "reason": "labels_off",
+   "rows": [],
+   "since": 1792411200,
+   "status": "no_data",
+   "summary": "few_data",
+   "title": "Мозг против теневой политики"
+  }
+ },
+ "meta": {
+  "built_ms": 0,
+  "cached": false,
+  "excluded": {
+   "manual": 0,
+   "no_plan": 0,
+   "no_r": 0,
+   "shadow": 0
+  },
+  "sources": {
+   "cases": 0,
+   "labels_db": false,
+   "trades": 0
+  },
+  "warnings": []
+ },
+ "min_n": 30,
+ "mode": "paper",
+ "ok": true,
+ "order": [
+  "result",
+  "vs_policy",
+  "discipline",
+  "skips",
+  "exits",
+  "economics",
+  "memory",
+  "lessons",
+  "versions"
+ ],
+ "schema": "tb.learning/1",
+ "verdict": {
+  "alpha_adj": 0.05,
+  "diff_r": null,
+  "guards": {
+   "trades_day": null,
+   "viol": null
+  },
+  "n": 0,
+  "n_prev": null,
+  "n_recent": null,
+  "p": null,
+  "params": {
+   "alpha": 0.05,
+   "guard_trades_ratio": 0.5,
+   "k": 1,
+   "min_n": 30,
+   "recent_n": 50
+  },
+  "reason": "n_lt_min",
+  "state": "few_data",
+  "text": "Сделок 0: данных мало, нужно хотя бы 30 (ещё 30), чтобы оценивать.",
+  "trend": null
+ }
+}

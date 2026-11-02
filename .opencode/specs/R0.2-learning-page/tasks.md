@@ -66,7 +66,7 @@
   - тесты `tests/test_learn_blocks_stages.py`: статус, тексты, отсутствие обращений к файловой системе
   - _Requirements: 12.1, 12.2, 12.3_
 
-- [ ] 12. Сборка отчёта `tb.learn.report`, `tb.learn.dashapi`, эталоны
+- [x] 12. Сборка отчёта `tb.learn.report`, `tb.learn.dashapi`, эталоны
   - `build`, `get` (кеш), `sanitize` (алфавит и длина строк, NaN/inf), `ORDER` и заголовки блоков, `_safe` для изоляции ошибок, `meta`, нормализация режима, `dashapi.api("/api/learning")`; эталонные ответы `tests/fixtures_learning/payload_full.json`, `payload_few.json` из синтетических данных с фиксированным seed
   - тесты `tests/test_learn_report.py`: свойства 1, 9, 10, 11, 13, 14; размер ответа не больше 64 КБ; пустая установка; запрещённые поля
   - _Requirements: 1.4, 1.5, 1.7, 1.8, 1.9, 2.1, 12.4, 12.5, 12.6, 13.7, 14.1, 14.5, 14.6, 17.1_
