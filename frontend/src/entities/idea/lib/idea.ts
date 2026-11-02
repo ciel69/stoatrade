@@ -63,7 +63,7 @@ export function ideaRoute(i: IdeaItem): IdeaRoute | null {
   if (!(risk > 0)) return null
   const far = i.tp != null && sign * (i.tp - i.level) > 0 ? i.tp : i.level + sign * risk
   const span = sign * (far - i.stop)
-  const at = (v: number) => Math.max(-0.08, Math.min(1.08, (sign * (v - i.stop!)) / span))
+  const at = (v: number) => Math.max(0, Math.min(1,(sign * (v - i.stop!)) / span))
   const level = at(i.level)
   const price = i.now_price == null ? null : at(i.now_price)
   return { level, price, gap: price != null && Math.abs(price - level) > 0.004 ? [Math.min(price, level), Math.max(price, level)] : null, inZone: i.zone }
