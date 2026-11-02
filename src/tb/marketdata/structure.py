@@ -139,6 +139,7 @@ def analyze(book, now):
     closes5 = [c.c for c in c5]
     if len(closes5) >= 13:
         out["r1h"] = sig(_pct(px, closes5[-13]), 3)
+        out["r1hc"] = sig(_pct(closes5[-1], closes5[-13]), 3)      # только закрытые свечи (r1h берёт цену формирующейся): для блока trend досье и ctx входа
     closes1h = [c.c for c in c1h]
     if len(closes1h) >= 5:
         out["r4h"] = sig(_pct(closes1h[-1], closes1h[-5]), 3)

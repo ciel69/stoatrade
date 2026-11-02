@@ -543,6 +543,7 @@ class Runner(object):
             ctx.update({k: v for k, v in validate.pm_context(b, job.get("plan"), info).items() if k != "plan"})
         elif role.output_schema == "entry/1":
             ctx.update(validate.entry_context(b, info))
+            ctx["max_data_age_s"] = (getattr(self.conf, "runtime", None) or {}).get("max_data_age_s")      # порог STALE_DATA (config/brain.json runtime; нет -> validate.MAX_DATA_AGE_S)
             ctx["cands"] = [c for c in (b.get("cands") or []) if isinstance(c, dict)]        # es_take/es_watch берут числа отсюда (то же, что видела модель)
         bb = {k: v for k, v in b.items() if k not in ("ok", "status", "errors", "warnings")}
         braw = common.dumps(bb)

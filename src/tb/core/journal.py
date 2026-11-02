@@ -139,6 +139,8 @@ def cmd_open(a):
     if ctx is None:
         ctx = tradectx.snapshot(a.sym, ts_open_epoch=tradepath.parse_ts(rec["ts_open"]))
     rec["ctx"] = ctx
+    if rec.get("regime") in (None, "", "unknown") and isinstance(ctx, dict) and tradectx.regime_class(ctx.get("regime")):
+        rec["regime"] = tradectx.regime_class(ctx["regime"])      # исполнитель и CLI без --regime пишут unknown: режим берётся из снимка входа (trend|range|volatile)
     if getattr(a, "ctx_place", None):
         rec["ctx_place"] = a.ctx_place
     _append(rec)

@@ -28,6 +28,7 @@ from tb.core import exec_cfg
 from tb.core import ideas as ideas_core
 from tb.core import portfolio
 from tb.core import plan_schema
+from tb.core import tradectx
 from tb.core.stops import loss_stop
 
 DEFAULT_BUDGET = 2500
@@ -975,19 +976,64 @@ def _b_crowd(root, now, b, sym, sd):
     return crowd_mod.build(st=st, ev=sd, der=b.get("deriv"), flow=b.get("flow"), fng=fng)
 
 
-def _b_data(b, sym):
-    """Полнота данных по монете события: struct (структура 5м/1ч), levels (число известных уровней), cands (кандидатов входа), flow, deriv, hot.
-    ready=false, когда нет структуры или уровней: entry_scout обязан ответить skip no_data, валидатор отклонит propose (NO_LEVELS / NO_DATA)."""
+def _px_age(c, sym):
+    """Возраст самой свежей цены монеты у сканера/фида -> (есть ли цена, возраст в секундах | None).
+    Источники: runtime/market.json (возраст файла + age_s монеты), runtime/prices.json и runtime/hot.json (ts_epoch файла) - те же, что берёт снимок входа (core/tradectx).
+    Цена есть, а метки времени нет -> (True, None): данные не считаются устаревшими. Монеты нет ни в одном источнике -> (False, None)."""
+    ages, have = [], False
+    m = (c.mkt.get("symbols") or {}).get(sym) if isinstance(c.mkt.get("symbols"), dict) else None
+    if isinstance(m, dict) and common.num(m.get("price")):
+        have = True
+        if c.mkt.get("age_s") is not None:
+            ages.append(float(c.mkt["age_s"]) + (common.num(m.get("age_s")) or 0.0))
+    for key in ("scan", "hot"):
+        d = c.sp.get(key) or {}
+        if sym in (d.get("prices") or {}):
+            have = True
+            if d.get("age_s") is not None:
+                ages.append(float(d["age_s"]))
+    return have, (int(min(ages)) if ages else None)
+
+
+def _b_data(b, sym, c=None):
+    """Полнота данных по монете события: struct (структура 5м/1ч), levels (число известных уровней), cands (кандидатов входа), flow, deriv, hot,
+    px (есть ли цена монеты у сканера/фида), px_age_s (возраст самой свежей из них, с; _px_age).
+    ready=false, когда нет структуры или уровней: entry_scout обязан ответить skip no_data, валидатор отклонит propose (NO_LEVELS / NO_DATA).
+    Возраст цены выше порога предпроверка мозга превращает в STALE_DATA без вызова модели (validate.entry_precheck)."""
     from tb.brain import validate as V
     st = ((b.get("struct") or {}).get("s") or {}).get(sym) if isinstance(b.get("struct"), dict) else None
     pool = V.level_pool(b, sym)
     out = {"struct": isinstance(st, dict), "levels": len(pool), "cands": len([x for x in (b.get("cands") or []) if isinstance(x, dict) and x.get("ok")]),
            "flow": isinstance(b.get("flow"), dict), "deriv": isinstance(b.get("deriv"), dict),
            "hot": any(isinstance(e, dict) and e.get("sym") == sym and isinstance(e.get("d"), dict) for e in (b.get("recent") or []))}
+    if c is not None:
+        out["px"], age = _px_age(c, sym)
+        if age is not None:
+            out["px_age_s"] = age
     out["ready"] = bool(out["struct"] and out["levels"] > 0)
     miss = [k for k in ("struct", "flow", "deriv") if not out[k]] + (["levels"] if out["levels"] == 0 else [])
     if miss:
         out["missing"] = miss
+    return out
+
+
+def _b_trend(c, sym):
+    """Блок `trend` досье события: тренд монеты события и BTC по закрытым свечам из runtime/structure.json (core/tradectx.trend_of):
+    {dir: up|down|flat, ret_1h_pct, ret_4h_pct, ret_24h_pct, btc: {то же} | null}. dir: |ret_24h| >= 2.5 ATR(1ч) -> знак ret_24h, иначе |ret_4h| >= 1 ATR(1ч) -> знак ret_4h, иначе flat.
+    Нет structure.json или записи ни по монете, ни по BTC -> None (блока нет); нет записи по монете -> поля монеты null. Ничего не выдумывается."""
+    d = _struct_doc(c)
+    if d is None:
+        return None
+    body = d["symbols"]
+    own = tradectx.trend_of(body.get(sym))
+    btc = tradectx.trend_of(body.get("BTC")) if sym != "BTC" else None
+    if own is None and btc is None:
+        return None
+    out = dict(own or {"dir": None, "ret_1h_pct": None, "ret_4h_pct": None, "ret_24h_pct": None})
+    out["btc"] = btc
+    age = c.now - common.num(d.get("ts_epoch"))
+    if age > STRUCT_FRESH_S:
+        out["stale_s"] = int(age)
     return out
 
 
@@ -1378,7 +1424,8 @@ def build(scope="start", since=None, budget_tokens=None, root=None, now=None, co
         if job_sym:
             b["deriv"] = _safe("deriv", lambda: _b_deriv(root, now, job_sym), missing)          # деривативы монеты события: funding, OI за сутки, лонг/шорт, базис к другим биржам
             b["crowd"] = _safe("crowd", lambda: _b_crowd(root, now, b, job_sym, sd), missing)   # настроение толпы: флаги, mood, сторона давления (crowd.py)
-            b["data"] = _safe("data", lambda: _b_data(b, job_sym), missing)                     # полнота данных по монете события: без структуры и уровней входа нет
+            b["trend"] = _safe("trend", lambda: _b_trend(c, job_sym), missing)                  # тренд монеты и BTC по закрытым свечам 1ч/5м (structure.json): данные, не запрет
+            b["data"] = _safe("data", lambda: _b_data(b, job_sym, c), missing)                  # полнота данных по монете события: без структуры и уровней входа нет; возраст цены (STALE_DATA)
     else:
         pid = scope_plan.group(1)
         full = _safe("plan", lambda: _b_plan_full(c, pid), missing)

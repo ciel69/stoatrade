@@ -31,7 +31,10 @@ ENTRY_TAGS = ("no-confirm", "blackout")
 ENTRY_PROPOSE_KEYS = ("sym", "side", "horizon", "level", "stop", "tp", "setup", "hypothesis", "ttl_min", "confirm", "thesis")
 ENTRY_OPTIONAL_KEYS = ("zone", "size_mult", "tags", "entry_type")
 ENTRY_MIN_RR = 2.0                                  # риск/прибыль брутто не ниже 2, когда в досье нет порога сессии (по средней цене целей при равных долях)
-ENTRY_PRECHECK_CODES = ("WIDE_RANGE", "DAY_NO_PLANS", "NO_SLOTS", "ROOM_CLOSED", "SYM_BUSY", "PAUSE_SYM", "PAUSE_ALL", "MIN_SIZE_SYM", "NO_DATA", "NO_SESSION")   # отказы по данным досье без вызова модели
+ENTRY_PRECHECK_CODES = ("WIDE_RANGE", "DAY_NO_PLANS", "NO_SLOTS", "ROOM_CLOSED", "SYM_BUSY", "PAUSE_SYM", "PAUSE_ALL", "MIN_SIZE_SYM", "NO_DATA", "NO_SESSION",
+                        "STALE_DATA")   # отказы по данным досье без вызова модели
+MAX_DATA_AGE_S = 120.0                              # цена монеты события у сканера/фида старше этого (brief.data.px_age_s) = STALE_DATA; порог: config/brain.json runtime.max_data_age_s
+                                                    # (разбор paper 2026-11-02: XPL, hot.json и prices.json устарели на 90 мин, вход разрешён)
 FADE_IMPULSE_ATR = 2.0                              # свеча события от 2 ATR(5м) против входа = импульс (кит, каскад): вход против него без реакции запрещён любому сетапу,
                                                     # кроме sweep_reject и level_reclaim (они по определению после реакции). UAI 2026-11-01: trend_pullback long в свечу -2.85%
 REACTION_SETUPS = ("sweep_reject", "level_reclaim")  # сетапы «после реакции цены»: единственные, которым можно входить против импульса и против паники/эйфории
@@ -350,6 +353,8 @@ def entry_context(brief, event=None):
     ctx["crowd_bias"] = cr.get("bias") if cr.get("bias") in ("long", "short", "none") else None
     dt = brief.get("data") if isinstance(brief.get("data"), dict) else {}
     ctx["data_ready"] = dt.get("ready") if isinstance(dt.get("ready"), bool) else None      # полнота данных монеты события (brief.data): False = входа нет
+    ctx["data_px"] = dt.get("px") if isinstance(dt.get("px"), bool) else None              # цена монеты у сканера/фида есть (False = данных нет вовсе)
+    ctx["data_age_s"] = _num(dt.get("px_age_s"))                                            # возраст самой свежей цены монеты у сканера/фида, с (brief._px_age)
     nc = (brief.get("risk_level") or {}).get("no_confirm") if isinstance(brief.get("risk_level"), dict) else None
     if isinstance(nc, dict):
         ctx["no_confirm_allowed"] = nc.get("allowed") if isinstance(nc.get("allowed"), bool) else None
@@ -425,10 +430,23 @@ def _loose(ctx):
     return (ctx.get("risk_level") or 0) >= LOOSE_RISK_LEVEL
 
 
+def data_stale(ctx):
+    """Устарели ли данные монеты события: возраст цены сканера/фида (data_age_s) выше порога max_data_age_s (по умолчанию MAX_DATA_AGE_S),
+    или цены монеты нет ни в одном источнике (data_px=False). Нет метки времени при наличии цены = не устарели. Нет блока data в досье = проверки нет."""
+    ctx = ctx or {}
+    if ctx.get("data_px") is False:
+        return True
+    lim = _num(ctx.get("max_data_age_s"))
+    lim = MAX_DATA_AGE_S if lim is None or lim <= 0 else lim
+    age = ctx.get("data_age_s")
+    return age is not None and age > lim
+
+
 def entry_precheck(ctx):
     """Отказ entry/1 по данным досье ДО вызова модели (экономия токенов; те же коды, что дала бы смысловая проверка) -> код или None.
     WIDE_RANGE: диапазон 5м события шире максимального стопа типа сессии (для scalp любой range_5m-сигнал: по определению сканера диапазон >= 0.8%);
-    DAY_NO_PLANS: план дня запрещает новые планы; NO_SLOTS / ROOM_CLOSED / SYM_BUSY / PAUSE_*: как в _entry."""
+    DAY_NO_PLANS: план дня запрещает новые планы; NO_SLOTS / ROOM_CLOSED / SYM_BUSY / PAUSE_*: как в _entry;
+    STALE_DATA: цена монеты события у сканера/фида старше max_data_age_s (data_stale), проверяется сразу после NO_DATA."""
     ctx = ctx or {}
     if not ctx.get("has_brief"):
         return None
@@ -436,6 +454,8 @@ def entry_precheck(ctx):
         return "NO_SESSION"                                  # сессии нет (день закрывается или не начат): входа не будет, модель не зовём (BEAM 2026-11-02: BAD_ENUM horizon)
     if ctx.get("struct_missing") or ctx.get("data_ready") is False:
         return "NO_DATA"                                     # нет структуры/уровней по монете события: без полного набора данных модель не зовём (UAI 2026-11-01)
+    if data_stale(ctx):
+        return "STALE_DATA"                                  # цена/данные сканера монеты события устарели (или их нет вовсе): модель не зовём (XPL 2026-11-02)
     if ctx.get("day_max_new_plans") == 0 and not ctx.get("off_plan_ok"):
         return "DAY_NO_PLANS"
     r5, ms = ctx.get("range_5m_pct"), ctx.get("max_stop_pct")
@@ -628,6 +648,8 @@ def _entry(o, ctx):
         errs.append("NO_SLOTS")
     if ctx.get("room_allowed") is False:
         errs.append("ROOM_CLOSED")
+    if data_stale(ctx):
+        errs.append("STALE_DATA")                            # цена сканера/фида по монете старше порога: план по устаревшим данным не подаём
     sign = 1 if side == "long" else -1
     ordered = all((b - a) * sign > 0 for a, b in zip(tps, tps[1:]))
     if not ((lvl - stop) * sign > 0 and all((t - lvl) * sign > 0 for t in tps) and ordered):
