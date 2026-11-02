@@ -100,12 +100,20 @@ def _page(url, limiter, http):
     raise FetchError(last)
 
 
+def bybit_symbol(sym):
+    """Тикер сканера ('BEAT', '1000PEPE') -> символ линейного контракта Bybit ('BEATUSDT'); полные имена (…USDT, …USDC) не меняются."""
+    s = str(sym or "").strip().upper()
+    return s if s.endswith(("USDT", "USDC")) else s + "USDT"
+
+
 def fetch(sym, interval, start_s, end_s, limiter, http=None, now_s=None):
     """Закрытые свечи sym интервала interval ('1','5','60' минут) с открытием в [start_s, end_s] -> Row по возрастанию.
 
     Пагинация по 1000 назад от end_s (Bybit отдаёт новые первыми); незакрытая свеча отбрасывается (tb.logic.bars.from_bybit).
+    sym — тикер сканера ('BEAT') или полный символ ('BEATUSDT'): в запрос уходит символ контракта (bybit_symbol).
     """
     from tb.logic import bars
+    sym = bybit_symbol(sym)
     http = http or default_http
     now_s = int(time.time()) if now_s is None else int(now_s)
     tf_s = int(interval) * 60

@@ -162,7 +162,7 @@
   - `docs/ARCHITECTURE.md`: пакет `tb.learn`, операция `learning`, страница; краткое описание страницы и правила вердикта для владельца в `docs/BRAIN.md` или `docs/RUNBOOK.md`; статус R0.2 в `docs/ROADMAP.md` ставит главный агент после приёмки
   - _Requirements: 17.4, 17.7_
 
-- [ ] 31. Финальная приёмка
+- [~] 31. Финальная приёмка (2026-11-02: `./tb test` 4719 тестов, 5 падений только охранных тестов из-за живой платформы и правки владельцем `config/local/providers.json` во время прогона; Playwright 91/91, четыре проверки фронта зелёные, `dist` пересобран; осталась сверка на копии боевых данных)
   - четыре проверки фронта (`typecheck`, `lint:fsd`, `test`, `build`) с числами; пересборка `frontend/dist`; полный `./tb test`; `npm --prefix frontend/e2e test`; `risk_profile.json`, `risk_levels.json` и лимиты не изменены
   - сверка на копии боевых данных: 3 числа с `./tb exp stats`, `./tb memory stats --mode paper`, `./tb labels stats --by policy`; отчёт с числами
   - _Requirements: 16.4, 16.5, 16.8, 17.5, 17.6, 17.7_

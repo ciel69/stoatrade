@@ -58,6 +58,14 @@ class FetchTest(unittest.TestCase):
         self.assertEqual([r[0] for r in rows], series.ts)
         self.assertTrue(all(c["category"] == "linear" and c["symbol"] == "ETHUSDT" and c["limit"] == "1000" for c in series.calls))
 
+    def test_scanner_ticker_becomes_contract_symbol(self):
+        """Сигналы хранят тикер сканера ('BEAT', '1000PEPE'); Bybit ждёт символ контракта: без этого каждый запрос шёл бы с неверным symbol."""
+        for given, sent in (("BEAT", "BEATUSDT"), ("1000PEPE", "1000PEPEUSDT"), ("btc", "BTCUSDT"), ("ETHUSDT", "ETHUSDT"), ("XUSDC", "XUSDC")):
+            self.assertEqual(klines.bybit_symbol(given), sent)
+            series = FakeSeries(0, 600, 60)
+            klines.fetch(given, "1", 0, 600, mk(Clock()), series, now_s=10 ** 6)
+            self.assertTrue(series.calls and all(c["symbol"] == sent for c in series.calls), given)
+
     def test_unclosed_candle_dropped(self):
         clk = Clock()
         series = FakeSeries(0, 600, 60)
