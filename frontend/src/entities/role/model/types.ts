@@ -20,10 +20,28 @@ export interface RoleModel {
 export interface ProfileRow {
   id: string
   provider: string
+  /** ключ модели у провайдера (для правки профиля); у старого сервера нет */
+  model?: string
   model_name: string
   provider_enabled: boolean
   live_ok: boolean
+  /** поставляется с платформой (правка ложится отдельным слоем) */
+  builtin?: boolean
   used_by?: string[]
+  params?: RoleParams
+}
+
+/** Шаблон провайдера (тема settings, preset_list): готовый набор для «Добавить провайдера». Ключей и имён файлов ключей в данных нет. */
+export interface PresetRow {
+  id: string
+  name: string
+  adapter: string | null
+  base_host: string | null
+  verified: boolean
+  note: string | null
+  models: string[]
+  /** уже добавлен в список провайдеров */
+  added: boolean
 }
 
 export interface RoleRow {
@@ -109,6 +127,7 @@ export interface SwapRow {
 export interface RolesSnapshot {
   provider_list?: ProviderRow[]
   profile_list?: ProfileRow[]
+  preset_list?: PresetRow[]
   exchange_list?: ExchangeRow[]
   swaps?: SwapRow[]
   revisions?: number | null

@@ -6,7 +6,8 @@ import type { ProviderRow } from '../model/types'
  * поэтому отправляем все пять полей целиком. Ноль у сервера означает «без потолка» (бюджет читает только истинные значения).
  */
 
-export type LimitKey = 'day_usd' | 'hour_usd' | 'day_toks' | 'rpm' | 'concurrent'
+/** Лимит запросов в минуту (rpm) сервер не применяет, поэтому его нет среди правимых потолков и в интерфейсе не показывается. */
+export type LimitKey = 'day_usd' | 'hour_usd' | 'day_toks' | 'concurrent'
 export type Limits = ProviderRow['limits']
 
 export interface LimitField {
@@ -16,14 +17,13 @@ export interface LimitField {
   unit: string
   kind: 'usd' | 'int'
   /** имя поля в конфигурации сервера (в теме токены называются day_toks, а хранятся как day_tokens) */
-  wire: 'day_usd' | 'hour_usd' | 'day_tokens' | 'rpm' | 'concurrent'
+  wire: 'day_usd' | 'hour_usd' | 'day_tokens' | 'concurrent'
 }
 
 export const LIMIT_FIELDS: readonly LimitField[] = [
   { key: 'day_usd', label: 'Деньги за день', unit: 'USD', kind: 'usd', wire: 'day_usd' },
   { key: 'hour_usd', label: 'Деньги за час', unit: 'USD', kind: 'usd', wire: 'hour_usd' },
   { key: 'day_toks', label: 'Токены за день', unit: 'токенов', kind: 'int', wire: 'day_tokens' },
-  { key: 'rpm', label: 'Запросов в минуту', unit: '', kind: 'int', wire: 'rpm' },
   { key: 'concurrent', label: 'Одновременных запросов', unit: '', kind: 'int', wire: 'concurrent' },
 ]
 

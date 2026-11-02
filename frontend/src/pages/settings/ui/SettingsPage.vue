@@ -9,6 +9,7 @@ import { RolePanel } from '@/widgets/settings/role-panel'
 import { RolesBoard } from '@/widgets/settings/roles-board'
 import { SwapsPanel } from '@/widgets/settings/swaps-panel'
 import { ModeBoard } from '@/widgets/settings/mode-board'
+import { ExpertBoard } from '@/widgets/settings/expert-board'
 import { UsageBoard } from '@/widgets/settings/usage-board'
 import { UsagePanel } from '@/widgets/settings/usage-panel'
 import { UiSidePanel } from '@/shared/ui'
@@ -52,6 +53,7 @@ function close(): void {
     <div class="w-conn"><ConnectBoard :provider="provider" :exchange="exchange" @provider="pickProvider" @exchange="pickExchange" /></div>
     <div class="w-cost"><UsageBoard :swaps-open="swaps" :selected="usage" @swaps="pickSwaps" @select="pickUsage" @close="close" /></div>
     <div class="w-trade"><ModeBoard /></div>
+    <div class="w-exp"><ExpertBoard /></div>
     <UiSidePanel :open="open" :label="label" @close="close">
       <RolePanel v-if="role" :key="'r' + role" :role="role" @close="close" />
       <ConnectPanel v-else-if="provider" :key="'p' + provider" kind="provider" :id="provider" @close="close" />
@@ -64,7 +66,7 @@ function close(): void {
 
 <style scoped>
 .page { gap: calc(var(--space-6) + var(--space-2)); }
-.w-roles, .w-conn, .w-trade, .w-cost { min-width: 0; }
+.w-roles, .w-conn, .w-trade, .w-cost, .w-exp { min-width: 0; }
 /* от 1500 px две колонки: «Кто думает» слева на всю высоту, справа «Режим платформы», «Что подключено» и «Сколько стоит» друг под другом */
 @media (min-width: 1500px) {
   .page { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); column-gap: var(--space-6); row-gap: calc(var(--space-6) + var(--space-2)); align-items: start; }
@@ -72,5 +74,6 @@ function close(): void {
   .w-conn { grid-column: 2; grid-row: 1; }
   .w-cost { grid-column: 2; grid-row: 2; }
   .w-trade { grid-column: 2; grid-row: 3; }
+  .w-exp { grid-column: 1 / -1; grid-row: 4; }
 }
 </style>

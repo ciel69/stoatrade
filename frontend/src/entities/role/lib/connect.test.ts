@@ -21,8 +21,8 @@ describe('подключения', () => {
     expect([ctxText(128000), ctxText(1000000), ctxText(null)]).toEqual(['128 тыс. токенов', '1 млн токенов', '–'])
   })
   it('лимиты расхода кратко', () => {
-    expect(limitsText(prov().limits)).toBe('до $3 в день, $1 в час, 60 запросов в минуту')
-    expect(limitsText({ concurrent: null, rpm: 30, day_usd: 0, hour_usd: 0, day_toks: 0 })).toBe('30 запросов в минуту')
+    expect(limitsText(prov().limits)).toBe('до $3 в день, $1 в час')
+    expect(limitsText({ concurrent: null, rpm: 30, day_usd: 0, hour_usd: 0, day_toks: 0 })).toBe('без лимитов')       // rpm сервер не применяет: не показываем
     expect(limitsText({ concurrent: null, rpm: null, day_usd: null, hour_usd: null, day_toks: null })).toBe('без лимитов')
   })
   it('ключ словами, без масок', () => {

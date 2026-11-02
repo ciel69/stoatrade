@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { groups, issuesOf, placeOf, roleLabel, summary, useRoleStore } from '@/entities/role'
+import { groups, issuesOf, placeOf, remarkText, roleLabel, summary, useRoleStore } from '@/entities/role'
 import { UiChip } from '@/shared/ui'
 
 /**
@@ -39,8 +39,8 @@ const errors = computed(() => s.value?.errors ?? [])
         <li v-if="issues.length > TOP" class="more-row"><button type="button" class="link" :aria-expanded="allIssues" @click="allIssues = !allIssues">{{ allIssues ? 'Свернуть замечания' : `Показать все замечания (${issues.length})` }}</button></li>
       </ul>
       <details v-if="errors.length" class="tech">
-        <summary>Настройки прочитаны с ошибками ({{ errors.length }})</summary>
-        <p v-for="(e, k) in errors" :key="k">{{ e }}</p>
+        <summary>Замечания к настройкам моделей ({{ errors.length }})</summary>
+        <p v-for="(e, k) in errors" :key="k">{{ remarkText(e) }}</p>
       </details>
 
       <section v-for="g in grouped" :key="g.id" class="group">

@@ -30,6 +30,7 @@ describe('nav', () => {
     expect(sectionOf('/trading/plans')?.label).toBe('Торговля')
     expect(sectionOf('/brain/brief')?.tabs?.length).toBe(2)
     expect(sectionOf('/system/control')?.label).toBe('Система')
+    expect(sectionOf('/system/notify')?.tabs?.map((t) => t.label)).toEqual(['Управление', 'Настройки', 'Уведомления'])
     expect(sectionOf('/')).toBeNull()
     expect(sectionOf('/unknown')).toBeNull()
   })

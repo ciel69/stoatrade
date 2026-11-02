@@ -6,6 +6,7 @@ import { UiChip, UiDetail } from '@/shared/ui'
 import { fixed, roleAbout, useRefocus } from '@/shared/lib'
 import { useRoleEdit, type AppliedEntry } from '../model/useRoleEdit'
 import ProfileList from './ProfileList.vue'
+import RoleOpts from './RoleOpts.vue'
 
 /**
  * Боковая панель роли: что она делает, какая модель основная и какие запасные (где работают, параметры, допуск к live), качество за сутки и расход.
@@ -242,6 +243,7 @@ const stateText = (e: AppliedEntry): string =>
 
       <details class="tech">
         <summary>Для специалиста</summary>
+        <RoleOpts :role="r" :target="edit.target.value" />
         <p v-if="r.primary">Параметры модели: {{ params(r.primary) || 'по умолчанию' }}</p>
         <p v-for="f in r.fallback" :key="f.id">Запасная {{ f.model_name }}: {{ params(f) || 'по умолчанию' }}</p>
         <p>профиль {{ r.primary?.id ?? '–' }} · роль {{ r.role }} · {{ edit.target.value }} · {{ r.scope }}{{ r.team ? ' ' + r.team : '' }} · {{ r.io ?? '' }}</p>

@@ -208,10 +208,10 @@ class ServerTest(Fx, unittest.IsolatedAsyncioTestCase):
     async def test_snapshot_then_only_changes(self):
         self.hb()
         async with connect("ws://127.0.0.1:%d/ws" % self.port) as ws:
-            first = [await self.recv(ws) for _ in range(15)]
-            self.assertEqual([m["topic"] for m in first], ["hello", "brain", "briefs", "ctl", "events", "market", "news", "settings", "system", "decisions", "home", "ideas", "models", "plans", "trades"])
+            first = [await self.recv(ws) for _ in range(16)]
+            self.assertEqual([m["topic"] for m in first], ["hello", "brain", "briefs", "ctl", "events", "market", "news", "notify", "settings", "system", "decisions", "home", "ideas", "models", "plans", "trades"])
             self.assertEqual(first[1]["data"]["status"], "idle")
-            self.assertEqual((first[0]["data"]["mode"], first[10]["data"]["mode"]), ("paper", "paper"))
+            self.assertEqual((first[0]["data"]["mode"], first[11]["data"]["mode"]), ("paper", "paper"))
             self.assertIn("enabled", first[0]["data"]["ctl"])
             for _ in range(60):                                                   # холодный старт: пока сервер доканчивает первую сборку тем, обновления ещё приходят; дочитываем до тишины
                 try:

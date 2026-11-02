@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { useLive, type LiveMessage } from '@/shared/api'
-import { mockChain, mockExchange, mockProvider, mockSnapshot, type RoleMock } from '../lib/mock'
+import { mockChain, mockExchange, mockProvider, mockSeed, mockSnapshot, type RoleMock } from '../lib/mock'
 import type { RolesSnapshot } from './types'
 
 export const useRoleStore = defineStore('role', () => {
@@ -13,6 +13,7 @@ export const useRoleStore = defineStore('role', () => {
   /** Отладка: принятые «сервером» изменения провайдеров переживают обновление темы от настоящего сервера. */
   const provPatches = new Map<string, Parameters<typeof mockProvider>[2]>()
   const exchPatches: Array<{ id: string; to: Parameters<typeof mockExchange>[2] }> = []
+  const extraPatches: Array<(s: RolesSnapshot) => RolesSnapshot> = []
 
   function apply(m: LiveMessage): void {
     const s = m.data as RolesSnapshot
@@ -20,6 +21,7 @@ export const useRoleStore = defineStore('role', () => {
     let out = mockSnapshot(s, mocked.value)
     for (const [id, to] of provPatches) out = mockProvider(out, id, to)
     for (const p of exchPatches) out = mockExchange(out, p.id, p.to)
+    for (const f of extraPatches) out = f(out)
     snapshot.value = out
   }
 
@@ -32,7 +34,7 @@ export const useRoleStore = defineStore('role', () => {
   /** Только для отладки без сервера (?edit=mock): входящие снимки дополняются примерами профилей. */
   function mock(kind: RoleMock): void {
     mocked.value = kind
-    if (snapshot.value) snapshot.value = mockSnapshot(snapshot.value, kind)
+    snapshot.value = snapshot.value ? mockSnapshot(snapshot.value, kind) : mockSeed(kind)
   }
 
   /** Отладка: «сервер» применяет цепочку через несколько секунд, как обновляется тема settings. */
@@ -57,5 +59,13 @@ export const useRoleStore = defineStore('role', () => {
     }, delayMs)
   }
 
-  return { snapshot, mocked, apply, start, mock, mockApply, mockProviderApply, mockExchangeApply }
+  /** Отладка: «сервер» применяет правку профиля, шаблона провайдера или параметров роли через несколько секунд. */
+  function mockExpertApply(f: (s: RolesSnapshot) => RolesSnapshot, delayMs = 2500): void {
+    setTimeout(() => {
+      extraPatches.push(f)
+      if (snapshot.value) snapshot.value = f(snapshot.value)
+    }, delayMs)
+  }
+
+  return { snapshot, mocked, apply, start, mock, mockApply, mockProviderApply, mockExchangeApply, mockExpertApply }
 })

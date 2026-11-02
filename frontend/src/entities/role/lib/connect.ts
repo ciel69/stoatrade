@@ -38,7 +38,7 @@ export function credText(p: Pick<ProviderRow, 'cred'> & { local?: boolean }): st
 /** Предупреждение о правах файла ключа (только когда точно известно, что они слабые). */
 export const permsWarning = (p: Pick<ProviderRow, 'cred'>): string | null => (p.cred.present && p.cred.perms_ok === false ? 'файл ключа читается другими пользователями' : null)
 
-/** Лимиты расхода кратко: «до $3 в день, $1 в час, 60 запросов в минуту». Пустые лимиты: «без лимитов». */
+/** Лимиты расхода кратко: «до $3 в день, $1 в час». Пустые лимиты: «без лимитов». Запросы в минуту (rpm) сервер не применяет, поэтому не показываются. */
 export function limitsText(l: ProviderRow['limits'] | null | undefined): string {
   if (!l) return 'без лимитов'
   const parts: string[] = []
@@ -48,7 +48,6 @@ export function limitsText(l: ProviderRow['limits'] | null | undefined): string 
   if (l.hour_usd) usd.push(`${money(l.hour_usd)} в час`)
   if (usd.length) parts.push(`до ${usd.join(', ')}`)
   if (l.day_toks) parts.push(`${num(l.day_toks)} токенов в день`)
-  if (l.rpm) parts.push(`${l.rpm} запросов в минуту`)
   if (l.concurrent) parts.push(`одновременно ${l.concurrent}`)
   return parts.length ? parts.join(', ') : 'без лимитов'
 }

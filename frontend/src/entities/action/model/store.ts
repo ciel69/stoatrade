@@ -273,6 +273,7 @@ export const useActionStore = defineStore('action', () => {
         pre_amber: [{ id: 'P1', name: 'Мозг на запасной модели', msg: 'основная модель сейчас не отвечает' }],
       }
     }
+    if (action === 'brain.profile' || (action === 'brain.role' && args.op !== 'chain')) return calm       // профиль и параметры роли: безрисковый поток
     if (action === 'brain.role' || action === 'brain.use') {
       return {
         danger: false, blocked: false, gates, phrases: ['mock'], nonce: 'mock', min_delay: 2, expires_in: 90, pre_amber: [],
@@ -338,9 +339,16 @@ export const useActionStore = defineStore('action', () => {
   /** Отладка правки моделей и провайдеров (?edit=mock): расширенное управление включено для brain.role, brain.use, llm.provider и записи ключа, ответы изображает mockTransport. calm: без рисков (безрисковый поток), иначе рискованный. */
   function mockEdit(calm = false): void {
     mocked = true
-    hello.value = { enabled: true, csrf: 'mock', full: true, modes: ['brain.role', 'brain.use', 'llm.provider', 'llmkey', 'risk.set', 'mode.set', 'exchange.set', 'day.start', 'day.stop'] }
+    hello.value = { enabled: true, csrf: 'mock', full: true, modes: ['brain.role', 'brain.use', 'brain.profile', 'llm.provider', 'llmkey', 'risk.set', 'mode.set', 'exchange.set', 'day.start', 'day.stop'] }
     transport = mockTransport(calm ? 'full' : 'confirm')
   }
 
-  return { hello, phase, spec, challenge, receivedAt, error, errorDetails, resultText, riskyRun, toasts, active, risks, start, can, run, sendKey, accept, recheck, cancel, reset, dismissToast, mock, mockEdit, applyHello, applyResult, applyFinal }
+  /** Отладка страницы уведомлений (?notify=mock...): доступны notify.set и notify.test, безрисковый поток; на сервер ничего не уходит. */
+  function mockNotify(): void {
+    mocked = true
+    hello.value = { enabled: true, csrf: 'mock', full: true, modes: ['notify.set', 'notify.test'] }
+    transport = mockTransport('full')
+  }
+
+  return { hello, phase, spec, challenge, receivedAt, error, errorDetails, resultText, riskyRun, toasts, active, risks, start, can, run, sendKey, accept, recheck, cancel, reset, dismissToast, mock, mockEdit, mockNotify, applyHello, applyResult, applyFinal }
 })

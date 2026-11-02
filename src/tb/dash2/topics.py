@@ -459,9 +459,18 @@ def settings(root=None, now=None):
         return r[1] if r and r[0] == 200 and isinstance(r[1], dict) else {}
     ov, rl = get("overview"), get("roles")
     pv, ex, rv = get("providers"), get("exchanges"), get("revisions")
-    profiles = [{"id": str(p.get("id"))[:40], "provider": str(p.get("provider") or "")[:40], "model_name": str(p.get("model_name") or "")[:80], "provider_enabled": bool(p.get("provider_enabled")),
-                 "live_ok": bool(p.get("live_ok")), "used_by": [str(x)[:60] for x in (p.get("used_by") or [])[:12]]}
-                for p in (get("profiles").get("profiles") or []) if isinstance(p, dict)]
+    pf = get("profiles")
+    profiles = [{"id": str(p.get("id"))[:40], "provider": str(p.get("provider") or "")[:40], "model": str(p.get("model") or "")[:40], "model_name": str(p.get("model_name") or "")[:80],
+                 "provider_enabled": bool(p.get("provider_enabled")), "live_ok": bool(p.get("live_ok")), "builtin": bool(p.get("builtin")), "used_by": [str(x)[:60] for x in (p.get("used_by") or [])[:12]],
+                 "params": _profile_params(p.get("params"))}
+                for p in (pf.get("profiles") or []) if isinstance(p, dict)]
+    try:
+        pr = get("presets")
+    except Exception:                    # шаблоны не обязательны: без них тема остаётся рабочей
+        pr = {}
+    presets = [{"id": str(p.get("id"))[:30], "name": str(p.get("name") or p.get("id"))[:60], "adapter": str(p.get("adapter") or "")[:40], "base_host": _host(p.get("base_url")),
+                "verified": p.get("verified") is True, "note": _txt(p.get("note"), 200), "models": [str(m)[:30] for m in (p.get("models") or [])[:12]], "added": bool(p.get("added"))}
+               for p in (pr.get("presets") or []) if isinstance(p, dict) and p.get("id")]
     day = {g.get("id"): g for g in (get("usage", {"days": ["1"], "by": ["role"]}).get("groups") or []) if isinstance(g, dict)}
     roles = []
     for r in rl.get("roles") or []:
@@ -495,8 +504,25 @@ def settings(root=None, now=None):
     swaps = [{k: s.get(k) for k in ("seq", "ts", "rev", "prev_rev", "kind", "tier", "by")} | {"target": [str(x)[:40] for x in (s.get("target") or [])[:6]], "from": str(s.get("from"))[:80], "to": str(s.get("to"))[:80]}
              for s in reversed((rv.get("swaps") or [])[-30:]) if isinstance(s, dict)]
     return {"mode": ov.get("mode"), "rev": ov.get("rev"), "live_team": ov.get("live_team"), "exchange": ov.get("exchange"), "providers": ov.get("providers"),
-            "usage_today": ov.get("usage_today"), "errors": [str(e)[:120] for e in ((ov.get("errors") or []) + (rl.get("errors") or []))[:6]], "roles": roles,
-            "provider_list": providers, "exchange_list": exchanges, "swaps": swaps, "revisions": len(rv.get("revisions") or []), "profile_list": profiles}
+            "usage_today": ov.get("usage_today"), "errors": _remarks(ov.get("errors"), rl.get("errors"), pv.get("errors"), pf.get("errors")), "roles": roles,
+            "provider_list": providers, "exchange_list": exchanges, "swaps": swaps, "revisions": len(rv.get("revisions") or []), "profile_list": profiles, "preset_list": presets}
+
+
+def _profile_params(p):
+    """Параметры профиля для страницы: только три известных поля (max_tokens в теме называется max_out_tok)."""
+    p = p if isinstance(p, dict) else {}
+    return {"temperature": _num(p.get("temperature")), "max_out_tok": _num(_first(p.get("max_out_tok"), p.get("max_tokens"))), "thinking": p.get("thinking") if isinstance(p.get("thinking"), str) else None}
+
+
+def _remarks(*groups):
+    """Замечания к конфигурации (ошибки чтения конфигов мозга и провайдеров): уникальные строки, не больше 12."""
+    out = []
+    for g in groups:
+        for e in g or []:
+            s = str(e)[:160]
+            if s and s not in out:
+                out.append(s)
+    return out[:12]
 
 
 def _host(url):
@@ -689,8 +715,32 @@ def ctl(root=None, now=None):
                      for r in (st.get("last") or [])[:8] if isinstance(r, dict)]}
 
 
-TOPICS = {"brain": brain, "ctl": ctl, "events": events, "market": market, "news": news, "briefs": briefs, "system": system, "settings": settings}
-INTERVAL = {"decisions": 3.0, "models": 30.0, "ideas": 10.0, "market": 5.0, "news": 15.0, "briefs": 10.0, "system": 5.0, "settings": 15.0}        # тема -> не чаще раза в N секунд (по умолчанию HEAVY_S сервера)
+def notify(root=None, now=None):
+    """Страница «Система · Уведомления»: те же данные, что `/api/notify/status` старого дашборда (tb.lifecycle.notifycfg.view), но по белому списку полей. Только чтение:
+    запись идёт действием notify.set. Источник `file` (свои настройки владельца) или `config` (своих ещё нет, действует config/lifecycle.json). Секретов в данных нет."""
+    from tb.lifecycle import notifycfg
+    now = time.time() if now is None else now
+    v = notifycfg.view(root, now)
+    s = v.get("settings") if isinstance(v.get("settings"), dict) else {}
+    q = s.get("quiet") if isinstance(s.get("quiet"), dict) else {}
+    lim = s.get("limits") if isinstance(s.get("limits"), dict) else {}
+    cats = s.get("categories") if isinstance(s.get("categories"), dict) else {}
+    st = v.get("stats") if isinstance(v.get("stats"), dict) else {}
+    last = v.get("sent_last") if isinstance(v.get("sent_last"), dict) else None
+    return {"source": "file" if v.get("source") == "file" else "config", "engine": bool(v.get("engine")), "warn": _txt(v.get("warn"), 200),
+            "settings": {"master": s.get("master") is True, "categories": {k: cats.get(k) is True for k in notifycfg.KEYS},
+                         "quiet": {"enabled": q.get("enabled") is True, "from": str(q.get("from") or "")[:5], "to": str(q.get("to") or "")[:5], "tz": "utc" if q.get("tz") == "utc" else "local",
+                                   "bypass": [k for k in (q.get("bypass") or []) if k in notifycfg.KEYS]},
+                         "limits": {"per_hour": _num(lim.get("per_hour")), "same_kind_min": _num(lim.get("same_kind_min"))}},
+            "categories": [{"id": str(c.get("id"))[:30], "label": str(c.get("label") or "")[:80], "on": bool(c.get("on")), "critical": bool(c.get("critical")), "bypass": bool(c.get("bypass"))}
+                           for c in (v.get("categories") or []) if isinstance(c, dict)],
+            "quiet_now": bool(v.get("quiet_now")), "held_n": int(_num(v.get("held_n")) or 0),
+            "sent_last": {"cat": str(last.get("cat") or "")[:30]} if last and last.get("cat") else None,
+            "stats": {k: int(_num(st.get(k)) or 0) for k in ("sent", "merged", "limited", "failed")}, "hint": _txt(v.get("hint"), 300)}
+
+
+TOPICS = {"brain": brain, "ctl": ctl, "events": events, "market": market, "news": news, "notify": notify, "briefs": briefs, "system": system, "settings": settings}
+INTERVAL = {"decisions": 3.0, "models": 30.0, "ideas": 10.0, "market": 5.0, "news": 15.0, "notify": 5.0, "briefs": 10.0, "system": 5.0, "settings": 15.0}      # тема -> не чаще раза в N секунд (по умолчанию HEAVY_S сервера)
 MODE_TOPICS = {"home": home, "trades": trades, "decisions": decisions, "models": models, "plans": plans, "ideas": ideas}        # зависят от режима клиента: строятся для каждого режима, который сейчас смотрит хотя бы один клиент
 
 

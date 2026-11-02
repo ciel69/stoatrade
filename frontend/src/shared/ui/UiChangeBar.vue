@@ -3,7 +3,7 @@
  * Строка изменения: «было → станет» одной фразой, последствия словами, «Сбросить» и «Применить». Само подтверждение рисков делает общий диалог, здесь только запуск.
  * Появляется и исчезает прозрачностью и сдвигом на несколько пикселей.
  */
-defineProps<{ line: string; effect: string; apply: string; busy: boolean; hint?: string }>()
+defineProps<{ line: string; effect: string; apply: string; busy: boolean; hint?: string; resetLabel?: string }>()
 defineEmits<{ apply: []; reset: [] }>()
 </script>
 
@@ -13,7 +13,7 @@ defineEmits<{ apply: []; reset: [] }>()
     <p class="effect">{{ effect }}</p>
     <p v-if="hint" class="effect warn">{{ hint }}</p>
     <div class="acts">
-      <button type="button" class="ghost" :disabled="busy" @click="$emit('reset')">Сбросить</button>
+      <button type="button" class="ghost" :disabled="busy" @click="$emit('reset')">{{ resetLabel ?? 'Сбросить' }}</button>
       <button type="button" class="cta" :disabled="busy" @click="$emit('apply')">{{ apply }}</button>
     </div>
   </div>
@@ -22,7 +22,7 @@ defineEmits<{ apply: []; reset: [] }>()
 <style scoped>
 .bar { display: grid; gap: var(--space-2); padding-top: var(--space-3); border-top: 1px solid var(--line); }
 .line { margin: 0; display: grid; gap: 2px; font-size: 14px; }
-.line b { font-weight: 650; overflow-wrap: anywhere; }
+.line b { font-weight: 650; overflow-wrap: anywhere; white-space: pre-line; }
 .cap { font-size: 12px; color: var(--muted); }
 .effect { margin: 0; font-size: 12px; line-height: 1.5; color: var(--muted); }
 .effect.warn { color: var(--warn); }
