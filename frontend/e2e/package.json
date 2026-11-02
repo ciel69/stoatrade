@@ -5,7 +5,8 @@
   "type": "module",
   "description": "Сквозные сценарии нового дашборда: Playwright в установленном Microsoft Edge, фейковый WebSocket dash2 и статика frontend/dist. Реальной платформы не касаются.",
   "scripts": {
-    "test": "node --experimental-strip-types --no-warnings=ExperimentalWarning run.mjs"
+    "test": "node --experimental-strip-types --no-warnings=ExperimentalWarning run.mjs",
+    "screenshots": "node --experimental-strip-types --no-warnings=ExperimentalWarning screenshots.mjs"
   },
   "engines": {
     "node": ">=22.6"

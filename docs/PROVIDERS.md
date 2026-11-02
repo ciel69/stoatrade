@@ -39,9 +39,9 @@ CLI:
 ```
 ./tb llm provider add gemini --preset gemini      # written to config/local/providers.json, added DISABLED
 ```
-Dashboard: **System -> Settings -> Providers -> "Add provider from template" -> "Add disabled"** (needs the dashboard token once: it is printed on first `./tb start`, or `./tb control token new`).
+Dashboard: **Система -> Настройки** (System -> Settings), block **«Для специалиста» -> «Добавить провайдера»** (For the specialist -> Add provider): the provider is added disabled and without a key. Changes from the dashboard work only after the owner enables extended control (`auth.dash2_full` in `config/control.json`, `docs/CONTROL.md`); otherwise the page is read-only. The first run (`./tb setup`, step 4) can do this step for you in the terminal, including local models.
 
-![Settings: AI connections](images/settings.png)
+<picture><source media="(prefers-color-scheme: dark)" srcset="images/settings-dark.png"><source media="(prefers-color-scheme: light)" srcset="images/settings-light.png"><img src="images/settings-dark.png" alt="Settings: who thinks, what is connected, what it costs"></picture>
 
 ## 3. Key, model name, enable (order matters: a provider without a key cannot be enabled)
 
@@ -80,9 +80,7 @@ A **profile** = provider + model + params (temperature, max tokens, thinking). A
 | `day_auditor` | shared | day close (job) | day summary, carry decisions |
 | `news_reader` | shared | called on news headlines | the quarantined reader of third-party text (strict JSON only) |
 
-Role names: `position_manager` means the live team's role, `A.position_manager` names the team explicitly, `shared.news_reader` a shared role. Chain and profile changes need a signing key (created automatically by `./tb start`, or `./tb control init-key`). The same screen exists in the dashboard (**Settings -> Roles**, change needs the token):
-
-![Settings: roles](images/settings.png)
+Role names: `position_manager` means the live team's role, `A.position_manager` names the team explicitly, `shared.news_reader` a shared role. Chain and profile changes need a signing key (created automatically by `./tb start`, or `./tb control init-key`). The same roles are listed in the dashboard (**Система -> Настройки**, block **«Кто думает»** (who thinks): click a role to see its chain, budget and today's calls; changing it needs extended control, see step 2). The screenshot is above.
 
 Mixing is allowed and sensible: a cheap model for `news_reader`/`reviewer`/`entry_scout`, a stronger one for `morning_analyst`/`position_manager`, a second provider as `--fallback` so a 429/5xx from one vendor does not blind the brain.
 
@@ -125,9 +123,9 @@ Then:
 
 The brain starts as soon as **one** profile in the live team's chains is usable (provider enabled, key present). Other roles whose chain points to a keyless provider fall through to the next entry; assign everything to your provider with `./tb brain use all <profile>` to avoid noise.
 
-After it starts, open the dashboard: **Brain -> Decisions** shows the card "Brain: working" and the log of decisions (who, what, why, result):
+After it starts, open the dashboard: **Обзор** (Overview) shows the card «Что делает мозг» (what the brain is doing) with its last thoughts, and **Мозг -> Решения** (Brain -> Decisions) the log of decisions (who, what, why, result) and the result per model against its LLM cost:
 
-![Brain card and decision log](images/brain-decisions.png)
+<picture><source media="(prefers-color-scheme: dark)" srcset="images/brain-decisions-dark.png"><source media="(prefers-color-scheme: light)" srcset="images/brain-decisions-light.png"><img src="images/brain-decisions-dark.png" alt="Decision log and result per model"></picture>
 
 ## 7. Your own OpenAI-compatible endpoint (proxy, vLLM, company gateway, LiteLLM...)
 
@@ -179,7 +177,7 @@ LM Studio: `./tb llm provider add lmstudio --preset lmstudio`, enable "Local Ser
 | `--live` check: `auth` / 401 | wrong key, or key for another endpoint | re-enter: `./tb llm key set ID` |
 | `--live` check: model not in list / 404 | wrong `name` | take it from `GET /models`, `./tb llm model set ... --name` |
 | `BAD_FORMAT` in brain log, decisions skipped | model does not follow the JSON schema, or no tool/JSON support | stronger model, `json_mode`/`tools` flags, lower temperature, fallback |
-| `E_ELEVATE` / 401 in the dashboard | changing settings needs the token | enter it once (`./tb control token new` if lost) |
+| `E_ELEVATE` in the dashboard | changing settings from the dashboard needs extended control | the owner enables `auth.dash2_full` in `config/control.json` (`docs/CONTROL.md`), or use the CLI commands above |
 | budget state `exhausted` | day/hour limit hit | `./tb llm usage`, raise the limit in `config/local/providers.json` / `config/local/brain.json` consciously, or wait |
 
 More: `docs/BRAIN.md` (runtime, swap, fallback, files), `docs/ROLES.md` (prompts and schemas), `docs/spec_v2/07b_roles_providers.md` (design), `docs/spec_v2/SETTINGS_API.md` (settings API contract).

@@ -59,7 +59,7 @@ V2 = {
     "memory": "tb.memory.cli",     # память случаев (WP15a)
     "risk": "tb.control.risk_cmd",  # уровни риска (WP16): risk level show|set|list|check, risk init-key
     "notify": "tb.lifecycle.notify_cli",  # уведомления ОС: status|on|off|set|test (WP-N)
-    "setup": "tb.setup_cli",        # помощник настройки владельца: ключи, токены (только Terminal.app, TTY)
+    "setup": "tb.setup_cli",        # первый запуск и помощник настройки: среда, зависимости, ключи, токены, LLM (вопросы только в терминале)
     "smoke": "tb.smoke",            # сквозной прогон paper на фейковом LLM во временном корне
     "audit-public": "tb.audit.public",   # проверка перед публикацией репозитория (только чтение)
     "day": "tb.lifecycle.cli",      # жизненный цикл дня (WP14): status|list|report|checklist|preflight (только чтение)
@@ -98,7 +98,7 @@ USAGE = """использование: ./tb <группа> <команда> [а�
   day <status|list|report [ID]|checklist|preflight> [--json]   жизненный цикл дня: состояние, итоги, сухой прогон чек-листа закрытия, preflight (WP14; только чтение)
   notify <status|on|off|set КАТЕГОРИЯ on|off|set quiet HH:MM-HH:MM|set quiet off|test>   уведомления ОС: мастер, категории, тихие часы (docs/NOTIFICATIONS.md)
   control <token new|status|gates|audit|cmd|run>   плоскость управления: ключ, токен входа, гейты live, аудит, сервис ctl (WP12)
-  setup [--check] | setup bybit [--profile read|trade|testnet]   помощник настройки: ключ подписи, токены, ключ DeepSeek, ключи Bybit (скрытый ввод; другие провайдеры: llm key set; docs/PROVIDERS.ru.md), права, итоговая таблица (docs/QUICKSTART.md, docs/EXCHANGES.md)
+  setup [--yes] [--dry-run] [--no-start] | setup --check [--offline] | setup bybit [--profile read|trade|testnet]   первый запуск: проверка среды, установка websockets, ключ подписи, токены, ключи Bybit, провайдер LLM (скрытый ввод), запуск платформы и дашборда (docs/QUICKSTART.md, docs/EXCHANGES.md)
   smoke [--max-seconds N] [--keep]   сквозной прогон paper (фейковый LLM, временный корень, публичные данные Bybit); docs/spec_v2/SMOKE_RESULT.md
   dash [--port 8765] [--open] [--max-seconds N]   дашборд по умолчанию (127.0.0.1): Vue + WebSocket, токена входа нет; live-кнопки выключены, пока владелец не включит флаги в config/control.json (docs/CONTROL.md)
   audit-public [--json] [--root ПУТЬ] [--term СЛОВО] [--strict]   проверка дерева перед публикацией: секреты, личные данные, крупные файлы, лицензия (только чтение; docs/PUBLISH_CHECKLIST.md)

@@ -17,8 +17,8 @@ So the risk level in tests is always the default (3), whatever the owner has cho
 do not hard-code counts that other work packages change without naming what they count. `tests/test_zz_realstate_guard.py` compares snapshots of the real dirs (and checks for a leaked `TB_ROOT`); with a live platform it checks only `config/` and skips `state/`, `runtime/` (the platform writes there itself).
 
 ## Rules
-- **Standard library only.** No third-party dependencies, no `pip install` step.
-- **Cross-platform.** Use `os.path`/`tb.paths` for paths, `tb.fsutil` for atomic replace; no shell-only tricks; keep `tb`, `tb.cmd`, `tb.ps1` behaviour identical (logic lives in `src/tb/launcher.py`).
+- **Standard library only.** No new third-party dependencies. The only required one is `websockets` (the dashboard server, `requirements.txt`); `ccxt` is optional. `./tb setup` installs `websockets` for users; do not add more without discussion.
+- **Cross-platform.** Use `os.path`/`tb.paths` for paths, `tb.fsutil` for atomic replace; no shell-only tricks; keep `tb`, `tb.cmd`, `tb.ps1` behaviour identical (logic lives in `src/tb/launcher.py`; the only pre-Python code is the interpreter lookup and `scripts/bootstrap.sh` / `scripts/bootstrap.ps1`).
 - **No real keys in tests, fixtures, docs or issues.** Fake secrets must be obviously fake. Never read `~/.config/traider-bot/` from tests or from the brain/gateway layers.
 - **Never write to the real `state/`, `runtime/`, `data/` or `config/` from tests.** Use a temporary root (`TB_ROOT` or `--root`); `tests/test_zz_realstate_guard.py` checks this.
 - **Keep the layers** (`tests/test_layering.py`): `brain`, `logic`, `core`, `dash`, `gateway`, `mcp`, `llm`, `control`, `lifecycle` do not import `tb.venues` or `tb.executor`; `logic` is pure; the gateway and MCP import no network, process or exchange code; the exchange secret name appears only in the launcher and venue modules.

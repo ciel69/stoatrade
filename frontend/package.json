@@ -9,7 +9,8 @@
     "build": "vue-tsc --noEmit && vite build",
     "typecheck": "vue-tsc --noEmit",
     "test": "vitest run",
-    "lint:fsd": "steiger ./src"
+    "lint:fsd": "steiger ./src",
+    "screenshots": "npm --prefix e2e run screenshots --"
   },
   "engines": {
     "node": ">=20"
