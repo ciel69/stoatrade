@@ -4,4 +4,4 @@ rem Реальные деньги запускаются ТОЛЬКО кнопк
 cd /d "%~dp0"
 rem Первый раз: tb.cmd setup (ключи и токены), затем docs\QUICKSTART.md
 call tb.cmd start
-start "" "http://127.0.0.1:8765/#control"
+start "" "http://127.0.0.1:8765/system/control"

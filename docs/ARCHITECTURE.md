@@ -9,7 +9,8 @@ core/          journal, session, portfolio, guard, pending (ждущие лим�
 venues/        base.Venue (open/close/positions/balance) и реализации: bybit.py (BybitVenue + CLI), bybit_limit.py (ждущие лимитные входы), bybit_stream.py (watch)
 marketdata/    feed, wsclient, features, history, funding_history, watch, context, data, collect, patterns (чистые функции фигур/уровней), patterns_scan (`./tb patterns scan`), hotscan (сканер горячих монет по всему рынку Bybit, `./tb bybit read scan`; вывод runtime/hot.json и runtime/prices.json)
 research/      research_*.py (в т.ч. research_patterns: `./tb research patterns`), compare_venues, backtest, paper_donchian (не торгуют)
-dash/          локальный дашборд (`./tb dash`): model.py (чтение файлов и расчёты), server.py (http.server), static/ (HTML+CSS+JS по частям)
+dash2/         дашборд по умолчанию (`./tb dash`, порт 8765): server.py (статика `frontend/dist` и WebSocket `/ws`), topics.py (темы), ctlbridge.py (мост команд в ctl); фронт Vue в `frontend/`
+dash/          старый дашборд (`./tb dash-old`, порт 8768): model.py (чтение файлов и расчёты, им пользуется и dash2), server.py (http.server), static/ (HTML+CSS+JS по частям)
 legacy_engine/ signals, risk, state, tick, sizing: старый автоматический движок, живой торговлей не используется
 paths.py       ЕДИНСТВЕННОЕ место с путями: корень от расположения файла или TB_ROOT
 launcher.py    платформенная логика входа: env-файл ключа Bybit, снятие прокси, UTF-8 консоль; fsutil.py: os.replace с повторами для Windows
@@ -71,6 +72,11 @@ python3 -m unittest discover -s tests -p "test_guard.py"
 Правила для нового кода: пути через `paths`/`os.path`, `open(..., encoding="utf-8")`, замена файла через `fsutil.replace`, без `fcntl`/`os.fork`/`sh`.
 
 ## Дашборд (`./tb dash [--port 8765] [--open] [--max-seconds N]`)
+С 2026-11-02 по умолчанию новый дашборд (`src/tb/dash2/`, `docs/FRONTEND_PLAN.md`). Один порт на `127.0.0.1`: статика собранного фронта Vue (`frontend/dist`, лежит в репозитории, запуск без Node; пересборка `npm --prefix frontend ci && npm --prefix frontend run build`) и WebSocket `/ws`.
+Сервер сам собирает темы из файлов проекта и шлёт клиенту снимок при подключении, дальше только изменившиеся темы (опроса нет; при обрыве клиент переподключается сам). Проверяются Host и Origin, число сокетов ограничено. Команды управления идут тем же сокетом через мост `ctlbridge` в сервис `ctl` (подписанные файлы, аудит; права и флаги `auth.dash2_full`, `allow_*_from_dash`: `docs/CONTROL.md`). Ключей и биржи дашборд не касается.
+Платформа поднимает его сервисом `dash` (порт `svc.dash.port`, 8765). Старый дашборд остаётся до подтверждения владельца: `./tb dash-old` (порт 8768) или сервис `dash-old` (`--services ...,dash-old`, в набор по умолчанию не входит); его описание ниже.
+
+### Старый дашборд (`./tb dash-old`)
 Только чтение. `http.server` на `127.0.0.1` (адрес не настраивается; чужой заголовок Host даёт 403, любой не-GET даёт 405), страница без CDN и сборки (`dash/static/`:
 index.html, app.css, app.js), опрос `/api/state` раз в 3 с. Данные ТОЛЬКО из файлов проекта: `state/{trades,sessions}.jsonl`, `portfolio.json`, `learning.json`,
 `runtime/{market,context,hot,health}.json`, `events.jsonl`, `config/risk_profile.json`. Биржу и ключи не трогает (тест `test_dash.py` проверяет исходники и ответы на секреты;

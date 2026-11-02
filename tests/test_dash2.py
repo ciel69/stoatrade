@@ -486,7 +486,10 @@ class ServerTest(Fx, unittest.IsolatedAsyncioTestCase):
             wr.close()
             return data.decode("utf-8", "replace")
         self.assertIn("200 OK", (await get("/")).split("\r\n")[0])
-        self.assertIn("Фронт ещё не собран", await get("/"))
+        page = await get("/")
+        self.assertIn("Интерфейс ещё не собран", page)
+        self.assertIn("npm --prefix frontend ci", page)
+        self.assertIn("npm --prefix frontend run build", page)
         self.assertIn("404", (await get("/..%2f..%2fCLAUDE.md.js")).split("\r\n")[0])
         self.assertEqual(S.safe_file(os.path.join(self.root, "d"), "../x"), None)
 

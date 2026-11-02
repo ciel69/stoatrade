@@ -1,6 +1,6 @@
-"""Новый дашборд: `./tb dash2 [--port 8767] [--max-seconds N]`.
+"""Дашборд по умолчанию: `./tb dash [--port 8765] [--open] [--max-seconds N]` (то же `./tb dash2`).
 
-Один порт на 127.0.0.1: статика собранного фронта (`frontend/dist`, сборка `npm ci && npm run build` в `frontend/`) и WebSocket `/ws`. Старый дашборд (`./tb dash`, 8766) не затрагивается.
+Один порт на 127.0.0.1: статика собранного фронта (`frontend/dist`, сборка `npm ci && npm run build` в `frontend/`) и WebSocket `/ws`. Старый дашборд теперь `./tb dash-old` (8768) и не затрагивается.
 Протокол (docs/FRONTEND_PLAN.md, раздел 4): сообщение {"topic","seq","ts","data"}; при подключении клиент получает `hello` и снимок каждой темы, дальше тема приходит только когда её содержимое
 изменилось (один общий цикл раз в TICK_S секунд на всех клиентов, а не опрос от каждого). Раз в HEARTBEAT_S секунд тема `link` (клиент по ней видит, что связь жива). Клиент -> сервер: {"op":"ping"} -> {"topic":"pong"}.
 Опроса нет: при обрыве клиент переподключается сам и получает свежие снимки. Команды управления (только старт и мягкая остановка дня в paper|testnet|observe) идут тем же сокетом
@@ -20,7 +20,7 @@ from tb import paths
 from tb.dash2 import ctlbridge, topics
 
 HOST = "127.0.0.1"
-DEFAULT_PORT = 8767
+DEFAULT_PORT = 8765        # порт дашборда платформы (svc.dash.port); dev-запуск рядом: --port 8767
 MAX_CLIENTS = 12           # вкладки + быстрые переходы; слот освобождается при закрытии страницы (клиент закрывает сокет на pagehide) или за ping_interval + ping_timeout
 PING_INTERVAL_S = 10       # оборванное соединение (вкладка убита, сеть пропала) держит слот не дольше PING_INTERVAL_S + PING_TIMEOUT_S
 PING_TIMEOUT_S = 10
@@ -32,9 +32,10 @@ CTYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=
           ".json": "application/json; charset=utf-8", ".woff2": "font/woff2", ".png": "image/png", ".ico": "image/x-icon", ".map": "application/json"}
 PLACEHOLDER = """<!doctype html><meta charset="utf-8"><title>Stoa: новый дашборд</title>
 <body style="font:16px system-ui;background:#0b121a;color:#e8eef4;padding:32px;max-width:640px">
-<h1>Фронт ещё не собран</h1><p>Сервер и сокет работают. Соберите интерфейс:</p>
-<pre style="background:#121c28;padding:12px;border-radius:8px">cd frontend\nnpm ci\nnpm run build</pre>
-<p>Для разработки: <code>npm run dev</code> (порт 5173, сокет проксируется сюда).</p></body>"""
+<h1>Интерфейс ещё не собран</h1><p>Сервер и сокет работают, но папки <code>frontend/dist</code> с готовым интерфейсом нет. Нужен Node.js (его ставят один раз). Откройте терминал в папке проекта и выполните две команды, затем обновите страницу:</p>
+<pre style="background:#121c28;padding:12px;border-radius:8px">npm --prefix frontend ci\nnpm --prefix frontend run build</pre>
+<p>Первая команда скачивает зависимости, вторая собирает интерфейс. Перезапускать дашборд не нужно. Старый дашборд пока доступен командой <code>./tb dash-old</code>.</p>
+<p>Для разработки: <code>npm --prefix frontend run dev</code> (порт 5173, сокет проксируется сюда).</p></body>"""
 
 
 def dist_dir(root=None):
@@ -345,11 +346,17 @@ async def serve(port=DEFAULT_PORT, root=None, max_seconds=None, ready=None):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="tb dash2", description="новый дашборд (Vue + WebSocket), только чтение, 127.0.0.1")
+    ap = argparse.ArgumentParser(prog="tb dash", description="дашборд (Vue + WebSocket), 127.0.0.1")
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     ap.add_argument("--max-seconds", type=float, default=None, dest="max_seconds")
+    ap.add_argument("--open", action="store_true", help="открыть страницу в браузере по умолчанию")
     a = ap.parse_args(sys.argv[1:] if argv is None else argv)
-    print("дашборд v2: http://%s:%d/  (старый: ./tb dash)" % (HOST, a.port), flush=True)
+    url = "http://%s:%d/" % (HOST, a.port)
+    print("дашборд: %s  (старый: ./tb dash-old)" % url, flush=True)
+    if a.open:
+        import threading
+        import webbrowser
+        threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     try:
         asyncio.run(serve(a.port, max_seconds=a.max_seconds))
     except KeyboardInterrupt:

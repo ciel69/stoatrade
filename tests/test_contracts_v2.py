@@ -276,8 +276,10 @@ class TestDispatcher(unittest.TestCase):
             self.assertTrue(callable(getattr(importlib.import_module(mod), fn or "main", None)), g)
 
     def test_old_groups_still_registered(self):
-        for g in ("guard", "journal", "ideas", "session", "portfolio", "learning", "bybit", "dash", "paper", "tick"):
+        for g in ("guard", "journal", "ideas", "session", "portfolio", "learning", "bybit", "dash-old", "paper", "tick"):
             self.assertIn(g, disp.SIMPLE)
+        self.assertNotIn("dash", disp.SIMPLE)           # `./tb dash` теперь новый дашборд (V2), старый только dash-old
+        self.assertEqual(disp.V2["dash"], disp.V2["dash2"])
         rc, _, _ = self.run_cli([])
         self.assertEqual(rc, 2)
         rc, _, _ = self.run_cli(["nonexistent_group"])
