@@ -146,9 +146,10 @@ def cmd_manage(argv):
     sp = p.add_subparsers(dest="grp")
     sp.add_parser("presets")
     pv = sp.add_parser("provider")
-    pv.add_argument("op", choices=["add", "update", "remove", "enable", "disable"])
+    pv.add_argument("op", choices=["add", "update", "remove", "enable", "disable", "models", "ping"])
     pv.add_argument("id")
     pv.add_argument("--preset", default=None)
+    pv.add_argument("--model", default=None, help="ключ модели для ping (по умолчанию первая)")
     pv.add_argument("--set", action="append", default=[], dest="sets", help="поле=значение (JSON), повторяется")
     md = sp.add_parser("model")
     md.add_argument("op", choices=["set", "remove"])
@@ -171,6 +172,10 @@ def cmd_manage(argv):
         _out({"ok": True, "presets": provstore.preset_rows(root), "note": "все шаблоны НЕ ПРОВЕРЕНЫ живым ключом: ./tb llm check --provider ID --live"})
         return 0
     if a.grp == "provider":
+        if a.op in ("models", "ping"):          # сеть: models бесплатный, ping платный (минимальный запрос к модели)
+            r = provstore.list_models(root, a.id) if a.op == "models" else provstore.ping(root, a.id, a.model)
+            _out(r)
+            return 0 if r["ok"] else 1
         if a.op == "add":
             return _res_out("llm.provider", {"op": "add", "id": a.id}, provstore.add(root, a.id, preset=a.preset, spec=_parse_set(a.sets) or None))
         if a.op == "update":

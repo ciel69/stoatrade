@@ -50,6 +50,21 @@ class Base(unittest.TestCase):
         return [(a["action"], a["code"]) for a in audit.tail(self.e.root, 100)]
 
 
+class TestModelsResult(Base):
+    def test_models_ids_pass_whole_other_data_cleaned(self):
+        from tb import paths
+        from tb.control import ctlstate, protocol
+        ids = ["m%04d" % i for i in range(500)]
+        data = {"ok": True, "ids": ids, "count": 612, "truncated": True, "source": "models", "detail": "x" * 400}
+        ctlstate.write_json(paths.control_outbox("K-20260101T000000-aaaaaa.json", root=self.e.root), protocol.result("K-20260101T000000-aaaaaa", "done", "OK", data, 1.0))
+        res = self.b.result_of("K-20260101T000000-aaaaaa")
+        d = res["data"]
+        self.assertEqual((len(d["ids"]), d["count"], d["truncated"], d["ok"]), (500, 612, True, True))
+        self.assertEqual(len(d["detail"]), 300)
+        ctlstate.write_json(paths.control_outbox("K-20260101T000000-bbbbbb.json", root=self.e.root), protocol.result("K-20260101T000000-bbbbbb", "done", "OK", {"ids": list(range(100))}, 1.0))
+        self.assertEqual(len(self.b.result_of("K-20260101T000000-bbbbbb")["data"]["ids"]), 24)           # без source=models прежние ограничения
+
+
 class TestAccess(Base):
     def test_session_open_only_in_open_local_with_key(self):
         self.assertTrue(self.info["enabled"] and len(self.info["csrf"]) >= 20)

@@ -317,4 +317,12 @@ class CtlBridge(object):
         r = client.read_result(cid, self.root)
         if not r or r.get("status") not in FINAL:
             return None
-        return {"id": cid, "status": r.get("status"), "code": r.get("code"), "msg": str(r.get("msg") or "")[:300], "data": clean(r.get("data"))}
+        d = r.get("data")
+        ids = None
+        if isinstance(d, dict) and d.get("source") == "models" and isinstance(d.get("ids"), list):       # llm.provider op=models: до 500 id целиком, остальное через clean
+            ids = [x[:80] for x in d["ids"][:500] if isinstance(x, str)]
+            d = {k: v for k, v in d.items() if k != "ids"}
+        data = clean(d)
+        if ids is not None:
+            data["ids"] = ids
+        return {"id": cid, "status": r.get("status"), "code": r.get("code"), "msg": str(r.get("msg") or "")[:300], "data": data}

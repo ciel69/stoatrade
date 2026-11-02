@@ -10,11 +10,11 @@ ACTIONS = ("llm.provider", "brain.profile", "brain.role", "exchange.set")
 RE_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,29}$")
 RE_ROLE = re.compile(r"^[a-z][a-z_]{1,30}$")
 RE_EXCH = re.compile(r"^[a-z][a-z0-9]{1,11}$")
-PROVIDER_OPS = ("add", "update", "remove", "enable", "disable", "model_set", "model_remove", "check", "key_clear")
+PROVIDER_OPS = ("add", "update", "remove", "enable", "disable", "model_set", "model_remove", "check", "key_clear", "models", "ping")
 PROFILE_OPS = ("set", "delete")
 ROLE_OPS = ("chain", "opts", "opts_clear")
 EXCH_OPS = ("activate", "enable", "disable", "mode", "allowed", "limits")
-PROVIDER_FIELDS = ("name", "adapter", "base_url", "beta_url", "key_file", "key_env", "timeouts", "retry", "limits", "note", "verified", "version_header", "models")
+PROVIDER_FIELDS = ("name", "adapter", "base_url", "beta_url", "key_file", "key_env", "timeouts", "retry", "limits", "note", "verified", "version_header", "allow_private", "models")
 MODEL_FIELDS = ("name", "ctx", "max_out", "tools", "strict", "json_mode", "thinking", "cache", "price", "tags", "max_tokens_field", "no_temperature")
 
 
@@ -80,11 +80,24 @@ def validate(action, a):
                 if bad:
                     return False, bad, {}
                 out["spec"] = a["spec"]
-        elif op == "check":
+        elif op in ("check", "ping"):
             if "model" in a:
                 if not (isinstance(a["model"], str) and RE_ID.match(a["model"])):
                     return False, "model: ключ модели", {}
                 out["model"] = a["model"]
+        if op in ("models", "ping"):
+            extra = [k for k in a if k not in ("op", "id", "model", "accepted")]       # ключей и секретов в аргументах быть не может: лишние поля отвергаются
+            if extra or (op == "models" and "model" in a):
+                return False, "аргументы: только op, id%s" % (", model" if op == "ping" else ""), {}
+        if op in ("add", "update"):
+            for blk in (out.get("spec"), out.get("patch")):
+                if isinstance(blk, dict) and "allow_private" in blk and not isinstance(blk["allow_private"], bool):
+                    return False, "allow_private: true или false", {}
+        acc = a.get("accepted", [])
+        if not isinstance(acc, list) or len(acc) > 20 or not all(isinstance(x, str) and re.match(r"^[A-Za-z0-9_.:-]{1,40}$", x) for x in acc):
+            return False, "accepted: список идентификаторов предупреждений", {}
+        if acc:
+            out["accepted"] = sorted(set(acc))
         return True, "", out
     if action == "brain.profile":
         if op not in PROFILE_OPS:

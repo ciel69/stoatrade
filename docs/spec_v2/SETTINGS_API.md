@@ -56,7 +56,7 @@ write-only маршрутом `POST /api/ctl/llmkey`. Торговые ключ�
 | op | доп. поля args | что делает | типичные отказы (`code` / `data.detail`) |
 |---|---|---|---|
 | `add` | `preset` и/или `spec` | добавить провайдера ВЫКЛЮЧЕННЫМ: из шаблона и/или своей записи (`spec` поверх шаблона; ≤ 2000 байт) | `E_EXISTS`, `E_ARGS` (проверка адаптера, URL, моделей, цен) |
-| `update` | `patch` (поля: name, adapter, base_url, beta_url, key_file, key_env, timeouts, retry, limits, note, verified, version_header) | изменить настройки | `E_ARGS` |
+| `update` | `patch` (поля: name, adapter, base_url, allow_private, beta_url, key_file, key_env, timeouts, retry, limits, note, verified, version_header) | изменить настройки. Смена `base_url`/`beta_url`/ключа у провайдера, у которого ключ уже есть: предупреждение `llm.key_new_url` («ключ уйдёт на адрес …», принимается списком `accepted`), в ответе `data.send_warning {code,host,msg}`. `allow_private:true`: опасное действие (nonce) + предупреждение `llm.allow_private` | `E_ARGS`, `E_WARN`, `E_NONCE` |
 | `model_set` | `model` (ключ), `spec` (name, ctx, max_out, tools, strict, json_mode, thinking, cache, price, tags, max_tokens_field, no_temperature) | добавить/изменить модель; `name` = имя у провайдера (из `GET /models` или документации) | `E_ARGS` |
 | `model_remove` | `model` | удалить добавленную модель | `E_IN_USE` (на неё ссылается профиль), `E_STATE` (поставляемая или последняя) |
 | `enable` | — | включить провайдера | `E_NO_KEY` (ключа нет), `E_ARGS` (ошибка конфигурации) |
@@ -65,7 +65,18 @@ write-only маршрутом `POST /api/ctl/llmkey`. Торговые ключ�
 | `check` | `model?` | проверка БЕЗ сети: конфигурация и наличие ключа; результат `data.ok`, `data.checked[]` (`config_error`, `cred`, `note`) | отчёт, не ошибка команды |
 | `key_clear` | — | удалить файл ключа | `E_IN_USE` (провайдер включён и используется) |
 
-Живая проверка (GET /models, пробный запрос) делается только в терминале: `./tb llm check --provider ID --live` (тратит деньги и использует ключ владельца). Рекомендуйте её текстом после добавления.
+Сетевые операции (используют ключ владельца на стороне сервера; ключ в аргументах и ответах невозможен: лишние поля отвергаются `E_ARGS`; по рискам безопасны, подтверждений и nonce не требуют):
+
+| op | поля args | что делает | ответ (`status:"done"`, `code:"OK"`, поля в `data`) |
+|---|---|---|---|
+| `models` | — (`id`) | `GET /models` (Anthropic `/v1/models?limit=1000`), бесплатно. Таймаут 10 с, тело до 1 МБ, без повторов, редиректы не выполняются | успех: `{ok:true, ids:[…≤500, по алфавиту], count:<всего>, truncated:bool, source:"models", detail}`; отказ провайдера/сети: `{ok:false, error:"auth|rate|server|timeout|network|redirect|bad_body|config|…", detail, status?}` |
+| `ping` | `model?` (ключ модели, по умолчанию первая) | ПЛАТНЫЙ минимальный запрос «ping» (≤16 токенов вывода, таймаут 20 с) | успех: `{ok:true, ms, model, model_name, paid:true, finish, usage{in,in_hit,in_write,out,reasoning}, text?(только если ≤80 символов)}`; отказ: `{ok:false, error, detail, status?, model, paid:true}` |
+
+Отказ самой команды (не отчёт): `E_ARGS` (провайдер/модель неизвестны, ошибка конфигурации), `E_NO_KEY` (ключа нет), `E_RATE` (чаще одного сетевого вызова на провайдера в 3 с; общий лимит на `models` и `ping`; `data.retry_after_s`). Ошибка провайдера (401, 429, сеть) приходит как отчёт `ok:false` со `status:"done"`, как у `check`. Тексты ошибок очищены от ключа. В дашборде 2 (`ctlbridge.result_of`) список `ids` передаётся целиком (до 500), остальное с прежними ограничениями.
+
+Живая проверка конфигурации целиком (GET /models + пробный запрос моделью по `model.name`) остаётся в терминале: `./tb llm check --provider ID --live`; из терминала доступны и `./tb llm provider models ID` и `./tb llm provider ping ID [--model K]`.
+
+Правила `base_url` и `beta_url` (проверяются при каждом add/update и при загрузке реестра, `E_ARGS` с причиной): только `http`/`https`; без `user:pass@`, query и fragment; `http://` только для loopback (`localhost`, `127.0.0.0/8`, `::1`) и для приватных адресов с `allow_private:true`, всё остальное по `https://`; приватные RFC1918 (10/8, 172.16/12, 192.168/16), ULA `fc00::/7` и внутренние имена (без точки, `.local`, `.internal`, `.lan`, `.corp` …) только при `allow_private:true`; link-local `169.254.0.0/16` и `fe80::/10`, метаданные облака, `0.0.0.0`, `::`, `100.64.0.0/10` запрещены всегда. В транспорте имя резолвится на каждое новое соединение и ВСЕ полученные адреса проверяются тем же правилом (защита от DNS rebinding); соединение идёт на проверенный IP; редиректы не выполняются.
 
 ### Ввод ключа: `POST /api/ctl/llmkey` (write-only)
 

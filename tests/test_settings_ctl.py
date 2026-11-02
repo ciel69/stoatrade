@@ -111,6 +111,107 @@ class TestCtlProviders(Base):
         self.assertEqual(client.read_result(c["id"], self.e.root)["code"], "E_MAC")
 
 
+class TestCtlModelsPing(Base):
+    """llm.provider op models/ping: данные результата, частота, секреты, allow_private и предупреждение о смене адреса."""
+
+    def setUp(self):
+        Base.setUp(self)
+        from fakes.fake_llm_http import FakeLLMServer
+        self.srv = FakeLLMServer().start()
+        self.addCleanup(self.srv.stop)
+        from tb.llm import keystore
+        spec = {"adapter": "openai_compat", "base_url": self.srv.url + "/v1", "key_file": "loc.env", "key_env": "LOC_KEY",
+                "timeouts": {"connect_s": 2, "read_s": 2, "total_s": 5}, "retry": {"max": 0},
+                "models": {"m": {"name": "m-live", "price": {"in": 0, "out": 0}}}}
+        self.run_ctl("llm.provider", {"op": "add", "id": "loc", "spec": spec})
+        keystore.set_key("loc.env", "LOC_KEY", FAKE)
+
+    def test_validation(self):
+        v = protocol.validate_args
+        self.assertTrue(v("llm.provider", {"op": "models", "id": "loc"})[0])
+        self.assertTrue(v("llm.provider", {"op": "ping", "id": "loc", "model": "m"})[0])
+        for bad in ({"op": "models", "id": "loc", "key": "sk-1"}, {"op": "ping", "id": "loc", "api_key": "sk-1"}, {"op": "models", "id": "loc", "model": "m"},
+                    {"op": "ping", "id": "loc", "model": "Bad Model"}, {"op": "models", "id": "loc", "token": "x"}):
+            self.assertFalse(v("llm.provider", bad)[0], bad)
+        self.assertFalse(v("llm.provider", {"op": "update", "id": "loc", "patch": {"allow_private": "yes"}})[0])
+        self.assertTrue(v("llm.provider", {"op": "update", "id": "loc", "patch": {"allow_private": True}})[0])
+
+    def test_models_result_shape_and_rate_limit(self):
+        from fakes.fake_llm_http import R
+        self.srv.default["/v1/models"] = R(200, {"data": [{"id": "b"}, {"id": "a"}]})
+        r = self.run_ctl("llm.provider", {"op": "models", "id": "loc"})
+        self.assertEqual(r["code"], "OK")
+        d = r["data"]
+        self.assertEqual((d["ok"], d["ids"], d["count"], d["truncated"], d["source"]), (True, ["a", "b"], 2, False, "models"))
+        self.assertNotIn(FAKE, json.dumps(r))
+        r = self.run_ctl("llm.provider", {"op": "models", "id": "loc"}, expect="rejected")      # чаще 3 с нельзя
+        self.assertEqual(r["code"], "E_RATE")
+        self.assertGreater(r["data"]["retry_after_s"], 0)
+        r = self.run_ctl("llm.provider", {"op": "ping", "id": "loc"}, expect="rejected")        # лимит на провайдера, а не на операцию
+        self.assertEqual(r["code"], "E_RATE")
+        self.assertEqual(self.srv.count("/v1/models"), 1)
+        self.e.advance(3.5)
+        self.run_ctl("llm.provider", {"op": "models", "id": "loc"})
+        self.assertEqual(self.srv.count("/v1/models"), 2)
+
+    def test_models_provider_failure_is_data_without_key(self):
+        from fakes.fake_llm_http import R
+        self.srv.default["/v1/models"] = R(401, {"error": {"message": "bad key " + FAKE}})
+        r = self.run_ctl("llm.provider", {"op": "models", "id": "loc"})
+        self.assertFalse(r["data"]["ok"])
+        self.assertEqual(r["data"]["error"], "auth")
+        self.assertNotIn(FAKE, json.dumps(r))
+        self.assertNotIn(FAKE, json.dumps(self.e.audit()))
+        self.e.advance(4)
+        r = self.run_ctl("llm.provider", {"op": "models", "id": "nope"}, expect="rejected")
+        self.assertEqual(r["code"], "E_ARGS")
+
+    def test_ping_result_shape(self):
+        from fakes.fake_llm_http import R, ds_ok
+        self.srv.default["/v1/chat/completions"] = R(200, ds_ok("pong"))
+        r = self.run_ctl("llm.provider", {"op": "ping", "id": "loc", "model": "m"})
+        d = r["data"]
+        self.assertEqual((d["ok"], d["model"], d["paid"]), (True, "m", True))
+        self.assertIn("ms", d)
+        self.assertEqual(d["usage"]["out"], 5)
+
+    def test_allow_private_is_danger_with_warning(self):
+        ch = self.e.challenge(self.ctl, "llm.provider", {"op": "update", "id": "loc", "patch": {"allow_private": True}})
+        self.assertTrue(ch["data"]["danger"])
+        self.assertIn("llm.allow_private", [w["id"] for w in ch["data"]["warnings"]])
+        r = self.run_ctl("llm.provider", {"op": "update", "id": "loc", "patch": {"allow_private": True}}, expect="rejected")
+        self.assertEqual(r["code"], "E_WARN")
+        r = self.e.confirmed(self.ctl, "llm.provider", {"op": "update", "id": "loc", "patch": {"allow_private": True}})
+        self.assertEqual(r["status"], "done", r)
+        from tb.llm import providers
+        self.assertTrue(providers.load(self.e.root).providers["loc"].allow_private)
+        # безопасные операции подтверждений не требуют
+        ch = self.e.challenge(self.ctl, "llm.provider", {"op": "models", "id": "loc"})
+        self.assertEqual((ch["data"]["danger"], ch["data"]["warnings"]), (False, []))
+
+    def test_base_url_change_with_key_warns(self):
+        args = {"op": "update", "id": "loc", "patch": {"base_url": self.srv.url + "/v2"}}
+        ch = self.e.challenge(self.ctl, "llm.provider", args)
+        self.assertIn("llm.key_new_url", [w["id"] for w in ch["data"]["warnings"]])
+        self.assertFalse(ch["data"]["danger"])
+        self.assertEqual(self.run_ctl("llm.provider", args, expect="rejected")["code"], "E_WARN")
+        r = self.e.confirmed(self.ctl, "llm.provider", args)
+        self.assertEqual(r["status"], "done", r)
+        self.assertEqual(r["data"]["send_warning"]["code"], "KEY_NEW_URL")
+        # без ключа или без смены адреса предупреждения нет
+        ch = self.e.challenge(self.ctl, "llm.provider", {"op": "update", "id": "loc", "patch": {"note": "x"}})
+        self.assertEqual(ch["data"]["warnings"], [])
+        ch = self.e.challenge(self.ctl, "llm.provider", {"op": "update", "id": "loc", "patch": {"base_url": self.srv.url + "/v2"}})
+        self.assertEqual(ch["data"]["warnings"], [])           # адрес уже тот же
+
+    def test_bad_url_rejected_through_ctl(self):
+        for u in ("http://169.254.169.254/v1", "https://u:p@x.example/v1", "http://x.example/v1"):
+            ch = self.e.challenge(self.ctl, "llm.provider", {"op": "update", "id": "loc", "patch": {"base_url": u}})
+            a = {"op": "update", "id": "loc", "patch": {"base_url": u}, "accepted": [w["id"] for w in ch["data"]["warnings"]]}
+            r = self.run_ctl("llm.provider", a, expect="rejected")
+            self.assertEqual(r["code"], "E_ARGS", u)
+
+
 class TestCtlExchanges(Base):
     def test_exchange_ops_and_stub_exchanges_cannot_be_enabled(self):
         r = self.run_ctl("exchange.set", {"op": "enable", "id": "okx"}, expect="rejected")

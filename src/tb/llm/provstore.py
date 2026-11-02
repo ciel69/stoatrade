@@ -8,9 +8,13 @@
 """
 import copy
 import json
+import time
 
 from tb.core import localcfg
 from tb.llm import keystore, providers
+
+
+PING_TIMEOUT_S = 20.0
 
 
 def _res(ok, code, msg="", **data):
@@ -89,7 +93,7 @@ def provider_row(p, with_key=True):
         needs = bool(p.key_file or p.key_env)
         st = keystore.status(p.key_file, p.key_env) if needs else {"present": None, "mask": None, "perms_ok": None}
         key = {"needed": needs, "present": st["present"], "mask": st["mask"], "file": p.key_file, "env": p.key_env, "perms_ok": st["perms_ok"]}
-    return {"id": p.id, "name": p.name, "adapter": p.adapter, "enabled": p.enabled, "error": p.error, "base_url": p.base_url, "verified": p.verified, "note": p.note,
+    return {"id": p.id, "name": p.name, "adapter": p.adapter, "enabled": p.enabled, "error": p.error, "base_url": p.base_url, "allow_private": p.allow_private, "verified": p.verified, "note": p.note,
             "key": key, "timeouts": p.timeouts, "retry": p.retry, "limits": p.limits,
             "models": {k: {"name": m.name, "ctx": m.ctx, "max_out": m.max_out, "tools": m.tools, "strict": m.strict, "json_mode": m.json_mode, "thinking": m.thinking,
                            "cache": m.cache, "price": m.price, "tags": m.tags, "max_tokens_field": m.max_tokens_field, "no_temperature": m.no_temperature}
@@ -160,11 +164,11 @@ def _set_provider(d, pid, body):
 
 
 def update(root, pid, patch):
-    """Меняет поля провайдера (name, base_url, timeouts, retry, limits, key_file, key_env, note, verified, adapter) слоем local. Модели меняют model_set/model_remove."""
+    """Меняет поля провайдера (name, base_url, allow_private, timeouts, retry, limits, key_file, key_env, note, verified, adapter) слоем local. Модели меняют model_set/model_remove."""
     reg = _effective(root)
     if reg is None or pid not in reg.providers:
         return _res(False, "E_ARGS", "провайдер неизвестен")
-    allowed = ("name", "adapter", "base_url", "beta_url", "key_file", "key_env", "timeouts", "retry", "limits", "note", "verified", "version_header")
+    allowed = ("name", "adapter", "base_url", "beta_url", "key_file", "key_env", "timeouts", "retry", "limits", "note", "verified", "version_header", "allow_private")
     if not isinstance(patch, dict) or not patch or any(k not in allowed for k in patch):
         return _res(False, "E_ARGS", "можно менять: %s" % ", ".join(allowed))
     kf, ke = patch.get("key_file", reg.providers[pid].key_file), patch.get("key_env", reg.providers[pid].key_env)
@@ -281,6 +285,84 @@ def model_remove(root, pid, mkey):
     except providers.ProviderError as e:
         return _res(False, "E_STATE", str(e))
     return _res(True, "OK", "модель удалена", provider=pid, model=mkey)
+
+
+# ---------------------------------------------------------------- сеть: список моделей и пинг
+def _net_adapter(root, pid, mkey, transport, environ):
+    """-> (adapter|None, ошибка-результат|None, закрыть_транспорт). Общая подготовка list_models/ping: провайдер валиден, ключ на месте (значение не читается здесь)."""
+    from tb.llm import adapters
+    reg = _effective(root)
+    if reg is None or pid not in reg.providers:
+        return None, _res(False, "E_ARGS", "провайдер неизвестен"), False
+    p = reg.providers[pid]
+    if p.error:
+        return None, _res(False, "E_ARGS", "в конфигурации ошибка: %s" % p.error), False
+    if not p.models:
+        return None, _res(False, "E_ARGS", "у провайдера нет моделей"), False
+    if mkey is not None and mkey not in p.models:
+        return None, _res(False, "E_ARGS", "модель неизвестна"), False
+    if (p.key_file or p.key_env) and not keystore.status(p.key_file, p.key_env)["present"]:
+        return None, _res(False, "E_NO_KEY", "нет ключа: ./tb llm key set %s (или ввод ключа в дашборде)" % pid), False
+    from tb.llm.transport import Transport
+    tr = transport or Transport()
+    m = p.models[mkey or next(iter(p.models))]
+    return adapters.make(p, m, transport=tr, environ=environ), None, transport is None
+
+
+def list_models(root, pid, transport=None, environ=None):
+    """Список id моделей у провайдера: GET /models ключом СТОРОНЫ СЕРВЕРА (ключ в ответ не попадает), до 500 id, отсортированы.
+    -> {"ok","code","msg","data":{"ids","count","truncated","source":"models"}} или при ошибке провайдера/сети ok=False, code=E_PROVIDER, data={"error": LLMError.code, "detail"}.
+    Это сетевой вызов, но бесплатный (токены не тратятся)."""
+    from tb.llm.types import LLMError
+    ad, bad, own = _net_adapter(root, pid, None, transport, environ)
+    if bad:
+        return bad
+    try:
+        out = ad.list_model_ids()
+        return _res(True, "OK", "моделей: %d" % out["count"], **out)
+    except LLMError as e:
+        return _res(False, "E_PROVIDER", keys_redact(e.msg or e.code, ad), error=e.code, detail=keys_redact(e.msg or e.code, ad), status=e.status)
+    finally:
+        if own:
+            ad.transport.close()
+
+
+def keys_redact(text, ad=None):
+    """Текст ошибки провайдера без эха ключа (значение ключа читается только для маскирования и не сохраняется)."""
+    from tb.llm import keys
+    secret = None
+    try:
+        if ad is not None:
+            secret = ad._secret()
+    except Exception:
+        secret = None
+    return keys.redact(text, secret, 200)
+
+
+def ping(root, pid, model_key=None, transport=None, environ=None):
+    """Минимальный платный запрос к модели («ping», до 16 токенов вывода). -> {"ok","code","msg","data":{"ok","ms","model","usage"?,"paid":True,"text"?}}.
+    Текст ответа возвращается только короче 80 символов. Ошибки провайдера -> ok=False, code=E_PROVIDER, data={"error","detail","paid":True}."""
+    from tb.llm.types import LLMError, Req, user
+    ad, bad, own = _net_adapter(root, pid, model_key, transport, environ)
+    if bad:
+        return bad
+    mk = ad.model.key
+    try:
+        t0 = time.time()
+        r = ad.complete(Req(system="", messages=[user("ping")], max_tokens=16, temperature=0, timeout_s=PING_TIMEOUT_S))
+        ms = int(r.latency_ms or (time.time() - t0) * 1000)
+        data = {"ok": True, "ms": ms, "model": mk, "model_name": ad.model.name, "paid": True, "finish": r.finish, "usage": r.usage.as_dict()}
+        txt = keys_redact(r.text, ad)
+        if txt and len(r.text) <= 80:
+            data["text"] = txt
+        return {"ok": True, "code": "OK", "msg": "модель ответила за %d мс" % ms, "data": data}
+    except LLMError as e:
+        det = keys_redact(e.msg or e.code, ad)
+        return {"ok": False, "code": "E_PROVIDER", "msg": det,
+                "data": {"ok": False, "error": e.code, "detail": det, "status": e.status, "model": mk, "paid": True}}
+    finally:
+        if own:
+            ad.transport.close()
 
 
 # ---------------------------------------------------------------- проверка
