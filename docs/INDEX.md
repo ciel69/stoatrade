@@ -20,6 +20,7 @@ Most documents are in Russian. English entry points: `README.md`, `SECURITY.md`,
 | `DESIGN_V2.md` | design analysis and target architecture, modes of Claude integration |
 | `SPEC.md`, `SPEC_FEED.md` | earlier spec and feed spec |
 | `HARNESS.md` | session harness: types, cycle |
+| `ROADMAP.md` | roadmap of the learning brain: stages 0-6, block IDs `R<stage>.<n>`, spec-first workflow, status |
 | `BACKLOG.md` | open work items |
 | `FRONTEND_PLAN.md` | new dashboard (Vue 3, WebSocket): decisions and stages |
 | `DESKTOP.md` | brief: desktop app (Tauri 2 + Python sidecar), stages D0-D4, owner decisions |
