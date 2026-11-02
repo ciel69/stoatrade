@@ -168,32 +168,21 @@ class EnvTest(unittest.TestCase):
         self.assertEqual(S.service_cmd("scan", "paper", False, cfg, py="py"), ["py", "-m", "tb.platform.scansvc", "run"])
         self.assertNotIn("--profile", S.service_cmd("dispatch", "paper", False, cfg, py="py"))
 
-    def test_dash_is_new_dashboard_and_dash_old_on_own_port(self):
-        """`dash` = новый дашборд на 8765 (команда группы `dash` диспетчера -> tb.dash2), `dash-old` = старый на 8768; в набор по умолчанию старый не входит."""
+    def test_dash_is_new_dashboard_and_old_one_is_gone(self):
+        """`dash` = новый дашборд на 8765 (команда группы `dash` диспетчера -> tb.dash2); старый (`dash-old`, 8768) удалён 2026-11-02."""
         cfg = S.load_cfg(None)
         self.assertEqual(S.service_cmd("dash", "paper", False, cfg, py="py"), ["py", "-m", "tb.launcher", "dash", "--port", "8765"])
-        self.assertEqual(S.service_cmd("dash-old", "paper", False, cfg, py="py"), ["py", "-m", "tb.launcher", "dash-old", "--port", "8768"])
         self.assertEqual(S.link_of("dash", cfg), "http://127.0.0.1:8765/")
-        self.assertEqual(S.link_of("dash-old", cfg), "http://127.0.0.1:8768/")
-        for prof in S.PROFILES:
-            self.assertNotIn("dash-old", S.default_services(prof, cfg))
-        self.assertEqual(S.parse_services("dash-old,dash,exec"), ["exec", "dash", "dash-old"])
-        self.assertEqual(S.stop_order(["exec", "dash", "dash-old"]), ["dash-old", "dash", "exec"])
+        self.assertNotIn("dash-old", S.ORDER)
+        self.assertNotIn("dash-old", cfg["svc"])
+        with self.assertRaises(S.ConfigError):
+            S.parse_services("dash-old,dash,exec")
+        self.assertEqual(S.stop_order(["exec", "dash"]), ["dash", "exec"])
         from tb import __main__ as disp
         self.assertEqual(disp.V2["dash"], "tb.dash2.server")
-        self.assertEqual(disp.SIMPLE["dash-old"], "tb.dash.server")
+        self.assertNotIn("dash-old", disp.SIMPLE)
         from tb.dash2 import server as d2
         self.assertEqual(d2.DEFAULT_PORT, cfg["svc"]["dash"]["port"])
-        self.assertNotEqual(cfg["svc"]["dash"]["port"], cfg["svc"]["dash-old"]["port"])
-
-    def test_dash_old_gets_own_default_port(self):
-        from unittest import mock
-        from tb import __main__ as disp
-        with mock.patch.object(disp, "run") as run:
-            disp.main(["dash-old"])
-            self.assertEqual(run.call_args[0], ("tb.dash.server", ["--port", "8768"]))
-            disp.main(["dash-old", "--port", "9000", "--max-seconds", "1"])
-            self.assertEqual(run.call_args[0][1], ["--port", "9000", "--max-seconds", "1"])
 
     def test_service_selection(self):
         self.assertEqual(S.parse_services("dash,exec,scan"), ["exec", "scan", "dash"])

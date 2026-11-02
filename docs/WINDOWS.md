@@ -13,7 +13,7 @@
 tb.cmd help                      (cmd.exe или PowerShell: .\tb.cmd help)
 .\tb.ps1 help                    (PowerShell; удобнее, если в аргументах есть & | ^ %)
 tb.cmd test                      все тесты
-tb.cmd dash --open               дашборд на http://127.0.0.1:8765/ (новый, наружу не слушает); старый: tb.cmd dash-old --open (порт 8768)
+tb.cmd dash --open               дашборд на http://127.0.0.1:8765/ (наружу не слушает)
 tb.cmd feed start                фид рынка
 tb.cmd bybit read balance        профили read | trade | testnet, как на macOS
 ```
@@ -29,7 +29,7 @@ tb.cmd bybit read balance        профили read | trade | testnet, как �
 
 ## Дашборд
 `tb.cmd dash --open` откроет страницу в браузере по умолчанию; без `--open` откройте `http://127.0.0.1:8765/` сами. Порт занят: `tb.cmd dash --port 8790`.
-Дашборд по умолчанию новый (Vue + WebSocket); он отдаёт готовую папку `frontend\dist` из репозитория, Node.js для запуска не нужен. Если папки нет, страница сама покажет, что делать: `npm --prefix frontend ci`, затем `npm --prefix frontend run build` (нужен Node.js). Старый дашборд: `tb.cmd dash-old` (порт 8768).
+Дашборд по умолчанию новый (Vue + WebSocket); он отдаёт готовую папку `frontend\dist` из репозитория, Node.js для запуска не нужен. Если папки нет, страница сама покажет, что делать: `npm --prefix frontend ci`, затем `npm --prefix frontend run build` (нужен Node.js).
 Остановка: Ctrl+C. Страница обновляется по сокету сама и читает только файлы `state\` и `runtime\`; фид (`tb.cmd feed start`) и сканеры запускаются отдельно, без них цены и здоровье будут «устарели/нет данных».
 Брандмауэр Windows спрашивать не должен: сервер слушает только 127.0.0.1.
 

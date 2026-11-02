@@ -68,12 +68,6 @@ class TestAmberStartViaCtl(Base):
         r = self.e.confirmed(self.c, "day.start", dict(self.BASE, allow_amber=True))
         self.assertEqual(r["code"], "E_GATE")
 
-    def test_dash_js_sends_allow_amber(self):
-        st = os.path.join(os.path.dirname(__file__), "..", "src", "tb", "dash", "static")
-        js = "".join(open(os.path.join(st, n), encoding="utf-8").read() for n in ("v-control.js", "x-dialog.js"))
-        for k in ("allow_amber", "pre_amber", "Запустить с предупреждениями", "Жёсткие условия не выполнены"):
-            self.assertIn(k, js)
-
 
 class TestRealLifecycleViaCtl(Base):
     def test_module_is_real(self):

@@ -29,9 +29,7 @@ SIMPLE = {
     "paper": "tb.research.paper_donchian",
     "tick": "tb.legacy_engine.tick",
     "patterns": "tb.marketdata.patterns_scan",
-    "dash-old": "tb.dash.server",      # старый дашборд (до удаления): порт по умолчанию OLD_DASH_PORT, чтобы не мешать новому на 8765
 }
-OLD_DASH_PORT = 8768
 # v2 (SPEC_V2): группа -> модуль с функцией main(argv) -> int. Код возврата берётся из main; пока пакет не реализован,
 # заглушка печатает «не реализовано» и возвращает 2.
 V2 = {
@@ -103,7 +101,6 @@ USAGE = """использование: ./tb <группа> <команда> [а�
   setup [--check] | setup bybit [--profile read|trade|testnet]   помощник настройки: ключ подписи, токены, ключ DeepSeek, ключи Bybit (скрытый ввод; другие провайдеры: llm key set; docs/PROVIDERS.ru.md), права, итоговая таблица (docs/QUICKSTART.md, docs/EXCHANGES.md)
   smoke [--max-seconds N] [--keep]   сквозной прогон paper (фейковый LLM, временный корень, публичные данные Bybit); docs/spec_v2/SMOKE_RESULT.md
   dash [--port 8765] [--open] [--max-seconds N]   дашборд по умолчанию (127.0.0.1): Vue + WebSocket, токена входа нет; live-кнопки выключены, пока владелец не включит флаги в config/control.json (docs/CONTROL.md)
-  dash-old [--port 8768] [--open] [--max-seconds N]   старый дашборд (127.0.0.1), пока не удалён: кнопки управления, опасное (live) по токену один раз; в платформе сервис dash-old (--services ...,dash-old)
   audit-public [--json] [--root ПУТЬ] [--term СЛОВО] [--strict]   проверка дерева перед публикацией: секреты, личные данные, крупные файлы, лицензия (только чтение; docs/PUBLISH_CHECKLIST.md)
   tick ...   (старый движок) | test   (все тесты)""" % "|".join(RESEARCH)
 
@@ -145,8 +142,6 @@ def main(argv):
     elif group in V2:
         return run_v2(V2[group], rest)
     elif group in SIMPLE:
-        if group == "dash-old" and not any(a == "--port" or a.startswith("--port=") for a in rest):
-            rest = ["--port", str(OLD_DASH_PORT)] + list(rest)
         run(SIMPLE[group], rest)
     else:
         print("неизвестная группа: %s\n%s" % (group, USAGE), file=sys.stderr)

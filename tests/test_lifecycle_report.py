@@ -269,7 +269,6 @@ class TestDashApiAndCli(unittest.TestCase):
         code, obj = server.api_payload("/api/day/status", {}, root=e.root, now=NOW)
         self.assertEqual(code, 200)
         self.assertEqual(obj["current"]["state"], "stopped")
-        self.assertIn("v-day.js", server.ext_scripts())
 
     def test_cli_status_list_report(self):
         e = _lc.LC(self)

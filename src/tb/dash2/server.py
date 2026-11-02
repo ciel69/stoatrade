@@ -1,6 +1,6 @@
 """Дашборд по умолчанию: `./tb dash [--port 8765] [--open] [--max-seconds N]` (то же `./tb dash2`).
 
-Один порт на 127.0.0.1: статика собранного фронта (`frontend/dist`, сборка `npm ci && npm run build` в `frontend/`) и WebSocket `/ws`. Старый дашборд теперь `./tb dash-old` (8768) и не затрагивается.
+Один порт на 127.0.0.1: статика собранного фронта (`frontend/dist`, сборка `npm ci && npm run build` в `frontend/`) и WebSocket `/ws`. Старый дашборд (`dash-old`) удалён 2026-11-02.
 Протокол (docs/FRONTEND_PLAN.md, раздел 4): сообщение {"topic","seq","ts","data"}; при подключении клиент получает `hello` и снимок каждой темы, дальше тема приходит только когда её содержимое
 изменилось (один общий цикл раз в TICK_S секунд на всех клиентов, а не опрос от каждого). Раз в HEARTBEAT_S секунд тема `link` (клиент по ней видит, что связь жива). Клиент -> сервер: {"op":"ping"} -> {"topic":"pong"}.
 Опроса нет: при обрыве клиент переподключается сам и получает свежие снимки. Команды управления (только старт и мягкая остановка дня в paper|testnet|observe) идут тем же сокетом
@@ -34,7 +34,7 @@ PLACEHOLDER = """<!doctype html><meta charset="utf-8"><title>Stoa: новый д
 <body style="font:16px system-ui;background:#0b121a;color:#e8eef4;padding:32px;max-width:640px">
 <h1>Интерфейс ещё не собран</h1><p>Сервер и сокет работают, но папки <code>frontend/dist</code> с готовым интерфейсом нет. Нужен Node.js (его ставят один раз). Откройте терминал в папке проекта и выполните две команды, затем обновите страницу:</p>
 <pre style="background:#121c28;padding:12px;border-radius:8px">npm --prefix frontend ci\nnpm --prefix frontend run build</pre>
-<p>Первая команда скачивает зависимости, вторая собирает интерфейс. Перезапускать дашборд не нужно. Старый дашборд пока доступен командой <code>./tb dash-old</code>.</p>
+<p>Первая команда скачивает зависимости, вторая собирает интерфейс. Перезапускать дашборд не нужно.</p>
 <p>Для разработки: <code>npm --prefix frontend run dev</code> (порт 5173, сокет проксируется сюда).</p></body>"""
 
 
@@ -352,7 +352,7 @@ def main(argv=None):
     ap.add_argument("--open", action="store_true", help="открыть страницу в браузере по умолчанию")
     a = ap.parse_args(sys.argv[1:] if argv is None else argv)
     url = "http://%s:%d/" % (HOST, a.port)
-    print("дашборд: %s  (старый: ./tb dash-old)" % url, flush=True)
+    print("дашборд: %s" % url, flush=True)
     if a.open:
         import threading
         import webbrowser

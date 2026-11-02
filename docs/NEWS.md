@@ -1,6 +1,6 @@
 # Новости и карантинный читатель (WP13b)
 
-Код: `src/tb/intel/{reader,digest,dashapi}.py`, вкладка `dash/static/v-intel.js`, блок `news_digest` в `brain/brief.py`, секция `reader` в `config/intel.json`.
+Код: `src/tb/intel/{reader,digest,dashapi}.py`, лента новостей в «Рынке» (тема dash2 `news` в `dash2/topics.py`), блок `news_digest` в `brain/brief.py`, секция `reader` в `config/intel.json`.
 Спецификация: `docs/spec_v2/07_control_lifecycle_news_roles.md` п. 3.4, `07b` п. 5.4. Сбор заголовков (без LLM): WP13a, `docs/spec_v2/WP13_sources.md`.
 
 ## Быстрый канал `news_flash` (без LLM)

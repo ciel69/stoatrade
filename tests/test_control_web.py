@@ -1,12 +1,10 @@
 """WP12: веб-слой управления на дашборде (ctlweb + server): CSRF, Origin, Host, DNS rebinding, Content-Type, Sec-Fetch-Site, сессии, блокировка входа, лимит частоты,
-challenge/command через ctl, KILL без ctl, отсутствие секретов в ответах, фаззинг, реальный HTTP-сервер. Без сети (только 127.0.0.1 во временном процессе)."""
+challenge/command через ctl, KILL без ctl, отсутствие секретов в ответах, фаззинг, реестр расширений API. HTTP-сервер старого дашборда удалён (2026-11-02). Без сети."""
 import json
 import os
 import random
 import threading
 import unittest
-import urllib.error
-import urllib.request
 
 import _bootstrap  # noqa: F401
 import _ctl
@@ -369,86 +367,6 @@ class TestFuzz(Base):
             self.assertNotRegex(json.dumps(r[1], ensure_ascii=False), r"Traceback|/Users|\.py|\.json|Error")
 
 
-class TestRealServer(Base):
-    def setUp(self):
-        Base.setUp(self)
-        self.srv = server.make_server(0, self.e.root)
-        self.port = self.srv.server_address[1]
-        self.th = threading.Thread(target=self.srv.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
-        self.th.start()
-        self.addCleanup(self._close)
-
-    def _close(self):
-        self.srv.shutdown()
-        self.srv.server_close()
-
-    def req(self, method, path, data=None, headers=None):
-        h = dict(headers or {})
-        r = urllib.request.Request("http://127.0.0.1:%d%s" % (self.port, path), data=data, method=method, headers=h)
-        try:
-            with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(r, timeout=5) as resp:
-                return resp.status, resp.headers, resp.read()
-        except urllib.error.HTTPError as e:
-            return e.code, e.headers, e.read()
-
-    def jh(self, **extra):
-        h = {"Origin": "http://127.0.0.1:%d" % self.port, "Content-Type": "application/json"}
-        h.update(extra)
-        return h
-
-    def test_post_allowed_only_under_api_ctl(self):
-        for path in ("/api/state", "/api/ping", "/api/v2/state", "/api/platform", "/", "/app.js", "/api/market", "/state/KILL", "/api/ctl"):
-            code, _, _ = self.req("POST", path, b"{}", self.jh())
-            self.assertEqual(code, 405, path)
-        for m in ("PUT", "DELETE", "PATCH", "OPTIONS"):
-            for path in ("/api/ctl/login", "/api/ctl/command", "/api/state"):
-                self.assertEqual(self.req(m, path, b"{}", self.jh())[0], 405, (m, path))
-
-    def test_full_login_session_over_http(self):
-        code, h, b = self.req("POST", "/api/ctl/login", body({"token": "wrong"}), self.jh())
-        self.assertEqual(code, 401)
-        code, h, b = self.req("POST", "/api/ctl/login", body({"token": self.e.token}), self.jh())
-        self.assertEqual(code, 200)
-        ck = h["Set-Cookie"].split(";")[0]
-        csrf = json.loads(b)["csrf"]
-        code, h2, b2 = self.req("GET", "/api/ctl/session", None, {"Cookie": ck})
-        self.assertEqual(json.loads(b2)["authed"], True)
-        # без CSRF — отказ, с CSRF — принято
-        self.assertEqual(self.req("POST", "/api/ctl/command", body({"action": "intel.refresh", "args": {}}), self.jh(Cookie=ck))[0], 403)
-        self.assertEqual(self.req("POST", "/api/ctl/command", body({"action": "intel.refresh", "args": {}}), self.jh(Cookie=ck, **{"X-TB-CSRF": csrf}))[0], 200)
-        # чужой Origin
-        bad = self.jh(Cookie=ck, **{"X-TB-CSRF": csrf})
-        bad["Origin"] = "http://evil.example.com"
-        self.assertEqual(self.req("POST", "/api/ctl/command", body({"action": "intel.refresh", "args": {}}), bad)[0], 403)
-        # DNS rebinding: Host чужой
-        evil = self.jh(Cookie=ck, **{"X-TB-CSRF": csrf, "Host": "evil.example.com"})
-        self.assertEqual(self.req("POST", "/api/ctl/command", body({"action": "intel.refresh", "args": {}}), evil)[0], 403)
-        # без Content-Length / слишком большое тело
-        self.assertEqual(self.req("POST", "/api/ctl/login", b"x" * 9000, self.jh())[0], 400)
-
-    def test_no_cors_headers_ever(self):
-        for method, path, data in (("GET", "/api/ctl/status", None), ("POST", "/api/ctl/login", body({"token": "x"})), ("GET", "/api/state", None), ("POST", "/api/state", b"{}")):
-            _, h, _ = self.req(method, path, data, self.jh() if data else {})
-            for k in h.keys():
-                self.assertFalse(k.lower().startswith("access-control-"), (path, k))
-
-    def test_index_gets_extension_scripts_and_is_still_served(self):
-        code, h, b = self.req("GET", "/")
-        self.assertEqual(code, 200)
-        self.assertIn(b"/v-control.js", b)
-        self.assertNotIn(server.EXT_MARK.encode(), b)               # метка заменена
-        code, h, b = self.req("GET", "/v-control.js")
-        self.assertEqual(code, 200)
-        self.assertIn("javascript", h["Content-Type"])
-
-    def test_old_get_api_responses_unchanged(self):
-        for p in ("/api/ping", "/api/state", "/api/market", "/api/health", "/api/v2/state", "/api/ideas"):
-            code, h, b = self.req("GET", p)
-            self.assertEqual(code, 200, p)
-            json.loads(b)
-        self.assertEqual(self.req("GET", "/api/nothing")[0], 404)
-
-
 class TestExtensions(Base):
     def test_ext_api_registry_and_scripts(self):
         self.assertIn("tb.intel.dashapi", server.EXT_API)
@@ -468,18 +386,6 @@ class TestExtensions(Base):
         self.addCleanup(lambda: setattr(importlib.util, "find_spec", orig))
         self.assertEqual(server.api_payload("/api/ext/hello", {}, self.e.root, NOW), (200, {"hello": "/api/ext/hello"}))
         self.assertEqual(server.api_payload("/api/ping", {}, self.e.root, NOW)[0], 200)
-
-    def test_ext_scripts_autodiscovery(self):
-        names = server.ext_scripts()
-        for n in names:
-            self.assertTrue(os.path.exists(os.path.join(server.STATIC, n)))
-        p = os.path.join(server.STATIC, "x-test-ext.js")
-        _ctl.wr(p, "// ext")
-        self.addCleanup(lambda: os.remove(p))
-        self.assertIn("x-test-ext.js", server.ext_scripts())
-        _ctl.wr(os.path.join(server.STATIC, "evil.js"), "//")
-        self.addCleanup(lambda: os.remove(os.path.join(server.STATIC, "evil.js")))
-        self.assertNotIn("evil.js", server.ext_scripts())
 
 
 if __name__ == "__main__":

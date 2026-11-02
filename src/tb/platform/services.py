@@ -1,6 +1,6 @@
 """Сервисы платформы: конфиг `config/platform.json`, пути `runtime/platform/`, команды и окружение дочерних процессов. Владелец: WP11-B.
 
-Сервис = дочерний процесс супервизора. Список и порядок запуска: exec, scan, feed, context, intel, sync, dispatch, ctl, dash (новый дашборд), dash-old (старый, не в наборе по умолчанию), mcp, brain. Ключи Bybit получают ТОЛЬКО исполнитель
+Сервис = дочерний процесс супервизора. Список и порядок запуска: exec, scan, feed, context, intel, sync, dispatch, ctl, dash (дашборд), mcp, brain. Ключи Bybit получают ТОЛЬКО исполнитель
 (launcher грузит ключ в его собственный процесс для testnet/trade) и сервис sync (launcher грузит читающий ключ `read`, только баланс); окружение остальных чистится в `child_env`.
 Без fork и сигнальных API: только subprocess (кроссплатформенно); сетевых вызовов и торговых модулей здесь нет.
 """
@@ -16,7 +16,7 @@ from tb.core import localcfg
 from tb.core.filelock import atomic_write_json
 
 PROFILES = ("paper", "testnet", "trade")
-ORDER = ("exec", "scan", "feed", "context", "intel", "sync", "dispatch", "ctl", "dash", "dash-old", "mcp", "brain")      # порядок запуска; остановка в обратном, но exec последним (см. stop_order)
+ORDER = ("exec", "scan", "feed", "context", "intel", "sync", "dispatch", "ctl", "dash", "mcp", "brain")      # порядок запуска; остановка в обратном, но exec последним (см. stop_order)
 SERVICE_NAMES = ORDER
 SECRET_PREFIXES = ("BYBIT_", "ANTHROPIC_")                        # не передаются никому, кроме процесса, который грузит их сам (launcher)
 PROXY_VARS = ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY")
@@ -69,7 +69,6 @@ DEFAULTS = {
         "dispatch": {"hb": "file", "hb_stale_s": 30.0, "grace_s": 30.0},
         "ctl": {"hb": "file", "hb_stale_s": 30.0, "grace_s": 30.0},
         "dash": {"hb": "none", "port": 8765},           # новый дашборд (tb.dash2, Vue + WebSocket)
-        "dash-old": {"hb": "none", "port": 8768},       # старый дашборд (tb.dash), в наборе по умолчанию не поднимается: --services ...,dash-old
         "mcp": {"hb": "none", "module": "tb.mcp.server", "args": ["serve"], "port": 8766},
         "brain": {"hb": "file", "hb_stale_s": 300.0, "grace_s": 60.0, "module": "tb.brain.api_daemon", "args": ["run"]},
         "intel": {"hb": "file", "hb_stale_s": 180.0, "grace_s": 90.0},
@@ -112,7 +111,7 @@ DEFAULTS = {
             "milestone": 2, "macro_blackout_soon": 1, "news_flash": 2, "scanner_signal": 3,
         },
     },
-    "links": {"dash": "http://127.0.0.1:{dash_port}/", "dash-old": "http://127.0.0.1:{dash_port}/"},
+    "links": {"dash": "http://127.0.0.1:{dash_port}/"},
 }
 
 
@@ -319,8 +318,6 @@ def service_cmd(name, profile, observe, cfg, py=None):
         return [py, "-m", "tb.control.service", "run"]
     if name == "dash":
         return launcher + ["dash", "--port", str(int(sc.get("port") or 8765))]
-    if name == "dash-old":
-        return launcher + ["dash-old", "--port", str(int(sc.get("port") or 8768))]
     if name in ("mcp", "brain"):
         mod = sc.get("module") or DEFAULTS["svc"][name]["module"]
         if not module_available(mod):
@@ -362,7 +359,4 @@ def link_of(name, cfg):
     if name == "dash":
         port = int(((cfg.get("svc") or {}).get("dash") or {}).get("port") or 8765)
         return (cfg.get("links") or {}).get("dash", "http://127.0.0.1:{dash_port}/").replace("{dash_port}", str(port))
-    if name == "dash-old":
-        port = int(((cfg.get("svc") or {}).get("dash-old") or {}).get("port") or 8768)
-        return (cfg.get("links") or {}).get("dash-old", "http://127.0.0.1:{dash_port}/").replace("{dash_port}", str(port))
     return None

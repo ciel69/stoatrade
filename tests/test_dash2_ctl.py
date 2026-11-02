@@ -110,7 +110,7 @@ class TestWhitelist(Base):
         r = self.b.handle(WS, self.msg(args={"mode": "live", "session": "day"}))
         self.assertEqual(r["code"], "E_ELEVATE")
         self.assertIn("dash2_full", r["msg"])                  # без расширенного режима live из этого дашборда невозможен
-        self.assertIn("старом дашборде", r["msg"])             # путь через старый дашборд остаётся
+        self.assertNotIn("старом дашборде", r["msg"])          # старого дашборда больше нет
 
     def test_bad_mode_is_arg_error(self):
         self.assertEqual(self.b.handle(WS, self.msg(args={"mode": "moon"}))["code"], "E_ARGS")

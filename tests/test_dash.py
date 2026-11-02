@@ -430,8 +430,6 @@ class TestRiskRoom(Base):
         self.assertAlmostEqual(d["limit"], 4.0)
         self.assertAlmostEqual(d["realized_today"], 0.45)
         self.assertGreater(d["room"], d["limit"])
-        js = open(os.path.join(os.path.dirname(__file__), "..", "src", "tb", "dash", "static", "v-overview.js"), encoding="utf-8").read()
-        self.assertIn('"лимит " + fx(r.limit, 2) + " · сегодня "', js)
 
     def test_blocks(self):
         trades = []
@@ -548,14 +546,6 @@ class TestPendingBlock(Base):
         self.w("state", "pending_orders.json", "{битый", raw=True)
         self.assertEqual(model.build_state(self.root, "live", "all", NOW)["pending"], [])
 
-    def test_page_has_pending_block(self):
-        base = os.path.dirname(server.__file__)
-        html = open(os.path.join(base, "static", "index.html"), encoding="utf-8").read()
-        js = "".join(open(os.path.join(base, "static", n), encoding="utf-8").read() for n in server.SCRIPTS)
-        self.assertIn('id="pending"', html)
-        self.assertIn("function renderPending", js)
-        self.assertNotIn("innerHTML", js)
-
 
 class TestPriceFallback(Base):
     """Цена сделок по монетам вне фида: market.json -> prices.json -> hot.json, свежесть, отсутствие файлов, форматтер."""
@@ -664,69 +654,6 @@ class TestApiAndServer(Base):
         self.assertEqual(server.api_payload("/api/nope", {}, self.root, NOW)[0], 404)
         _, st = server.api_payload("/api/state", {"mode": ["../etc"], "venue": ["x"]}, self.root, NOW)
         self.assertEqual((st["filter"]["mode"], st["filter"]["venue"]), ("live", "all"))
-
-    def get(self, srv, path, headers=None):
-        req = urllib.request.Request("http://127.0.0.1:%d%s" % (srv.server_address[1], path), headers=headers or {})
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        try:
-            with opener.open(req, timeout=5) as r:
-                return r.status, r.headers, r.read()
-        except urllib.error.HTTPError as e:
-            return e.code, e.headers, e.read()
-
-    def test_server_live(self):
-        self.jl("trades.jsonl", [op("A")])
-        self.market()
-        srv = server.make_server(0, self.root)
-        th = threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
-        th.start()
-        try:
-            self.assertEqual(srv.server_address[0], "127.0.0.1")
-            code, h, body = self.get(srv, "/api/state")
-            self.assertEqual(code, 200)
-            self.assertIn("application/json", h["Content-Type"])
-            self.assertEqual(json.loads(body.decode("utf-8"))["open_trades"][0]["id"], "A")
-            for path, ctype in [("/", "text/html"), ("/app.css", "text/css"), ("/favicon.svg", "image/svg")] + [("/" + n, "application/javascript") for n in server.SCRIPTS]:
-                code, h, body = self.get(srv, path)
-                self.assertEqual(code, 200, path)
-                self.assertIn(ctype, h["Content-Type"])
-                self.assertTrue(len(body) > 100)
-            self.assertEqual(self.get(srv, "/../../etc/passwd")[0], 404)
-            self.assertEqual(self.get(srv, "/state/trades.jsonl")[0], 404)  # файлы проекта напрямую не отдаются
-            self.assertEqual(self.get(srv, "/api/state", {"Host": "evil.example.com"})[0], 403)
-            for method in ("POST", "PUT", "DELETE", "PATCH"):
-                req = urllib.request.Request("http://127.0.0.1:%d/api/state" % srv.server_address[1], data=b"{}", method=method)
-                try:
-                    urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=5)
-                    self.fail("%s должен быть запрещён" % method)
-                except urllib.error.HTTPError as e:
-                    self.assertEqual(e.code, 405)
-        finally:
-            srv.shutdown()
-            srv.server_close()
-
-    def test_static_page_is_self_contained_and_safe(self):
-        d = server.STATIC
-        for name in ("index.html", "app.css") + tuple(server.SCRIPTS):
-            with open(os.path.join(d, name), encoding="utf-8") as f:
-                txt = f.read()
-            self.assertIsNone(re.search(r"https?://", txt.replace("http://www.w3.org/2000/svg", "")), name)  # без CDN и внешних ресурсов
-            if name.endswith(".js"):
-                self.assertNotIn("innerHTML", txt, name)
-                self.assertNotIn("insertAdjacentHTML", txt, name)
-                self.assertNotIn("document.write", txt, name)
-                if name == "v-control.js":              # WP12: единственный скрипт с POST, и только под /api/ctl/ с CSRF-заголовком
-                    self.assertIn('method: "POST"', txt)
-                    self.assertIn("X-TB-CSRF", txt)
-                    self.assertEqual(sorted(set(re.findall(r'ctlPost\("(/api/ctl/[a-z]+)"', txt))), ["/api/ctl/challenge", "/api/ctl/command", "/api/ctl/llmkey", "/api/ctl/login", "/api/ctl/logout"])
-                    self.assertNotIn("method:", txt.replace('method: "POST"', ""))
-                else:
-                    self.assertNotIn("method:", txt.replace("method: \"GET\"", ""), name)  # нет запросов с телом/методами записи
-        html = open(os.path.join(d, "index.html"), encoding="utf-8").read()
-        for n in server.SCRIPTS:                      # каждый скрипт подключён и раздаётся сервером
-            self.assertIn('src="/%s"' % n, html)
-        self.assertIn(server.EXT_MARK, html)          # сюда сервер вставляет скрипты расширений (WP12)
-        self.assertNotIn("<script>", html)            # CSP не пускает инлайн-скрипты
 
 
 class TestNoSecrets(Base):

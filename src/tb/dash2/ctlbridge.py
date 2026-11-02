@@ -33,7 +33,7 @@ FINAL = ("done", "rejected", "failed", "expired")
 SRC = "dash2"                                         # пометка источника в аудите (audit.append обрезает до 8 символов)
 FULL_ACTIONS = ("day.start", "day.stop", "day.resume", "kill.set", "stop.emergency", "risk.set", "mode.set", "carry.decide", "brain.use", "brain.rollback",
                 "brain.reload", "brain.role", "brain.profile", "llm.provider", "exchange.set", "notify.set", "notify.test", "intel.refresh", "report.ack",
-                "kill.clear")      # снятие KILL (решение владельца 2026-11-02): ctl сам проверяет флаг allow_clear_kill_from_dash, предусловия и подтверждение; нет в BASE (open) и в старом дашборде
+                "kill.clear")      # снятие KILL (решение владельца 2026-11-02): ctl сам проверяет флаг allow_clear_kill_from_dash, предусловия и подтверждение; нет в BASE (open)
 # какие ключи аргументов пропускаем до validate_args (лишние отбрасываются; для настроечных и notify.set строгая проверка у самого validate_args)
 FULL_KEYS = {
     "day.start": DAY_KEYS, "day.stop": (), "day.resume": (), "kill.clear": (), "kill.set": ("flatten", "reason"), "stop.emergency": ("flatten", "reason"),
@@ -120,9 +120,9 @@ class CtlBridge(object):
         if action != "day.start" or not (isinstance(args, dict) and args.get("mode") == "live"):
             return None
         if code == "E_ELEVATE":
-            return "запуск live из этого дашборда требует расширенного управления (auth.dash2_full в config/control.json); либо запустите день в старом дашборде"
+            return "запуск live из этого дашборда требует расширенного управления (auth.dash2_full в config/control.json)"
         if code == "E_DISABLED":
-            return "запуск live из этого дашборда выключен владельцем (control.allow_live_start_from_dash); либо запустите день в старом дашборде"
+            return "запуск live из этого дашборда выключен владельцем (control.allow_live_start_from_dash в config/control.json)"
         return None
 
     def _audit(self, label, action, code, now, args=None, result="rejected", cid="-"):
@@ -156,7 +156,7 @@ class CtlBridge(object):
         action = m.get("action") if isinstance(m.get("action"), str) else ""
         ent = self.sess.get(ws)
         if ent is None:
-            return self._reply(cid, kind, action, "E_AUTH", "управление недоступно в этом режиме входа: используйте старый дашборд")
+            return self._reply(cid, kind, action, "E_AUTH", "управление недоступно в этом режиме входа (нужен auth.mode=open_local в config/control.json)")
         s = ent[1]
         bad = self._gate(s, m, "ws:" + action[:12], now)
         if bad:
@@ -250,14 +250,14 @@ class CtlBridge(object):
         try:
             ent = self.sess.get(ws)
             if ent is None:
-                return rep("E_AUTH", "управление недоступно в этом режиме входа: используйте старый дашборд")
+                return rep("E_AUTH", "управление недоступно в этом режиме входа (нужен auth.mode=open_local в config/control.json)")
             s = ent[1]
             bad = self._gate(s, m, "ws:llmkey", now)
             if bad:
                 return rep(bad)
             if not self._session_full(s):
                 self._audit(s["label"], "llm.key.set", "E_ELEVATE", now)
-                return rep("E_ELEVATE", "ввод ключа выключен: включите auth.dash2_full в config/control.json или используйте старый дашборд")
+                return rep("E_ELEVATE", "ввод ключа выключен: включите auth.dash2_full в config/control.json; терминальный путь: ./tb llm key set ПРОВАЙДЕР")
             if not (isinstance(pid, str) and RE_PID.match(pid)):
                 self._audit(s["label"], "llm.key.set", "E_ARGS", now)
                 return rep("E_ARGS", "провайдер указан неверно")
