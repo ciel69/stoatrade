@@ -183,6 +183,44 @@ store.request(mode) -> сокет {"op":"learning","mode"} -> dash2.server.learn
 
 **Слои.** `tb.learn` не импортирует `tb.venues`, `tb.executor`, `tb.gateway`, `tb.control`, `tb.brain`, `tb.intel.items`, `tb.dash`, `tb.dash2` ни прямо, ни транзитивно; из `tb.llm` берёт только `usage` (журнал вызовов); не пишет на диск и не открывает SQLite на запись (база меток только через `tb.labels.store.open_ro`); сети и процессов нет (`tests/test_layering.py`). Тесты: `tests/test_learn_*.py`, `tests/test_dash2_learning.py`; фронт: vitest рядом с кодом (в том числе сверка с эталонами бэкенда, `pages/learning/ui/contract.test.ts`) и `frontend/e2e/specs/10-learning.mjs`.
 
+## Цикл обучения и rulebook (R2, первая итерация, `.opencode/specs/R2-closed-learning-loop/`)
+Задача: замкнуть цикл «метки → кандидат → проверка → урок → испытание → продвижение или откат» кодом, без владельца и без модели. Доказательство даёт выборка меток R1 (прогоны теневой политики `P2`), а не сделки мозга. Правило первой итерации одно: `skip_when` (запрет входа), поэтому код может только ужесточать; размер, плечо, стоп, лимиты и уровень риска цикл не трогает. Числа, пороги и коды причин: `design.md` и `config/learnloop.json` (строгая загрузка `tb.learnloop.conf`; хеш конфига пишется в критерий испытания). Поставка (решение владельца 6): `enabled=true`, `promotion.mode="auto"`.
+
+**Пакеты.**
+```
+logic/learn_cond.py   чистая: RULE_FEATURES (9 признаков), MENU_NUM, MENU_CAT, cmp_val, matches_features (memory.lessons импортирует отсюда)
+logic/learn_rules.py  чистая: RULE_KINDS=("skip_when",), validate_rule, apply (RULE_<id> / E_RULE_<id>), is_tightening, cond_h, block_h
+knowledge/            schema2 (DDL v2a, триггеры), store2 (migrate_v2a, append_row, make_backup, restore, verify/stats, чёрный список),
+                      markers (файлы-маркеры, is_corruption), rulebook_view (читатель для мозга и шлюза),
+                      cli (./tb knowledge), rulebook_cli (./tb rulebook, отклонение урока), learn_cli (./tb learn promotion|gate)
+learnloop/            conf, clusters (снимки cluster_runs, выборка окна с cut_ts), stat (парный t), verify, menu, candidates,
+                      rules, versions (R-NNNN, promotion_ready), trial, promote, reconcile, watch, gate, hypref, cycle, service
+memory/               features.rule_features (одна функция признаков для меток и мозга), lessons (уроки меток src=labels, transition), diagnose
+core/hyps.py          словарь гипотез (config/hypotheses.json): family(raw) для тега плана и expstats
+```
+CLI владельца (`./tb knowledge|rulebook|learn`) живут в `tb.knowledge`, вне `tb.learnloop`: только `learn_cli.set_mode` пишет `config/learnloop.json:promotion.mode`, сам цикл в `config/` не пишет.
+
+**Сервис `learnloop`** (`python -m tb.learnloop.service run`, профили paper/testnet/trade, heartbeat `runtime/platform/learnloop.hb.json`, блокировка `runtime/platform/learnloop.lock`, окружение без ключей как у `labels`). Проходы `learnloop.cycle`: каждый проход `rule_eval_import`; `observe` раз в 15 мин (закрытие кластеров, сигнал повреждения); суточные после `daily_after` UTC (`integrity_check`, копия, меню раз в 7 суток, приём кандидатов, holdout, уроки `hyp`, регистрация испытаний); раз в час вердикты, продвижение, сверка статусов уроков, сторож, `hypref`. Ошибка шага — `STEP_ERROR` и следующий шаг; торговля и мозг от цикла не зависят. Учёт суток и прогрев: Requirements 15.6, 10.6.
+
+**Таблицы v2a** в `state/knowledge.sqlite` (миграция `store2.migrate_v2a` отдельно от `labels.schema`, версия `meta.knowledge_v2_ver`, маркер `state/knowledge.v2`, перед миграцией копия `premigrate`): `cluster_runs` (неизменяемые снимки прогонов закрытого кластера (час, сторона); все расчёты цикла только по ним), `lesson_candidates`, `trials` (критерий и активный набор пишутся до старта, ключевые колонки неизменяемы), `rule_rows` (ревизии правил, ожидание `wait`), `rulebook_versions` (хеш-цепочка `prev`/`h`), `blocklist_rows` (ключ — семейство условия `block_h`), `rule_evals` (из записей `decisions` `kind="note"`, `what="rule_eval"`), `learn_events` (шаги, ошибки, действия `OWNER`). UPDATE/DELETE запрещены триггерами (кроме изменяемых колонок `trials` и `lesson_candidates`). Копии `state/backups/knowledge-<время>-<причина>.sqlite` (`daily`, `premigrate`, `promote`, `rollback`, `owner`), ротация по причинам. Уроки и случаи в первой итерации остаются в JSONL (`state/lessons.jsonl`, `state/cases.jsonl`); перенос — R2.9b.
+
+**Потоки данных.**
+```
+labels: policy_runs P2 --observe: закрытие кластера--> cluster_runs (insert-only, один раз)
+меню (окно 14 сут, cut_ts) --скрининг--> lesson_candidates --приём <= 3/сут--> holdout 7 сут --> урок hyp (memory.lessons, src=labels)
+hyp --> правило trial + trials --выборка окна испытания--> verdict --> promote (ожидание READY|MAX_ACTIVE|LOSS_CAP) --> R-NNNN, копия, событие rulebook_promoted
+сторож (точки 50/100/200, затем раз в неделю; TRADE_STARVATION) --> R-NNNN+1 без правила, событие rulebook_rollback; аренда runtime/watch_lease.json
+reconcile (раз в час) --> статусы уроков меток по rule_rows/trials (lessons.transition, только вперёд)
+мозг: brief.build -> brain/cands.candidates -> rulebook_view.resolve_event -> memory.features.rule_features -> learn_rules.apply -> cands ok=false RULE_<id>
+шлюз: submit_plan -> h_submit (после ранних проверок) -> те же функции -> E_RULE_<id>; запись decisions note/rule_eval -> цикл переносит в rule_evals
+hypref (раз в час) --> runtime/learn/hyp_ref.json --> досье experiments, ./tb exp, страница «Учится ли мозг»
+```
+Мозг и шлюз читают rulebook только через `tb.knowledge.rulebook_view` (соединение `labels.store.open_ro` на один вызов, кеш версии в памяти) и применяют его только по единому правилу безопасности (база читается и не восстанавливается, аренда сторожа свежа, `runtime/rules_switch.json` не выключен), иначе режим без применения: `docs/BRAIN.md`, «Правила rulebook». Защита и восстановление базы: `docs/RUNBOOK.md`, «Цикл обучения». При маркере `state/knowledge.v2` `labels.store.open_rw` не уходит в карантин R1 (`knowledge.corrupt-*.sqlite` и пустая база), а поднимает `DbCorruptError`.
+
+**Дашборд.** Вкладка «Память» (`/brain/memory`): операции сокета `memory_cases|memory_lessons|memory_rules|memory_path` (чтение) и `lesson_reject|rule_disable|rules_disable_all` (`tb.dash2.memory_ops`, запись только через `tb.knowledge.rulebook_cli`). Страница «Учится ли мозг»: блоки `lessons`, `versions`, `hyps` (`tb.learn.stages`).
+
+**Слои** (`tests/test_layering.py`). `tb.logic.learn_cond|learn_rules` чисты и импортируют из `tb` только `tb.logic`. `tb.knowledge` и `tb.learnloop` не импортируют мозг, шлюз, MCP, биржу, исполнитель, управление, launcher, файлы ключей и `tb.llm` (кроме `usage`), прямо и транзитивно; `tb.learnloop` не импортирует CLI вне пакета и `core.localcfg`, писателей `config/` в нём нет. Мозг (`brain/cands.py`, `brief.py`, `validate.py`) и шлюз (`gateway/catalog.py`) импортируют `tb.logic.learn_rules` и `tb.knowledge.rulebook_view`, но не `tb.learnloop`; `tb.memory.lessons` импортирует `tb.logic.learn_cond`.
+
 ## Фигуры и уровни (опционально)
 `marketdata/patterns.py` (чистые функции) -> `patterns_scan.py` (`./tb patterns scan --sym ETH [--tf 1h|4h|1d]`, только чтение `data/` и `runtime/market.json`).
 События для наблюдателя: `config/watch_config.json` ключ `"patterns_events": true` (по умолчанию false, ключа в файле нет; пороги `config/patterns_config.json`). События `pattern` помечены `unvalidated`: фигуры не прошли проверку (`RESEARCH.md`).

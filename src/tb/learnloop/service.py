@@ -2,7 +2,7 @@
 
 Цикл обучения R2: проходы tb.learnloop.cycle по расписанию (observe 15 мин, раз в час, суточные после daily_after), heartbeat
 runtime/platform/learnloop.hb.json (каждые 5 с и между шагами), блокировка второй копии runtime/platform/learnloop.lock (выход с кодом 2).
-Окружение чистится как у сервиса labels (platform.services.labels_secret): ключей нет, сети нет, в шину ничего не пишется.
+Окружение чистится как у сервиса labels (platform.services.labels_secret): ключей нет, сети нет; в шину пишутся только события rulebook_promoted/rulebook_rollback (всегда info, мозг не будят).
 
 learnloop.enabled=false (или битый config/learnloop.json): сервис живёт и пишет heartbeat «выключен», базу не открывает, ничего не мигрирует
 и не пишет. enabled=true: open_rw, migrate_v2a (с копией premigrate) и init_rulebook (оба идемпотентны), регистрация писателем
