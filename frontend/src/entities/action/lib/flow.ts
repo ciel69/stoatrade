@@ -13,6 +13,8 @@ export const ACCEPT_KEYS: Readonly<Record<string, { accepted: boolean; allowAmbe
   'brain.rollback': { accepted: true, allowAmber: false },
   'brain.reload': { accepted: true, allowAmber: false },
   'brain.role': { accepted: true, allowAmber: false },
+  // схема llm.provider принимает accepted для всех op: без него add/update с предупреждением (опасный адрес, смена адреса у ключа) сервер отклоняет как E_WARN
+  'llm.provider': { accepted: true, allowAmber: false },
 }
 
 export const UNAVAILABLE_TEXT = 'Это действие здесь пока недоступно: владелец должен включить расширенное управление дашборда.'

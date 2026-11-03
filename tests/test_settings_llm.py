@@ -386,5 +386,185 @@ class TestKeyNeverLeaks(Base):
             self.assertIn(FAKE, f.read())
 
 
+class TestModelsAndPing(Base):
+    """provstore.list_models / ping на фейковом сервере: форматы, лимит, утечка ключа, редиректы."""
+
+    def setUp(self):
+        Base.setUp(self)
+        self.srv = FakeLLMServer().start()
+        self.addCleanup(self.srv.stop)
+
+    def add(self, pid="loc", adapter="openai_compat", **extra):
+        spec = {"adapter": adapter, "base_url": self.srv.url + ("" if adapter == "anthropic" else "/v1"), "key_file": pid + ".env", "key_env": pid.upper() + "_KEY",
+                "timeouts": {"connect_s": 2, "read_s": 2, "total_s": 5}, "retry": {"max": 0, "base_s": 1, "max_s": 2, "on": [500]},
+                "models": {"m": {"name": "m-live", "price": {"in": 0, "out": 0}}}}
+        spec.update(extra)
+        self.assertTrue(provstore.add(self.root, pid, spec=spec)["ok"])
+        keystore.set_key(pid + ".env", pid.upper() + "_KEY", FAKE)
+
+    def test_openai_format_sorted_and_key_stays_server_side(self):
+        self.add()
+        self.srv.push("/v1/models", R(200, {"object": "list", "data": [{"id": "z-model"}, {"id": "a-model"}, {"id": "a-model"}, {"id": "bad id!"}, {"nope": 1}]}))
+        r = provstore.list_models(self.root, "loc")
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(r["data"], {"ids": ["a-model", "z-model"], "count": 2, "truncated": False, "source": "models"})
+        self.assertEqual(self.srv.requests[-1]["headers"]["authorization"], "Bearer " + FAKE)       # ключ ушёл провайдеру, но не в ответ
+        self.assertNotIn(FAKE, json.dumps(r))
+
+    def test_anthropic_format_and_alt_shapes(self):
+        self.add("an", adapter="anthropic", version_header="2023-06-01")
+        self.srv.push("/v1/models?limit=1000", R(200, {"data": [{"id": "claude-x", "type": "model"}, {"id": "claude-a"}], "has_more": False}))
+        r = provstore.list_models(self.root, "an")
+        self.assertEqual(r["data"]["ids"], ["claude-a", "claude-x"])
+        self.assertEqual(self.srv.requests[-1]["headers"]["x-api-key"], FAKE)
+        self.add("alt")
+        self.srv.push("/v1/models", R(200, {"models": [{"name": "models/gem-1"}, {"id": "gem-2"}]}))
+        self.assertEqual(provstore.list_models(self.root, "alt")["data"]["ids"], ["gem-2", "models/gem-1"])
+
+    def test_limit_500_truncated(self):
+        self.add()
+        self.srv.push("/v1/models", R(200, {"data": [{"id": "m%04d" % i} for i in range(700)]}))
+        d = provstore.list_models(self.root, "loc")["data"]
+        self.assertEqual((len(d["ids"]), d["count"], d["truncated"]), (500, 700, True))
+        self.assertEqual(d["ids"], sorted(d["ids"]))
+
+    def test_401_does_not_leak_key(self):
+        self.add()
+        self.srv.push("/v1/models", R(401, {"error": {"message": "Incorrect API key provided: %s" % FAKE}}))
+        r = provstore.list_models(self.root, "loc")
+        self.assertFalse(r["ok"])
+        self.assertEqual((r["code"], r["data"]["error"]), ("E_PROVIDER", "auth"))
+        self.assertNotIn(FAKE, json.dumps(r, ensure_ascii=False))
+        self.assertNotIn("0123456789abcdef", json.dumps(r))
+
+    def test_no_key_and_unknown(self):
+        self.add()
+        os.remove(os.path.join(self.keys, "loc.env"))
+        self.assertEqual(provstore.list_models(self.root, "loc")["code"], "E_NO_KEY")
+        self.assertEqual(provstore.list_models(self.root, "nope")["code"], "E_ARGS")
+        self.assertEqual(self.srv.count(), 0)
+
+    def test_redirect_is_not_followed(self):
+        self.add()
+        self.srv.push("/v1/models", R(302, headers={"Location": self.srv.url + "/other"}))
+        r = provstore.list_models(self.root, "loc")
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["data"]["error"], "redirect")
+        self.assertEqual(self.srv.count("/other"), 0)
+
+    def test_oversize_and_garbage_body(self):
+        self.add()
+        self.srv.push("/v1/models", R(200, raw=b"x" * (1024 * 1024 + 10)))
+        self.assertEqual(provstore.list_models(self.root, "loc")["data"]["error"], "bad_body")
+        self.srv.push("/v1/models", R(200, raw=b"<html>"))
+        self.assertEqual(provstore.list_models(self.root, "loc")["data"]["error"], "bad_body")
+
+    def test_ping_ok_and_error(self):
+        self.add()
+        self.srv.push("/v1/chat/completions", R(200, ds_ok("pong")))
+        r = provstore.ping(self.root, "loc")
+        self.assertTrue(r["ok"], r)
+        d = r["data"]
+        self.assertEqual((d["ok"], d["model"], d["paid"], d["text"]), (True, "m", True, "pong"))
+        self.assertIn("ms", d)
+        self.assertEqual(self.srv.requests[-1]["json"]["max_tokens"], 16)
+        self.srv.push("/v1/chat/completions", R(200, ds_ok("x" * 200)))
+        self.assertNotIn("text", provstore.ping(self.root, "loc", "m")["data"])           # длинный ответ не возвращается
+        self.srv.push("/v1/chat/completions", R(401, {"error": {"message": "key " + FAKE}}))
+        e = provstore.ping(self.root, "loc")
+        self.assertFalse(e["ok"])
+        self.assertEqual(e["data"]["error"], "auth")
+        self.assertNotIn(FAKE, json.dumps(e, ensure_ascii=False))
+        self.assertEqual(provstore.ping(self.root, "loc", "nomodel")["code"], "E_ARGS")
+
+
+class TestBaseUrlPolicy(Base):
+    """Валидация base_url (netpolicy) и проверка адресов после резолва в транспорте."""
+
+    def test_static_rules(self):
+        from tb.llm import netpolicy as N
+        ok = ["https://api.openai.com/v1", "http://127.0.0.1:11434/v1", "http://localhost:1234/v1", "http://[::1]:8080/v1", "http://127.9.9.9/v1", "https://x.example/v1/"]
+        for u in ok:
+            self.assertIsNone(N.check_url(u), u)
+        bad = ["http://169.254.169.254/latest", "https://169.254.1.1/v1", "http://[fe80::1]/v1", "https://metadata.google.internal/v1", "http://0.0.0.0/v1", "http://[::]/v1",
+               "https://user:pass@api.openai.com/v1", "https://user@api.openai.com/v1", "https://api.openai.com/v1?k=1", "https://api.openai.com/v1#x", "https://api.openai.com/v1?",
+               "http://api.openai.com/v1", "ftp://x.example/v1", "https:///v1", "http://100.100.100.200/v1", "http://[::ffff:169.254.169.254]/v1", "https://a b.example/v1", ""]
+        for u in bad:
+            self.assertIsNotNone(N.check_url(u), u)
+        for u in ("http://10.0.0.5:8000/v1", "http://192.168.1.2/v1", "http://172.16.0.9/v1", "http://[fd12::1]/v1", "https://llm.internal/v1", "http://gpu-box:8000/v1", "https://llm.corp/v1"):
+            self.assertIsNotNone(N.check_url(u), u)               # без allow_private нельзя
+            self.assertIsNone(N.check_url(u, True), u)            # с флагом можно (в том числе по http)
+        for u in ("http://169.254.169.254/x", "http://[fe80::1]/v1", "http://0.0.0.0/v1", "http://metadata.google.internal/x", "http://100.64.0.1/v1"):
+            self.assertIsNotNone(N.check_url(u, True), u)         # метаданные и link-local не открывает даже флаг
+
+    def test_registry_rejects_and_accepts(self):
+        spec = lambda url, **kw: dict({"adapter": "openai_compat", "base_url": url, "models": {"m": {"name": "m1", "price": {"in": 1, "out": 1}}}}, **kw)
+        self.assertFalse(provstore.add(self.root, "p1", spec=spec("http://169.254.169.254/v1"))["ok"])
+        self.assertFalse(provstore.add(self.root, "p2", spec=spec("https://u:p@x.example/v1"))["ok"])
+        self.assertFalse(provstore.add(self.root, "p3", spec=spec("http://192.168.0.7:8000/v1"))["ok"])
+        self.assertTrue(provstore.add(self.root, "p4", spec=spec("http://192.168.0.7:8000/v1", allow_private=True))["ok"])
+        self.assertTrue(providers.load(self.root).providers["p4"].allow_private)
+        self.assertFalse(provstore.add(self.root, "p5", spec=spec("http://169.254.169.254/v1", allow_private=True))["ok"])
+        self.assertFalse(provstore.add(self.root, "p6", spec=spec("https://x.example/v1", allow_private="yes"))["ok"])
+        self.assertTrue(provstore.add(self.root, "p7", preset="local")["ok"])           # пресеты loopback проходят
+        self.assertTrue(provstore.add(self.root, "p8", preset="lmstudio")["ok"])
+        self.assertFalse(provstore.update(self.root, "p4", {"base_url": "https://x.example/v1?a=1"})["ok"])
+        self.assertFalse(provstore.update(self.root, "p7", {"beta_url": "http://169.254.169.254/b"})["ok"])
+        self.assertFalse(provstore.update(self.root, "p4", {"allow_private": False})["ok"])       # с выключенным флагом приватный адрес уже невалиден
+        self.assertEqual(providers.load(self.root).errors, [])
+        self.assertEqual(providers.load(self.root).providers["deepseek"].error, None)
+
+    def test_resolved_address_checked_per_connection(self):
+        """DNS rebinding: имя публичное, а резолвится во внутренний/служебный адрес -> соединения нет. Резолвер фейковый."""
+        from tb.llm.transport import Transport
+        from tb.llm.types import LLMError
+        srv = FakeLLMServer().start()
+        self.addCleanup(srv.stop)
+        port = srv.httpd.server_address[1]
+        url = "http://rebind.example:%d/v1/models" % port
+        srv.default["/v1/models"] = R(200, {"data": [{"id": "x"}]})
+
+        def call(resolver, allow_private=False):
+            tr = Transport(resolver=resolver, keepalive=False)
+            return tr.request("GET", url, {}, None, {"connect_s": 2, "read_s": 2, "total_s": 5}, {"max": 0}, allow_private=allow_private)
+
+        for ip in ("169.254.169.254", "0.0.0.0", "::", "fe80::1", "100.100.100.200"):
+            for ap in (False, True):
+                with self.assertRaises(LLMError, msg=ip) as cm:
+                    call(lambda h, p, ip=ip: [ip], ap)
+                self.assertEqual(cm.exception.code, "config")
+        with self.assertRaises(LLMError):
+            call(lambda h, p: ["10.1.2.3"])                                    # приватный без allow_private
+        with self.assertRaises(LLMError):
+            call(lambda h, p: ["127.0.0.1"])                                   # публичное имя на loopback без allow_private
+        with self.assertRaises(LLMError):
+            call(lambda h, p: ["93.184.216.34", "127.0.0.1"])                  # хотя бы один плохой адрес из набора - отказ
+        with self.assertRaises(LLMError):
+            call(lambda h, p: ["93.184.216.34"])                               # публичный адрес по http - отказ
+        self.assertEqual(srv.count(), 0)                                       # до сервера ни один запрос не дошёл
+        self.assertEqual(call(lambda h, p: ["127.0.0.1"], True).status, 200)   # с allow_private: можно
+        seq = iter([["127.0.0.1"], ["169.254.169.254"]])                       # «ребиндинг»: первый резолв безопасный, второй - метаданные
+        res = lambda h, p: next(seq)
+        tr = Transport(resolver=res, keepalive=False)
+        h = ({"connect_s": 2, "read_s": 2, "total_s": 5}, {"max": 0})
+        self.assertEqual(tr.request("GET", url, {}, None, *h, allow_private=True).status, 200)
+        with self.assertRaises(LLMError):
+            tr.request("GET", url, {}, None, *h, allow_private=True)
+        self.assertEqual(srv.count(), 2)          # дошли только два безопасных запроса (один выше, один здесь)
+
+    def test_loopback_names_must_resolve_to_loopback(self):
+        from tb.llm.transport import Transport
+        from tb.llm.types import LLMError
+        srv = FakeLLMServer().start()
+        self.addCleanup(srv.stop)
+        srv.default["/x"] = R(200, {})
+        url = "http://localhost:%d/x" % srv.httpd.server_address[1]
+        tr = Transport(resolver=lambda h, p: ["127.0.0.1"], keepalive=False)
+        self.assertEqual(tr.request("GET", url, {}, None, {"connect_s": 2, "read_s": 2, "total_s": 5}, {"max": 0}).status, 200)
+        tr = Transport(resolver=lambda h, p: ["10.0.0.1"], keepalive=False)
+        with self.assertRaises(LLMError):
+            tr.request("GET", url, {}, None, {"connect_s": 2, "read_s": 2, "total_s": 5}, {"max": 0}, allow_private=True)
+
+
 if __name__ == "__main__":
     unittest.main()

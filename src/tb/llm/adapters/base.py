@@ -4,11 +4,18 @@
 Ключ живёт только в локальных переменных complete()/probe(); в исключения и объекты не сохраняется.
 """
 import json
+import re
 import time
 
 from tb.llm import keys
 from tb.llm.transport import Transport
 from tb.llm.types import LLMError, Req, Resp, user
+
+
+MODELS_LIMIT = 500
+MODELS_TIMEOUT_S = 10.0
+MODELS_MAX_BODY = 1024 * 1024
+RE_MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$")      # то же правило, что для name модели в реестре
 
 
 def strict_compatible(schema):
@@ -64,6 +71,44 @@ class Adapter(object):
     def probe_names(self, data):
         return [m.get("id") for m in (data.get("data") or []) if isinstance(m, dict) and m.get("id")]
 
+    def models_request(self):
+        """-> (url, headers_extra) для списка моделей (по умолчанию как проверка)."""
+        return self.probe_request()
+
+    @staticmethod
+    def parse_model_ids(data):
+        """OpenAI/Anthropic: data[].id; на всякий случай models[].id|name и голый список. -> список строк-id (допустимых по виду имени модели)."""
+        if isinstance(data, dict):
+            rows = data.get("data") if isinstance(data.get("data"), list) else data.get("models")
+        else:
+            rows = data
+        out = []
+        for m in rows if isinstance(rows, list) else []:
+            v = m if isinstance(m, str) else (m.get("id") or m.get("name")) if isinstance(m, dict) else None
+            if isinstance(v, str) and RE_MODEL_ID.match(v):
+                out.append(v)
+        return out
+
+    def list_model_ids(self, limit=MODELS_LIMIT, timeout_s=MODELS_TIMEOUT_S):
+        """GET списка моделей ключом сервера (ключ в результат не попадает). -> {"ids","count","truncated","source"}. Ошибки -> LLMError (текст очищен от ключа).
+        Таймаут 10 с, тело до 1 МБ, без повторов, редиректы не выполняются (3xx -> LLMError('redirect'))."""
+        secret = self._secret()
+        url, extra = self.models_request()
+        hdrs = self._headers(secret, extra)
+        hdrs.pop("Content-Type", None)
+        rep = self.transport.request("GET", url, hdrs, None, {"connect_s": timeout_s, "read_s": timeout_s, "total_s": timeout_s}, {"max": 0}, total_s=timeout_s,
+                                     allow_private=self.provider.allow_private, max_body=MODELS_MAX_BODY)
+        if 300 <= rep.status < 400:
+            raise LLMError("redirect", "HTTP %d: перенаправления не выполняются (проверьте base_url)" % rep.status, status=rep.status)
+        if rep.status < 200 or rep.status >= 300:
+            raise self._error(rep.status, rep.body, secret, 0)
+        try:
+            data = json.loads(rep.body.decode("utf-8", "replace"))
+        except ValueError:
+            raise LLMError("bad_body", "тело ответа не JSON", status=rep.status)
+        ids = sorted(set(self.parse_model_ids(data)))
+        return {"ids": ids[:limit], "count": len(ids), "truncated": len(ids) > limit, "source": "models"}
+
     # ---- общее ----
     def _secret(self):
         return keys.load(self.provider.key_file, self.provider.key_env, self.environ)
@@ -94,7 +139,8 @@ class Adapter(object):
         raw = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         t0 = time.time()
         try:
-            rep = self.transport.request("POST", url, self._headers(secret, extra), raw, self.provider.timeouts, self.provider.retry, total_s=req.timeout_s)
+            rep = self.transport.request("POST", url, self._headers(secret, extra), raw, self.provider.timeouts, self.provider.retry, total_s=req.timeout_s,
+                                       allow_private=self.provider.allow_private)
         except LLMError:
             raise
         if rep.status < 200 or rep.status >= 300:
@@ -125,7 +171,7 @@ class Adapter(object):
         out = {"model_name_in_list": None, "models_count": None, "ping": None}
         hdrs = self._headers(secret, extra)
         hdrs.pop("Content-Type", None)
-        rep = self.transport.request("GET", url, hdrs, None, self.provider.timeouts, {"max": 0})
+        rep = self.transport.request("GET", url, hdrs, None, self.provider.timeouts, {"max": 0}, allow_private=self.provider.allow_private)
         if 200 <= rep.status < 300:
             try:
                 names = self.probe_names(json.loads(rep.body.decode("utf-8", "replace")))

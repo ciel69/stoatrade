@@ -14,7 +14,7 @@ import time
 from tb.dash import model, model2
 
 # ---- реестр расширений: модули `tb.<пакет>.dashapi` с функцией api(path, query, root, now) -> None (не мой путь) | (код, объект); подключаются, если модуль существует ----
-EXT_API = ("tb.intel.dashapi", "tb.lifecycle.dashapi", "tb.memory.dashapi", "tb.brain.dashapi", "tb.llm.dashapi")
+EXT_API = ("tb.intel.dashapi", "tb.lifecycle.dashapi", "tb.memory.dashapi", "tb.brain.dashapi", "tb.llm.dashapi", "tb.learn.dashapi")
 MODES = ("live", "paper", "testnet", "all")
 
 

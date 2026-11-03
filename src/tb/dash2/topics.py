@@ -521,6 +521,7 @@ def settings(root=None, now=None):
         cred, lim = p.get("cred") if isinstance(p.get("cred"), dict) else {}, p.get("limits") if isinstance(p.get("limits"), dict) else {}
         providers.append({"id": str(p.get("id"))[:40], "name": str(p.get("name") or p.get("id"))[:60], "adapter": str(p.get("adapter") or "")[:40], "enabled": bool(p.get("enabled")), "local": bool(p.get("local")),
                           "verified": bool(p.get("verified")), "note": _txt(p.get("note"), 200), "error": _txt(p.get("error"), 160), "base_host": _host(p.get("base_url")),
+                          "allow_private": bool(p.get("allow_private")),
                           "cred": {"needed": bool(cred.get("needed")), "present": bool(cred.get("present")), "perms_ok": cred.get("perms_ok") if isinstance(cred.get("perms_ok"), bool) else None, "env": _txt(cred.get("env"), 40)},       # ни ключа, ни маски: только «есть или нет»
                           "limits": {k: _num(lim.get(k)) for k in ("concurrent", "rpm", "day_usd", "hour_usd", "day_toks")},
                           "models": [{"id": str(m.get("id"))[:30], "name": str(m.get("name"))[:60], "ctx": _num(m.get("ctx")), "tools": bool(m.get("tools")), "tags": [str(t)[:20] for t in (m.get("tags") or [])[:4]],
@@ -639,14 +640,40 @@ def plan_detail(root, pid, now=None):
     return {"id": pid, "ok": True, "data": model.scrub(data)}
 
 
-def _pending(rows, now):
-    """Ждущие лимитные входы; срок жизни отдаём моментом (expires_at), по той же причине, что и eta_at."""
+def _plan_orders(v2, mode, now):
+    """Лимитные входы планов v2, уже стоящие на бирже (runtime.entry.state == resting): карточка плана даёт цену лимита (trigger.limit_px), стоп, тейк, риск и плечо.
+    Срок заявки = срок плана (ttl_left_s), своего ttl у входа нет."""
+    out = []
+    for c in ((v2 or {}).get("plans") or {}).get("cards") or []:
+        if not isinstance(c, dict) or c.get("entry_state") != "resting" or c.get("status") not in (None, "armed"):
+            continue
+        if mode != "all" and c.get("mode") != mode:
+            continue
+        px = _num((c.get("trigger") or {}).get("limit_px"))
+        cur = _num(c.get("price"))
+        tgs = [_num(x.get("price")) for x in c.get("targets") or [] if isinstance(x, dict) and _num(x.get("price")) is not None]
+        ttl = _num(c.get("ttl_left_s"))
+        out.append({"id": "plan:%s" % c.get("id"), "src": "plan", "plan": c.get("id"), "sym": c.get("sym"), "side": c.get("side"), "mode": c.get("mode"), "price": px, "cur": cur,
+                    "stale": bool(c.get("price_stale")), "dist_pct": (100.0 * (px / cur - 1.0)) if px and cur else None, "sl": _num(c.get("stop")), "tp": tgs[0] if tgs else None,
+                    "risk": _num(c.get("risk_usdt")), "lev": _num(c.get("leverage")), "ttl_min": None, "expires_at": round(now + ttl) if ttl is not None else None})
+    return out
+
+
+def _pending(rows, now, v2=None, mode="all"):
+    """Ждущие лимитные входы: заявки прежнего пути (state/pending_orders.json, src=cli) и входы планов v2 (src=plan); срок жизни отдаём моментом (expires_at), по той же причине, что и eta_at.
+    Одна и та же заявка в обоих источниках (монета, сторона, цена, режим) показывается один раз, строкой плана."""
     out = []
     for r in rows or []:
         left = _num(r.get("left_s"))
-        out.append({"id": r.get("id"), "sym": r.get("sym"), "side": r.get("side"), "mode": r.get("mode"), "price": _num(r.get("price")), "cur": _num(r.get("cur")), "stale": bool(r.get("price_stale")),
+        out.append({"id": r.get("id"), "src": "cli", "plan": None, "sym": r.get("sym"), "side": r.get("side"), "mode": r.get("mode"), "price": _num(r.get("price")), "cur": _num(r.get("cur")), "stale": bool(r.get("price_stale")),
                     "dist_pct": _num(r.get("dist_pct")), "sl": _num(r.get("sl")), "tp": _num(r.get("tp")), "risk": _num(r.get("risk_usdt")), "lev": _num(r.get("lev")),
                     "ttl_min": _num(r.get("ttl_min")), "expires_at": round(now + left) if left is not None else None})
+
+    def key(o):
+        return (o["sym"], o["side"], o["mode"], round(o["price"], 8) if o["price"] is not None else None)
+    plans = _plan_orders(v2, mode, now)
+    seen = {key(o) for o in plans}
+    out = plans + [o for o in out if key(o) not in seen]
     return {"total": len(out), "items": out[:PENDING_OUT]}
 
 
@@ -705,7 +732,7 @@ def home(root=None, now=None, mode=None):
             "limits": [{"id": r.get("id"), "label": r.get("label"), "limit": _num(r.get("limit")), "used": _num(r.get("used")), "room": _num(r.get("room")), "unit": r.get("unit"), "level": r.get("level")}
                        for r in (rr.get("rows") or []) if isinstance(r, dict)],
             "limits_paper": bool(rr.get("paper")), "allowed": rr.get("allowed"), "positions": pos[:POSITIONS_OUT], "positions_total": len(pos),
-            "curve": _curve(s.get("curve")), "plans": _plans(s.get("v2"), mode, now), "pending": _pending(s.get("pending"), now)}
+            "curve": _curve(s.get("curve")), "plans": _plans(s.get("v2"), mode, now), "pending": _pending(s.get("pending"), now, s.get("v2"), mode)}
 
 
 # ---------------------------------------------------------------- events: лента для плавающего «облака» (шина событий, поля уже из белых списков)
@@ -982,6 +1009,14 @@ def exp_detail(root, by, mode, now=None):
                                 "pnl": _num(t.get("pnl")), "ts": _num(t.get("ts")), "reason": _txt(t.get("reason"), 16)} for t in ms[:EXP_TRADES_OUT]]})
     return model.scrub({"ok": True, "by": by, "mode": mode, "min_n": expstats.MIN_N, "alpha": expstats.ALPHA, "k": k_total, "alpha_adj": adj if k_total else None,
                         "rows": out, "rows_total": k_total, "total_closed": len(base), "unreviewed": unreviewed, "meta": meta, "confirmed": conf})
+
+
+def learning_detail(root, mode, now=None):
+    """Отчёт «Учится ли мозг» по запросу клиента (R0.2): tb.learn.dashapi.detail (отчёт или {"ok": False, "mode", "error": "failed"}), на выходе model.scrub. Режим проверяется в report.normalize_mode.
+    Тема в TOPICS не входит: отчёт собирается только по запросу."""
+    from tb.dash import model
+    from tb.learn import dashapi
+    return model.scrub(dashapi.detail(root, mode, now))
 
 
 TOPICS = {"brain": brain, "ctl": ctl, "day": day, "events": events, "market": market, "news": news, "notify": notify, "briefs": briefs, "system": system, "settings": settings}

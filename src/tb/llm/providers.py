@@ -8,6 +8,7 @@ import re
 
 from tb import paths
 from tb.core.secretfile import FORBIDDEN_ENV_PREFIX, FORBIDDEN_FILE_PREFIX
+from tb.llm import netpolicy
 
 KNOWN_ADAPTERS = ("deepseek", "anthropic", "openai-compatible")
 ADAPTER_ALIASES = {"openai_compat": "openai-compatible", "openai-compat": "openai-compatible", "openai_compatible": "openai-compatible"}     # имена для config/local
@@ -60,6 +61,7 @@ class Provider(object):
         self.note = raw.get("note") if isinstance(raw.get("note"), str) else None
         self.base_url = (raw.get("base_url") or "").rstrip("/")
         self.beta_url = (raw.get("beta_url") or "").rstrip("/") or None
+        self.allow_private = raw.get("allow_private") is True      # приватные/внутренние адреса (RFC1918, внутренние имена) разрешены владельцем явно; link-local и метаданные никогда
         self.key_file, self.key_env = raw.get("key_file"), raw.get("key_env")
         self.enabled = bool(raw.get("enabled")) and error is None
         self.timeouts = dict(raw.get("timeouts") or {})
@@ -80,11 +82,16 @@ def _check_provider(pid, raw):
         return {}, "запись не объект"
     if norm_adapter(raw.get("adapter")) not in KNOWN_ADAPTERS:
         return {}, "неизвестный adapter"
-    bu = raw.get("base_url")
-    if not isinstance(bu, str) or not re.match(r"^https?://[^\s/]+", bu):
-        return {}, "base_url должен начинаться с http:// или https://"
-    if raw.get("beta_url") is not None and not (isinstance(raw["beta_url"], str) and raw["beta_url"].startswith(("http://", "https://"))):
-        return {}, "beta_url некорректен"
+    if raw.get("allow_private") is not None and not isinstance(raw.get("allow_private"), bool):
+        return {}, "allow_private: true или false"
+    ap = raw.get("allow_private") is True
+    bad = netpolicy.check_url(raw.get("base_url"), ap)
+    if bad:
+        return {}, bad
+    if raw.get("beta_url") is not None:
+        bad = netpolicy.check_url(raw["beta_url"], ap)
+        if bad:
+            return {}, "beta_url: " + bad.replace("base_url: ", "")
     kf, ke = raw.get("key_file"), raw.get("key_env")
     if kf is not None and not (isinstance(kf, str) and RE_KEYFILE.match(kf) and ".." not in kf):
         return {}, "key_file: только имя файла без пути"

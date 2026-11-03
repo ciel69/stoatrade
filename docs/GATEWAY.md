@@ -26,6 +26,7 @@ bus, decisions, ideas, expstats, journal); слои проверяет `tests/te
 | `hold_plan` | plan.manage | запись | *id, *reason, wait_s, event_seq, brief_id |
 | `release_plan` | plan.manage | запись | *id, *reason, wait_s, event_seq, brief_id |
 | `add_idea` | idea.write | запись | *sym, *side, *note, level, stop, tp, tag |
+| `revise_idea` | idea.write | запись | *id, *action (keep/update/cancel), candidate (для update: номер ok-кандидата `brief.cands`; цены берёт код) |
 | `list_ideas` | read | чтение | status, limit |
 | `post_mortem` | journal.post | запись | *trade_id, err, rule_followed, lesson |
 | `get_stats` | read | чтение | by, mode, min_n |

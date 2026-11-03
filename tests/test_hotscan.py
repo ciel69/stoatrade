@@ -436,11 +436,16 @@ class IdeaWatchTest(unittest.TestCase):
         self.assertEqual(self.chk(94.0, 70), [])        # идея неактивна: больше событий нет
         self.assertEqual(len(ideas.read_rows(self.path)), n)
 
-    def test_stop_after_level_touch_is_not_invalidation(self):
+    def test_stop_after_level_touch_invalidates(self):
+        """Ревизия идей: пробитый стоп закрывает идею и ПОСЛЕ касания уровня (раньше после hit проверка стопа пропускалась и идея жила зомби до ttl)."""
         iid = self.add(110.0, level=100.0, stop=95.0)
         self.assertEqual([e["type"] for e in self.chk(99.9, 10)], ["idea_level"])
-        self.assertEqual(self.chk(94.0, 40), [])
-        self.assertEqual(self.status(iid)["status"], "idea")
+        self.assertTrue(self.status(iid)["hit"])                      # касание записано в хранилище идей
+        self.assertEqual([e["type"] for e in self.chk(94.0, 40)], ["idea_invalidated"])
+        st = self.status(iid)
+        self.assertEqual(st["status"], "invalidated")
+        self.assertIn("после касания", st["mark_notes"][-1])
+        self.assertEqual(self.chk(93.0, 70), [])
 
     def test_stop_for_short_above_level(self):
         iid = self.add(90.0, level=100.0, side="short", stop=105.0)
@@ -511,6 +516,30 @@ class IdeaWatchTest(unittest.TestCase):
         self.assertEqual(w.check({}, T0), [])
         self.add(110.0, level=100.0, sym="ZZZ")
         self.assertEqual(self.chk(100.0, 5), [])
+
+
+class EventIdDateTest(unittest.TestCase):
+    """R1 1.8: id события несёт дату YYYYMMDD; id без даты (ddHHMMSS) читаются как раньше."""
+    R = {"sym": "AAA", "price": 1.0, "score": 5.0, "reasons": [], "range_5m_pct": 0.9, "ret_5m_pct": 0.5, "turn_surge_5m": 2.0,
+         "chg_24h_pct": 1.0, "turn_24h_musd": 50.0, "spread_bps": 2.0, "funding_pct": 0.01, "corr_group": None, "tradable": True}
+    OCT, NOV = 1793000000.0, 1793000000.0 + 31 * 86400     # один и тот же день месяца и время, разные месяцы
+
+    def test_ids_of_different_months_differ(self):
+        a, b = hs.make_event("range_5m", self.R, self.OCT)["id"], hs.make_event("range_5m", self.R, self.NOV)["id"]
+        self.assertNotEqual(a, b)
+        self.assertTrue(a.startswith("2026") and a.endswith("-AAA"), a)
+        d1 = hs.make_deriv_event("oi_spike", dict(self.R, oi_chg_15m_pct=9.0, ret_15m_pct=1.4), 2.0, self.OCT)["id"]
+        d2 = hs.make_deriv_event("oi_spike", dict(self.R, oi_chg_15m_pct=9.0, ret_15m_pct=1.4), 2.0, self.NOV)["id"]
+        self.assertNotEqual(d1, d2)
+
+    def test_old_ids_still_tracked(self):
+        with tempfile.TemporaryDirectory() as d:
+            tr = hs.outcomes.OutcomeTracker(os.path.join(d, "o.jsonl"), os.path.join(d, "p.json"))
+            for iid in ("02150000-AAA", "20261102150000-AAA"):
+                tr.add_event({"id": iid, "sym": "AAA", "price": 1.0, "type": "range_5m", "direction": "up"}, 1000.0)
+            self.assertEqual(sorted(tr.items), ["02150000-AAA", "20261102150000-AAA"])
+            tr2 = hs.outcomes.OutcomeTracker(os.path.join(d, "o.jsonl"), os.path.join(d, "p.json"))
+            self.assertEqual(sorted(tr2.items), ["02150000-AAA", "20261102150000-AAA"])
 
 
 if __name__ == "__main__":

@@ -15,7 +15,7 @@ import unicodedata
 from tb import paths
 from tb.brain import brief as brief_mod
 from tb.brain import common
-from tb.brain import events_cli, plan_cli
+from tb.brain import events_cli, idearev, plan_cli
 from tb.core import bus, decisions, expstats, ideas, journal, plan_schema, portfolio, risklevels, tradectx
 from tb.gateway import registry as _registry
 from tb.memory import blocks as memblocks, cases as memcases, cfg as memcfg, features as memfeatures, lessons as memlessons, query as memquery, review as memreview
@@ -460,6 +460,24 @@ def h_add_idea(ctx, a):
     return {"ok": True, "idea_id": rec["id"]}
 
 
+def h_revise_idea(ctx, a):
+    """keep | update | cancel живой идеи (флаг idea_stale). Цены update код берёт из кандидата brief.cands по номеру: cands и монета приходят от раннера (ctx.meta),
+    без них досье события по монете идеи строится заново. Логика и тексты отказов: brain/idearev.py."""
+    iid = a["id"]
+    cur = {i["id"]: i for i in ideas.load_ideas(ctx.root)}.get(iid)
+    if not cur:
+        raise ToolError("E_NOT_FOUND", "нет идеи %s" % iid, "id", "not_found")
+    check_scope(ctx.agent, cur.get("sym"), ctx.agent.limits["modes"][0])
+    cands, sym = ctx.meta.get("cands"), ctx.meta.get("sym")
+    if a["action"] == "update" and not isinstance(cands, list):
+        sym = cur.get("sym")
+        cands = brief_mod.build("event", root=ctx.root, now=ctx.now, consumer=ctx.agent.consumer, sym=sym).get("cands")
+    r = idearev.revise(iid, a["action"], cands, a.get("candidate"), sym, root=ctx.root, now=ctx.now)
+    if not r.get("ok"):
+        raise ToolError("E_" + r["code"], r["msg"], "action")
+    return r
+
+
 def h_post_mortem(ctx, a):
     f = {}
     if a.get("err"):
@@ -665,7 +683,22 @@ def h_submit(ctx, a):
         raise ToolError("E_RATE_PLANS", "лимит планов в час: %d" % lim["plans_per_hour"], "", "denied")
     resp = _send(ctx, "submit", a, payload=raw, reason=reason)
     resp["gateway_actor"] = ctx.agent.actor
+    _link_brief(ctx, a, resp)
     return resp
+
+
+def _link_brief(ctx, a, resp):
+    """Принятый план -> запись журнала решений what=plan_brief {brief_id, event_seq}: писатель случаев (memory.migrate) по ней находит досье (оно уже сохранено
+    h_brief в state/briefs/, там блок snap) и событие, на которых подан план. Нет досье и события в вызове, нет plan_id в ответе или сбой записи - молча без связи."""
+    pid = resp.get("plan_id") if isinstance(resp, dict) and resp.get("ok") else None
+    basis = {k: a[k] for k in ("brief_id", "event_seq") if a.get(k) is not None}
+    if not pid or not basis:
+        return
+    try:
+        decisions.append({"actor": ctx.agent.actor, "kind": "note", "what": "plan_brief", "plan": pid, "why": "досье и событие, на которых подан план",
+                          "basis": basis, "res": {"ok": True, "code": "OK"}}, root=ctx.root)
+    except (ValueError, OSError, TimeoutError):
+        pass
 
 
 def _plans_last_hour(ctx):
@@ -830,6 +863,12 @@ _reg(Tool("add_idea", "Record a trading idea with a level (price, quote currency
            "note": _s("Why, one sentence, max 200 chars.", 200), "level": _n("Entry level price > 0.", 1e-12, 1e12), "stop": _n("Stop price > 0.", 1e-12, 1e12),
            "tp": _n("Target price > 0.", 1e-12, 1e12), "tag": _s("Setup tag.", 40, pattern=RE_TAG)}, "idea.write", h_add_idea,
           required=["sym", "side", "note"], out=("idea_id",), write=True))
+_reg(Tool("revise_idea", "Review a live idea (event idea_stale; brief.ideas shows stale_code, hit, ttl_left_h). action keep = still valid (clears the flag, extends the lifetime; "
+          "a few times at most), update = recompute level/stop/tp from candidate n of brief.cands (an ok candidate, same side; you do not set prices), cancel = drop the idea. "
+          "Active ideas only; limits and duplicates are checked by code.",
+          {"id": _s("Idea id like I7.", 12, pattern=common.RE_IDEA_ID.pattern), "action": _s("keep | update | cancel", 6, enum=idearev.ACTIONS),
+           "candidate": _i("For update: the n of a brief.cands row with ok=true.", 1, 10)},
+          "idea.write", h_revise_idea, required=["id", "action"], out=("idea_id", "action", "level", "stop", "tp", "status", "cleared", "renewals"), write=True))
 _reg(Tool("list_ideas", "List ideas (default only active: idea/watching): id, symbol, side, level, stop, tp, tag, status, note.",
           {"status": dict(_s("active | all | idea | watching | taken | skipped | expired | invalidated", 12, enum=("active", "all") + ideas.STATUSES), default="active"),
            "limit": _i("Max rows 1..50.", 1, 50, 20)}, "read", h_list_ideas, out=("ideas",)))

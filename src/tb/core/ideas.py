@@ -11,6 +11,8 @@
 Файлы (только дописывание, utf-8, по строке JSON):
   state/ideas.jsonl         {"ev":"idea","id":"I7","ts","ts_epoch","sym","side","note","level","stop","tp","tag","status","price","price_src","src"}
                             и {"ev":"mark","id","ts","status","note"}; итоговая запись = idea с применёнными mark по порядку.
+                            ревизия живых идей (marketdata/ideawatch.py, инструмент revise_idea): {"ev":"flag","id","hit"|"stale_code"|"kept_code","renew"} и
+                            {"ev":"edit","id","level","stop","tp"}; load_ideas добавляет поля hit, hit_ts, stale_code, stale_ts, ts_ttl, renewals, rev. Пороги: config/idea_stale.json.
   state/hot_outcomes.jsonl  форвард-доходность событий сканера и идей агента, пишет hotscan (формат в marketdata/outcomes.py)
 Будильник: пока работает `scan --watch`, hotscan сам будит агента по идеям со статусом idea/watching и заданным --level (idea_near / idea_level / idea_invalidated / idea_tp,
 см. marketdata/ideawatch.py). Без --level идея только заметка и агента не разбудит. --ttl (часы, по умолчанию 24, 0 = без срока): по истечении hotscan молча ставит expired.
@@ -136,7 +138,43 @@ def load_ideas(root=None, path=None):
                 i["ts_status"] = r.get("ts")
             if r.get("note"):
                 i["mark_notes"].append(r["note"])
+        elif r.get("ev") == "flag" and r.get("id") in ideas:
+            _apply_flag(ideas[r["id"]], r)
+        elif r.get("ev") == "edit" and r.get("id") in ideas:
+            _apply_edit(ideas[r["id"]], r)
     return [ideas[k] for k in order]
+
+
+def _apply_flag(i, r):
+    """ev=flag: hit (уровень задет), stale_code (ревизия: причина или None = снят), kept_code/kept_until (после keep тот же код до срока молчит), renew (срок ttl считается заново)."""
+    if "hit" in r:
+        i["hit"] = bool(r["hit"])
+        if r.get("hit_ts") is not None:
+            i["hit_ts"] = r["hit_ts"]
+    if "stale_code" in r:
+        i["stale_code"] = r["stale_code"] or None
+        i["stale_ts"] = r.get("ts_epoch") if r.get("stale_code") else None
+        i["stale_note"] = r.get("note") if r.get("stale_code") else None
+    if r.get("kept_code"):
+        i["kept"] = dict(i.get("kept") or {}, **{r["kept_code"]: r.get("kept_until")})
+    if r.get("renew"):
+        i["ts_ttl"] = r.get("ts_epoch")
+        i["renewals"] = int(i.get("renewals") or 0) + 1
+
+
+def _apply_edit(i, r):
+    """ev=edit: идея пересчитана по кандидату (level/stop/tp/сторона/цена записи), срок и счётчики сброшены, флаги сняты; id тот же (лимиты и дедуп не затрагиваются)."""
+    for k in ("level", "stop", "tp", "side"):
+        if r.get(k) is not None:
+            i[k] = r[k]
+    i["price"] = r.get("price")            # None: сторож возьмёт первую цену сканера (подход к новому уровню определяется заново)
+    if r.get("note"):
+        i["note"] = r["note"]
+    i["rev"] = int(i.get("rev") or 0) + 1
+    i["ts_ttl"] = r.get("ts_epoch")
+    i["stale_code"], i["stale_ts"], i["stale_note"] = None, None, None
+    i["hit"], i["kept"], i["renewals"] = False, {}, 0
+    i.pop("hit_ts", None)
 
 
 def next_id(root=None):
@@ -258,6 +296,103 @@ def mark_if_active(iid, status, note=None, root=None, path=None, now=None):
     if not cur or (cur.get("status") or "idea") not in ACTIVE:
         return None
     rec = {"ev": "mark", "id": iid, "ts": iso(now), "status": status, "note": note, "trade": None}
+    append(path or ideas_path(root), rec)
+    return rec
+
+
+# ---------- ревизия живых идей: флаги, продление, пересчёт ----------
+MAX_ACTIVE = 10        # активных идей всего (лимит записи идей мозгом; тот же у revise_idea)
+MAX_PER_SYM = 2        # активных идей на монету
+DUP_PCT = 0.3          # идея той же монеты и стороны с уровнем ближе этого процента считается дублем
+STALE_DEFAULTS = {
+    "min_age_s": 300.0,                 # моложе идею не ревизуем
+    "struct_max_age_s": 600.0,          # структура старше этого не используется (проверки по ней молчат)
+    "max_per_hour": 4,                  # не больше стольких новых флагов ревизии в час на весь сторож (экономия токенов)
+    "keep": {"cooldown_h": 4.0, "max_renewals": 3},
+    "level_gone": {"enabled": True, "tol_pct": 0.35, "min_age_s": 600.0},
+    "rr_changed": {"enabled": True, "min_rr_net": 1.5, "stop_floor_a5": 1.5},
+    "price_far": {"enabled": True, "atr_1h": 6.0, "min_pct": 3.0, "grow": 1.5},
+    "regime_flip": {"enabled": True, "hold_s": 600.0},
+    "btc_drift": {"enabled": True, "r1h_pct": 1.5},
+    "hit_idle": {"enabled": True, "after_s": 1800.0},
+}
+
+
+def stale_cfg(root=None):
+    """Пороги ревизии идей: умолчания STALE_DEFAULTS поверх config/idea_stale.json (раздел по разделу). Нет файла или он битый -> умолчания."""
+    cfg = {k: (dict(v) if isinstance(v, dict) else v) for k, v in STALE_DEFAULTS.items()}
+    d = read_json(paths.config("idea_stale.json", root=root))
+    if isinstance(d, dict):
+        for k, v in d.items():
+            if k in cfg and isinstance(v, dict) and isinstance(cfg[k], dict):
+                cfg[k].update({kk: vv for kk, vv in v.items() if kk in cfg[k]})
+            elif k in cfg and not isinstance(cfg[k], dict) and num(v) is not None:
+                cfg[k] = num(v)
+    return cfg
+
+
+def expires_epoch(i, default_ttl_h=TTL_H_DEFAULT):
+    """Когда идея истечёт (epoch): отсчёт ttl_h от ts_ttl (продление keep / пересчёт update), иначе от записи; ttl 0 или нет времени = None."""
+    ttl = num(i.get("ttl_h"))
+    ttl = default_ttl_h if ttl is None else ttl
+    t0 = num(i.get("ts_ttl"))
+    t0 = num(i.get("ts_epoch")) if t0 is None else t0
+    return t0 + ttl * 3600.0 if ttl > 0 and t0 is not None else None
+
+
+def _active_idea(iid, root=None, path=None):
+    cur = {i["id"]: i for i in load_ideas(root, path)}.get(iid)
+    return cur if cur and (cur.get("status") or "idea") in ACTIVE else None
+
+
+def flag_idea(iid, code, note=None, root=None, path=None, now=None):
+    """Поставить на активную идею флаг ревизии stale_code. Тот же код уже стоит (или идея не активна) -> None, строка не пишется (дедуп идея+код)."""
+    now = time.time() if now is None else now
+    cur = _active_idea(iid, root, path)
+    if not cur or cur.get("stale_code") == code:
+        return None
+    rec = {"ev": "flag", "id": iid, "ts": iso(now), "ts_epoch": round(now, 1), "stale_code": code, "note": (note or "")[:80] or None}
+    append(path or ideas_path(root), rec)
+    return rec
+
+
+def mark_hit(iid, hit_ts, root=None, path=None, now=None):
+    """Запомнить в хранилище, что цена коснулась уровня идеи (досье мозга читает только хранилище идей). Уже помечена или не активна -> None."""
+    now = time.time() if now is None else now
+    cur = _active_idea(iid, root, path)
+    if not cur or cur.get("hit"):
+        return None
+    rec = {"ev": "flag", "id": iid, "ts": iso(now), "ts_epoch": round(now, 1), "hit": True, "hit_ts": round(hit_ts, 1)}
+    append(path or ideas_path(root), rec)
+    return rec
+
+
+def keep_idea(iid, root=None, path=None, now=None):
+    """keep: снять флаг ревизии и продлить срок (ttl считается от сейчас); тот же код молчит keep.cooldown_h часов. -> (запись | None, код отказа | None):
+    NOT_ACTIVE; KEEP_LIMIT (идея уже продлевалась keep.max_renewals раз: пересчитать или отменить)."""
+    now = time.time() if now is None else now
+    cur = _active_idea(iid, root, path)
+    if not cur:
+        return None, "NOT_ACTIVE"
+    k = stale_cfg(root)["keep"]
+    if int(cur.get("renewals") or 0) >= int(k["max_renewals"]):
+        return None, "KEEP_LIMIT"
+    rec = {"ev": "flag", "id": iid, "ts": iso(now), "ts_epoch": round(now, 1), "stale_code": None, "renew": True}
+    if cur.get("stale_code"):
+        rec["kept_code"], rec["kept_until"] = cur["stale_code"], round(now + float(k["cooldown_h"]) * 3600.0, 1)
+    append(path or ideas_path(root), rec)
+    return rec, None
+
+
+def edit_idea(iid, level, stop, tp, side=None, note=None, root=None, path=None, now=None):
+    """update: тот же id, новые level/stop/tp (и сторона у watch) из кандидата; цена записи берётся заново, ttl и счётчики с нуля, флаги сняты. -> запись | None (не активна)."""
+    now = time.time() if now is None else now
+    if not _active_idea(iid, root, path):
+        return None
+    cur = _active_idea(iid, root, path)
+    hit = price_book(root, now).get(cur.get("sym")) if path is None else None
+    rec = {"ev": "edit", "id": iid, "ts": iso(now), "ts_epoch": round(now, 1), "level": level, "stop": stop, "tp": tp, "side": side,
+           "price": hit[0] if hit else None, "note": (note or "")[:300] or None}
     append(path or ideas_path(root), rec)
     return rec
 

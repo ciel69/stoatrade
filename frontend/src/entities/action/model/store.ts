@@ -10,6 +10,19 @@ import type { ActionFinal, ActionHello, ActionPhase, ActionResult, ActionSpec, A
 type Transport = (payload: Record<string, unknown>) => boolean
 export type ActionMock = 'confirm' | 'blocked' | 'done' | 'fail' | 'toast' | 'full' | 'kill' | 'kill-live' | 'kill-blocked'
 
+/** Образец итога models/ping для отладки без сервера (?edit=mock): local не отвечает по сети, deepseek даёт короткий список, остальные длинный усечённый. */
+function mockNetFinal(op: string, id: string, model: unknown): { status: string; code: string; msg: string; data: Record<string, unknown> } {
+  const done = (data: Record<string, unknown>) => ({ status: 'done', code: 'OK', msg: '', data })
+  if (op === 'models') {
+    if (id === 'local') return done({ ok: false, error: 'network', detail: 'connection refused' })
+    const n = id === 'deepseek' ? 3 : 500
+    const ids = id === 'deepseek' ? ['deepseek-chat', 'deepseek-reasoner', 'deepseek-v4-flash'] : Array.from({ length: n }, (_, i) => `acme/model-${String(i + 1).padStart(3, '0')}${i % 7 === 0 ? ':free' : ''}`)
+    return done({ ok: true, ids, count: id === 'deepseek' ? 3 : 640, truncated: id !== 'deepseek', source: 'models', detail: '' })
+  }
+  if (id === 'local') return done({ ok: false, error: 'timeout', detail: 'timed out', model: String(model ?? 'gpt-oss-20b'), paid: true })
+  return done({ ok: true, ms: 840, model: String(model ?? 'flash'), model_name: 'mock-model', paid: true, finish: 'stop', usage: { in: 9, in_hit: 0, in_write: 0, out: 2, reasoning: 0 }, text: 'pong' })
+}
+
 const ACTIVE: ReadonlySet<ActionPhase> = new Set(['checking', 'confirm', 'blocked', 'sending', 'waiting'])
 const MAX_TOASTS = 3
 
@@ -81,7 +94,7 @@ export const useActionStore = defineStore('action', () => {
   }
 
   /** Конец запуска. Безрисковый запуск сообщает итог уведомлением, рискованный остаётся в диалоге (done или failed). */
-  function finish(ok: boolean, text: string, details: string | null = null): void {
+  function finish(ok: boolean, text: string, details: string | null = null, final?: ActionFinal): void {
     clearTimer()
     pendingId = null
     cmdId = null
@@ -90,8 +103,9 @@ export const useActionStore = defineStore('action', () => {
     error.value = ok ? null : text
     errorDetails.value = ok ? null : details
     const s = spec.value
-    if (riskyRun.value !== true) pushToast(ok ? 'ok' : 'bad', s?.title ?? 'Действие', text)
-    if (ok) s?.onDone?.()
+    if (riskyRun.value !== true && !s?.quiet) pushToast(ok ? 'ok' : 'bad', s?.title ?? 'Действие', text)
+    if (ok) s?.onDone?.(final)
+    else s?.onFail?.(text, final)
   }
 
   function send(kind: 'challenge' | 'command', action: string, args: Record<string, unknown>, extra: Record<string, unknown> = {}): string | null {
@@ -192,8 +206,8 @@ export const useActionStore = defineStore('action', () => {
   function applyFinal(m: LiveMessage): void {
     const f = m.data as ActionFinal
     if (f.rid !== cmdId || (phase.value !== 'sending' && phase.value !== 'waiting')) return
-    if (f.status === 'done') finish(true, plainify(f.msg) ?? 'Готово.')
-    else finish(false, failedText(f), [f.status, f.code, f.msg].filter(Boolean).join(' | ') || null)
+    if (f.status === 'done') finish(true, plainify(f.msg) ?? 'Готово.', null, f)
+    else finish(false, failedText(f), [f.status, f.code, f.msg].filter(Boolean).join(' | ') || null, f)
   }
 
   /** «Принимаю риски»: после паузы min_delay отправляет команду; если срок challenge вышел, сам запрашивает условия заново. */
@@ -262,7 +276,14 @@ export const useActionStore = defineStore('action', () => {
         update: 'Потолки расхода начнут действовать сразу: при исчерпании вызовы к провайдеру остановятся до конца окна (час или сутки).',
         key_clear: 'Без ключа провайдер перестанет отвечать, пока вы не добавите новый.',
       }
-      const w = warn[String(args.op)]
+      const blk = (args.spec ?? args.patch ?? {}) as Record<string, unknown>
+      if (blk.allow_private === true) {
+        return { danger: true, blocked: false, gates, phrases: ['mock'], nonce: 'mock', min_delay: 2, expires_in: 90, pre_amber: [], warnings: [{ id: 'llm.allow_private', code: 'ALLOW_PRIVATE', msg: 'Разрешаются приватные и внутренние адреса: ключ и запросы могут уйти во внутреннюю сеть. Включайте только для своего сервера.' }] }
+      }
+      if (args.op === 'update' && typeof blk.base_url === 'string') {
+        return { danger: false, blocked: false, gates, phrases: ['mock'], nonce: 'mock', min_delay: 2, expires_in: 90, pre_amber: [], warnings: [{ id: 'llm.key_new_url', code: 'KEY_NEW_URL', msg: 'Ключ провайдера уйдёт на новый адрес. Убедитесь, что это нужный сервис.', numbers: { host: 'new.example', changed: ['base_url'] } }] }
+      }
+      const w = args.op === 'update' ? (blk.limits ? warn.update : undefined) : warn[String(args.op)]
       if (!w) return { gates, warnings: [], pre_amber: [], danger: false, phrases: [], blocked: false, nonce: 'mock', min_delay: 0, expires_in: 60 }
       return { danger: false, blocked: false, gates, phrases: ['mock'], nonce: 'mock', min_delay: 2, expires_in: 90, pre_amber: [], warnings: [{ id: 'W_PROVIDER', code: 'W_PROVIDER', msg: w }] }
     }
@@ -335,7 +356,9 @@ export const useActionStore = defineStore('action', () => {
           applyResult(live({ ...base, kind: 'challenge', ok: true, code: kind === 'blocked' || kind === 'kill-blocked' ? 'E_GATE' : 'OK', msg: kind === 'blocked' || kind === 'kill-blocked' ? 'условия не выполнены' : '', data: mockChallenge(kind, p.args as Record<string, unknown>, p.action as string) }))
         } else {
           applyResult(live({ ...base, kind: 'command', ok: true, code: 'OK', msg: 'принято' }))
-          setTimeout(() => applyFinal(live({ id: 'q1', rid: base.id, status: 'done', code: 'OK', msg: 'Выполнено (пример: на сервер ничего не отправлялось).' })), 700)
+          const a = p.args as Record<string, unknown>
+          const net = p.action === 'llm.provider' && (a.op === 'models' || a.op === 'ping') ? mockNetFinal(String(a.op), String(a.id), a.model) : null
+          setTimeout(() => applyFinal(live({ id: 'q1', rid: base.id, status: net?.status ?? 'done', code: net?.code ?? 'OK', msg: net?.msg ?? 'Выполнено (пример: на сервер ничего не отправлялось).', data: net?.data })), net ? 500 : 700)
         }
       }, 120)
       return true

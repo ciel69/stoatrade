@@ -160,7 +160,7 @@ class LiqBook(object):
 def make_event(sym, side, usd, w, px, now, wake, window_s, big=False):
     """Событие скана liq_cascade. direction: куда вынуждены двигаться ликвидаторы (ликвидированы лонги -> продажи -> down); это описание уже случившегося, не прогноз."""
     d = "down" if side == "long" else "up"
-    return {"id": "%s-%s-liq" % (time.strftime("%d%H%M%S", time.gmtime(now)), sym), "wake": wake, "big": bool(big), "type": "liq_cascade", "sym": sym, "price": px, "score": round(usd / 1e5, 2),
+    return {"id": "%s-%s-liq" % (time.strftime("%Y%m%d%H%M%S", time.gmtime(now)), sym), "wake": wake, "big": bool(big), "type": "liq_cascade", "sym": sym, "price": px, "score": round(usd / 1e5, 2),
             "reasons": ["%sликвидации %s %s за %d мин: %d USD (n=%d)" % ("КРУПНЫЙ каскад: " if big else "", "лонгов" if side == "long" else "шортов", sym, int(window_s // 60), int(usd), w["n"])],
             "direction": d, "liq_usd": round(usd), "liq_side": side, "ret_5m_pct": None, "range_5m_pct": None,
             "note": "информационно: не сигнал входа; каскад часто означает исчерпание движения или его продолжение: решает структура"}

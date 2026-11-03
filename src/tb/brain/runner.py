@@ -72,9 +72,10 @@ PM_TOOL_SPECS = [
 ]
 # entry_scout инструментами (оптимизация под слабые модели): модель выбирает кандидата по номеру из brief.cands, числа (уровень, стоп, цели, горизонт, размер, зона,
 # подтверждение, тип входа) код копирует из кандидата; без сборки JSON entry/1 из 15 полей.
-ES_TTL = {"scalp": 30, "intraday": 60, "swing": 240, "position": 240}
+ES_TTL = entryplan.ES_TTL                  # разворачивание кандидата в tb.entry/1 живёт в entryplan.expand (общий код для инструментов и JSON-пути)
 ES_WHY = {"why": {"type": "string", "maxLength": 200, "description": "short reason in Russian: reason | fact with a number | risk"}}
-ES_FAIL_SKIP = {"stop_wide": "wide_stop", "range_gt_stop": "wide_stop"}
+ES_FAIL_SKIP = entryplan.ES_FAIL_SKIP
+ES_CONF = {"conf": {"type": "number", "minimum": 0, "maximum": 1, "description": "confidence 0..1 (default 0.6)"}}
 
 
 def _es_spec(name, desc, props, req):
@@ -84,14 +85,30 @@ def _es_spec(name, desc, props, req):
 
 
 ES_TOOL_SPECS = [
-    _es_spec("es_take", "Enter: take candidate n from brief.cands. The platform copies level, stop, targets, horizon, size, zone, confirmation and entry type from it.",
+    _es_spec("es_take", "Enter: take candidate n from brief.cands. The platform copies level, stop, targets, horizon, size, zone, confirmation, entry type and tags from it; "
+                        "you never write prices. Same fields as the JSON reply {decision: propose, candidate, setup, thesis, conf, why, size_mult?, tags?, hypothesis?}.",
              {"candidate": {"type": "integer", "minimum": 1, "maximum": 10, "description": "the n of a brief.cands row with ok=true"},
               "setup": {"type": "string", "enum": [s for s in validate.SETUPS if s != "none"], "description": "setup that fits (a momentum_chase row keeps its own)"},
-              "thesis": {"type": "string", "maxLength": 280, "description": "one sentence in Russian with the level and a number"}}, ("candidate", "setup")),
+              "thesis": {"type": "string", "maxLength": 280, "description": "one sentence in Russian with the level and a number"},
+              "hypothesis": {"type": "string", "pattern": validate.RE_TAG, "description": "optional hypothesis tag a-z0-9._- (default: the setup)"},
+              "size_mult": {"type": "number", "minimum": 0.1, "maximum": validate.ENTRY_SIZE_MULT_MAX, "description": "optional, decrease only: never above the candidate's own size_mult"},
+              "tags": {"type": "array", "maxItems": 2, "items": {"enum": list(validate.ENTRY_TAGS)}, "description": "optional extra tags; the candidate's own tags come first, at most 2 in total"},
+              **ES_CONF}, ("candidate", "setup")),
     _es_spec("es_skip", "No entry.", {"code": {"type": "string", "enum": list(validate.ENTRY_SKIP_CODES)}}, ("code",)),
-    _es_spec("es_watch", "No entry now, but wait for the level of candidate n (an idea for 4 h: the scanner wakes you when the price reaches it).",
+    _es_spec("es_watch", "No entry now, but wait for the level of candidate n (an idea for 4 h: the scanner wakes you when the price reaches it); the skip code comes from the candidate's fail. "
+                         "Same as the JSON reply {decision: skip, skip_code, watch: {candidate}, why, conf}.",
              {"candidate": {"type": "integer", "minimum": 1, "maximum": 10}}, ("candidate",)),
 ]
+ES_REVISE_SPEC = _es_spec("es_revise", "Review a live idea that code flagged stale (brief.ideas.active row with stale_code): keep = still valid, update = take level/stop/tp from candidate n "
+                          "(an ok brief.cands row on the same side), cancel = drop it. You never write prices.",
+                          {"idea": {"type": "string", "pattern": "^I[0-9]+$", "description": "id of a flagged idea from brief.ideas.active"},
+                           "action": {"type": "string", "enum": ["keep", "update", "cancel"]},
+                           "candidate": {"type": "integer", "minimum": 1, "maximum": 10, "description": "update only: the n of an ok brief.cands row"}}, ("idea", "action"))
+ES_REVISE_NOTE = ("\nREVISION: brief.ideas.active rows with stale_code were flagged by code (level_gone, rr_changed, price_far, regime_flip, btc_drift, hit_idle). Review one with es_revise "
+                  "(idea, action keep|update|cancel; update needs candidate = n of an ok brief.cands row on the same side: the platform copies level/stop/tp).")
+ES_REVISE_ONLY_NOTE = ("\n\nTOOL MODE (this run). The signal is idea_stale: there is NO entry search now. Call exactly ONE tool: es_revise (idea = id of a brief.ideas.active row with stale_code; "
+                       "action keep = still valid, update = recompute from candidate n, an ok row of brief.cands on the same side, cancel = drop) or es_skip when nothing is needed. "
+                       "Do not write prices or JSON. If a call is rejected with codes, fix it with another call; after one action succeeded stop.")
 ES_TOOL_NOTE = ("\n\nTOOL MODE (this run). Act by calling exactly ONE tool: es_take (enter: the n of a brief.cands row with ok=true), es_skip (no entry, with a code) or "
                 "es_watch (wait for the level of candidate n). Do not compute or write numbers and do not write the entry/1 JSON: the platform takes them from the candidate. "
                 "No ok candidate fits: es_skip or es_watch. If a call is rejected with codes, fix it with another call; after one action succeeded stop.")
@@ -468,12 +485,15 @@ class Runner(object):
             out.update(outcome="no_action", code="DOSSIER")
             self._journal(job, role, agent_id, None, "skip", "DOSSIER", str(e)[:100], meta, None, meter, assign)
             return out
-        if role.output_schema == "entry/1" and ctx.get("struct_missing"):
+        if role.output_schema == "entry/1" and "stale_ids" in ctx and not ctx["stale_ids"] and job.get("kinds") and set(job["kinds"]) == {"idea_stale"}:
+            out.update(outcome="no_action", code="IDEA_SETTLED")      # идею уже решили (keep/cancel/update, взята, истекла): искать вход по этому событию незачем, модель не зовём
+            return out
+        if role.output_schema == "entry/1" and ctx.get("struct_missing") and not ctx.get("revise_only"):
             age = self.clock() - float(job.get("ts_first") or self.clock())
             if age < STRUCT_WAIT_MAX_S:
                 raise Deferred("STRUCT", 45.0)               # структуры по монете события ещё нет (свечи подтягиваются): ждём, а не пропускаем
             # структура так и не пришла: модель НЕ зовём (UAI 2026-11-01: без данных она выдумала уровень); ниже entry_precheck даст NO_DATA
-        if role.output_schema == "entry/1":                  # детерминированные отказы по данным досье ДО вызова модели: токены не тратятся
+        if role.output_schema == "entry/1" and not ctx.get("revise_only"):                  # детерминированные отказы по данным досье ДО вызова модели: токены не тратятся
             pre = validate.entry_precheck(ctx)
             if pre:
                 out.update(outcome="no_action", code=pre)
@@ -484,6 +504,9 @@ class Runner(object):
             llm = self._llm(role, text, meta, assign, team, meter, ctx)
             if llm["obj"] is None:
                 out.update(outcome="no_action", code=llm["code"], profile=llm.get("profile"))
+                if llm["code"] == "NO_PLAN":          # без события error: ждать нечего, но запись понятная
+                    self._journal(job, role, agent_id, None, "skip", "NO_PLAN", "NO_PLAN: у события нет плана, открытых позиций несколько или нет; модель не вызывалась", meta, llm, meter, assign)
+                    return out
                 if llm["code"] in ("BAD_FORMAT", "JOB_BUDGET", "LOOP", "TRUNCATED", "EMPTY", "MAX_ROUNDS", "TIMEOUT"):
                     self._no_action(role, job, agent_id, meta, llm, meter, assign)
                 return out
@@ -550,14 +573,25 @@ class Runner(object):
         evs = [e for e in (ev.get("events") or [] if isinstance(ev, dict) else []) if e.get("seq") in set(seqs)] if seqs else []
         if role.output_schema == "pm/1" and not job.get("plan") and not (b.get("positions") or b.get("plans")):
             raise DossierError("NO_PLAN: событие без плана, управлять нечем")        # связь/сверка без планов и позиций: модель не может назвать план, вызов не нужен
+        if role.output_schema == "pm/1" and not job.get("plan"):
+            # событие без плана (connectivity и т.п.), а открыта ровно одна позиция/план: управляем ею. Несколько - не угадываем (JSON-путь назовёт план сам, инструментальный получит NO_PLAN)
+            ids = sorted(set(x["plan"] for x in (b.get("positions") or []) if isinstance(x, dict) and isinstance(x.get("plan"), str)))
+            if not ids:
+                ids = sorted(set(x["id"] for x in (b.get("plans") or []) if isinstance(x, dict) and isinstance(x.get("id"), str)))
+            if len(ids) == 1:
+                ctx["plan"] = info["plan"] = ids[0]
         ctx["brief_id"] = b.get("brief_id")
-        ctx["brief_rev"] = self._plan_rev(b, job.get("plan"))
+        ctx["brief_rev"] = self._plan_rev(b, ctx.get("plan"))
         if role.output_schema == "pm/1":
-            ctx.update({k: v for k, v in validate.pm_context(b, job.get("plan"), info).items() if k != "plan"})
+            ctx.update({k: v for k, v in validate.pm_context(b, ctx.get("plan"), info).items() if k != "plan"})
         elif role.output_schema == "entry/1":
             ctx.update(validate.entry_context(b, info))
             ctx["max_data_age_s"] = (getattr(self.conf, "runtime", None) or {}).get("max_data_age_s")      # порог STALE_DATA (config/brain.json runtime; нет -> validate.MAX_DATA_AGE_S)
-            ctx["cands"] = [c for c in (b.get("cands") or []) if isinstance(c, dict)]        # es_take/es_watch берут числа отсюда (то же, что видела модель)
+            # es_take/es_watch и JSON-путь берут числа отсюда (то же, что видела модель). None = кандидатов не считали (монета занята, урезанное досье): NO_CANDIDATES не применяется
+            ctx["cands"] = [c for c in b["cands"] if isinstance(c, dict)] if isinstance(b.get("cands"), list) else None
+            ctx["stale_ids"] = [x["id"] for x in ((b.get("ideas") or {}).get("active") or []) if isinstance(x, dict) and isinstance(x.get("id"), str) and x.get("stale_code")]
+            # задание только про ревизию идеи (событие idea_stale): поиска входа нет, предпроверка входа (NO_DATA, SYM_BUSY...) не нужна, инструменты es_revise / es_skip
+            ctx["revise_only"] = bool(ctx["stale_ids"]) and bool(job.get("kinds")) and set(job.get("kinds") or []) == {"idea_stale"}
         bb = {k: v for k, v in b.items() if k not in ("ok", "status", "errors", "warnings")}
         braw = common.dumps(bb)
         if len(braw) > MAX_BRIEF_CHARS:
@@ -691,7 +725,7 @@ class Runner(object):
     def _call_profile(self, role, p, pid, text, meta, meter, ctx):
         client = self.client_for(pid)
         fl = self.model_flags(p)
-        rf = "json" if fl["json_mode"] else ({"schema": role.schema, "name": "respond"} if fl["strict"] else None)
+        rf = "json" if fl["json_mode"] else ({"schema": role.reply_obj or role.schema, "name": "respond"} if fl["strict"] else None)       # reply_schema: модель отвечает без цен
         ro = (self.conf.role_opts.get(role.id) or {}).get("params") or {}       # переопределение владельца на уровне роли побеждает профиль и файл роли
         temp = ro["temperature"] if "temperature" in ro else role.params.get("temperature", p.params.get("temperature"))
         mx = min(role.max_output_tokens, ro.get("max_tokens") or p.params.get("max_tokens") or role.max_output_tokens)
@@ -705,17 +739,28 @@ class Runner(object):
             return self._pm_tool_mode(role, client, req, meta, deadline, sem, ctx)
         if role.output_schema == "entry/1" and fl["tools"] and ctx.get("_run"):
             return self._entry_tool_mode(role, client, req, meta, deadline, sem, ctx)
-        return self._json_loop(role, client, req, sem, deadline)
+        return self._json_loop(role, client, req, sem, deadline, check=self._reply_check(role, ctx))
 
-    def _json_loop(self, role, client, req, sem, deadline, msgs=None, first_attempt=0):
-        """Старый путь: ответ текстом JSON по схеме с повторами по подсказке (msgs/first_attempt: продолжение после первой попытки в режиме инструментов)."""
+    def _reply_check(self, role, ctx):
+        """Проверка сырого текста ответа модели по reply_schema роли (entry_scout: entry_reply/1) -> функция text -> (obj entry/1 | None, коды) или None, если у роли
+        reply_schema нет. Порядок: JSON -> PRICE_KEY (цены в ответе) -> схема ответа и обязательные поля -> развёртывание кандидата (entryplan.expand, коды
+        NO_CANDIDATE:n_OF:m / CANDIDATE_FAILED) -> прежняя схема entry/1; семантику entry/1 (sem) добавляет вызывающий.
+        Полный tb.entry/1 от модели отклоняется кодом PRICE_KEY."""
+        if not role.reply_schema:
+            return None
+
+        return lambda text: entryplan.check_reply(text, role, ctx, build=self._entry_obj)
+
+    def _json_loop(self, role, client, req, sem, deadline, msgs=None, first_attempt=0, check=None):
+        """Старый путь: ответ текстом JSON по схеме с повторами по подсказке (msgs/first_attempt: продолжение после первой попытки в режиме инструментов).
+        check: проверка сырого текста вместо check_text по схеме роли (reply_schema: ответ без цен, который код разворачивает в entry/1)."""
         msgs, errs, last, cur = (list(req.messages) if msgs is None else msgs), [], None, req
         for attempt in range(first_attempt, role.retries_format + 1):
             if self.clock() > deadline:
                 return {"obj": None, "code": "TIMEOUT", "errors": errs}
             resp = client(cur.copy(messages=msgs))
             last = resp
-            obj, errs = schema_mod.check_text(resp.text, role.schema)
+            obj, errs = check(resp.text) if check else schema_mod.check_text(resp.text, role.schema)
             if resp.finish == "length" and errs and errs[0] != "TRUNCATED":
                 errs = ["TRUNCATED"] + errs
             if not errs:
@@ -735,53 +780,48 @@ class Runner(object):
         return {"obj": None, "code": "BAD_FORMAT", "errors": errs}
 
     def _entry_obj(self, name, a, ctx):
-        """Вызов es_* -> (ответ entry/1, ошибки). Числа берутся из кандидата brief.cands по номеру; модель даёт только выбор, сетап, тезис и why."""
-        cands = ctx.get("cands") or []
-        why = validate.redact(str(a.get("why") or "").strip(), 200) or name
-        base = {"schema": "tb.entry/1", "event_seq": ctx.get("event_seq") or 0, "why": why, "conf": 0.6}
-        if name == "es_skip":
-            return dict(base, decision="skip", skip_code=a.get("code")), []
-        try:
-            n = int(a.get("candidate"))
-        except (TypeError, ValueError):
-            return None, ["RANGE:candidate"]
-        if not 1 <= n <= len(cands):
-            return None, ["NO_CANDIDATE:%d_OF:%d" % (n, len(cands))]
-        c = cands[n - 1]
-        if name == "es_watch":
-            fail = str(c.get("fail") or "")
-            code = ES_FAIL_SKIP.get(fail.split(":")[0], "rr_low" if fail.startswith("rr_low") else "no_confirm")
-            setup = c.get("setup") if c.get("setup") in validate.SETUPS else "none"
-            return dict(base, decision="skip", skip_code=code, watch={"side": c["side"], "level": c["level"], "stop": c["stop"], "tp": c["tp"][0], "setup": setup}), []
-        if c.get("fail"):
-            return None, ["CANDIDATE_FAILED:%s" % c["fail"]]                     # негодный кандидат: взять другой ok или es_watch
-        setup = c.get("setup") or a.get("setup")
-        if setup not in validate.SETUPS or setup == "none":
-            return None, ["SETUP_REQUIRED"]
-        hz = c.get("horizon")
-        hyp = re.sub(r"[^a-z0-9._-]+", "-", str(a.get("hypothesis") or setup).lower()).strip("-")[:40] or setup
-        thesis = validate.redact(str(a.get("thesis") or "").strip(), 280)
-        if len(thesis) < 10:
-            thesis = "%s %s от %s, стоп %s, цель %s" % (setup, c["side"], c["level"], c["stop"], c["tp"][0])
-        obj = dict(base, decision="propose", sym=ctx.get("sym"), side=c["side"], horizon=hz, level=c["level"], stop=c["stop"], tp=list(c["tp"]), setup=setup,
-                   hypothesis=hyp, ttl_min=ES_TTL.get(hz, 60), confirm=c.get("confirm") or "candle", thesis=thesis)
-        for k in ("zone", "size_mult", "tags", "entry_type"):
-            if c.get(k) is not None:
-                obj[k] = c[k]
-        return obj, []
+        """Вызов es_* (или разобранный ответ entry_reply/1 через entryplan.reply_call) -> (ответ entry/1, ошибки). Числа берутся из кандидата brief.cands по номеру
+        (entryplan.expand); модель даёт только выбор, сетап, тезис и why. Теги: кандидата, затем модели, до 2. ctx["_cand"] = {n, geometry_ver} выбранного кандидата входа (для basis решения)."""
+        return entryplan.expand_ctx(name, a, ctx)
 
     def _entry_tool_mode(self, role, client, req, meta, deadline, sem, ctx):
         """entry_scout: действие одним вызовом es_take / es_skip / es_watch, числа из кандидата; исполняется сразу (те же проверки validate и шлюз).
         Без вызова инструмента ответ в старом формате entry/1 принимается как раньше. -> тот же словарь, что _call_profile, плюс executed/result."""
         run = ctx["_run"]
         state = {"done": None, "rej": []}
+        chk = self._reply_check(role, ctx)          # текст без вызова инструмента: только по reply_schema роли (None = у роли её нет)
         llm_info = {"profile": meta.get("profile"), "fallback_from": meta.get("fallback_from")}
 
+        def revise_tool(a):
+            """es_revise: keep|update|cancel идеи через инструмент шлюза revise_idea (права, монета, лимиты, дедуп); кандидаты и монета едут в meta от раннера, не от модели."""
+            iid, act = str(a.get("idea") or ""), a.get("action")
+            if iid not in (ctx.get("stale_ids") or []):
+                state["rej"].append("es_revise:NOT_STALE_IDEA")
+                return _rejected(["NOT_STALE_IDEA:%s" % iid[:12]])
+            args = {"id": iid, "action": act}
+            if act == "update":
+                args["candidate"] = a.get("candidate")
+            r = self.gateway.call(run["agent"], "revise_idea", args, meta=dict(meta, cands=ctx.get("cands") or [], sym=ctx.get("sym")))
+            if not isinstance(r, dict) or r.get("ok") is not True:
+                e0 = ((r or {}).get("errors") or [{}])[0] if isinstance(r, dict) else {}
+                state["rej"].append("es_revise:%s" % (e0.get("code") or "REJECTED"))
+                return {"ok": False, "errors": [str(e0.get("code") or "REJECTED")], "msg": validate.redact(str(e0.get("msg") or ""), 160)}
+            why = validate.redact(str(a.get("why") or "").strip(), 200) or "revise"
+            obj = {"schema": "tb.entry/1", "event_seq": ctx.get("event_seq") or 0, "decision": "skip", "skip_code": "other", "why": why, "conf": 0.6}
+            self._journal(run["job"], role, run["agent"], obj, "note", "REVISE", "идея %s: %s | %s" % (iid, act, why), dict(meta), llm_info, run["meter"], run["assign"])
+            res = {"outcome": "hold", "code": "REVISE"}
+            state["done"] = {"obj": obj, "result": res, "tool": "es_revise"}
+            return {"ok": True, "outcome": "hold", "code": "REVISE", "idea": iid, "action": act}
+
         def run_tool(name, a):
-            if name not in ("es_take", "es_skip", "es_watch"):
+            if name not in ("es_take", "es_skip", "es_watch", "es_revise"):
                 return {"ok": False, "error": "UNKNOWN_TOOL"}
             if state["done"] is not None:
                 return {"ok": False, "error": "ALREADY_ACTED"}
+            if name == "es_revise":
+                return revise_tool(a if isinstance(a, dict) else {})
+            if ctx.get("revise_only") and name != "es_skip":
+                return {"ok": False, "error": "REVISE_ONLY"}
             obj, errs = self._entry_obj(name, a if isinstance(a, dict) else {}, ctx)
             if not errs:
                 errs = schema_mod.validate(role.schema, obj) or sem(obj)
@@ -792,7 +832,13 @@ class Runner(object):
             state["done"] = {"obj": obj, "result": res, "tool": name}
             return {"ok": res["outcome"] in ("decision", "hold"), "outcome": res["outcome"], "code": res["code"]}
         base = req
-        req = req.copy(system=(req.system or "") + ES_TOOL_NOTE, tools=[dict(t) for t in ES_TOOL_SPECS], tool_choice="auto")
+        specs, note = [dict(t) for t in ES_TOOL_SPECS], ES_TOOL_NOTE
+        if ctx.get("stale_ids"):
+            specs.append(dict(ES_REVISE_SPEC))
+            note = ES_TOOL_NOTE + ES_REVISE_NOTE
+            if ctx.get("revise_only"):
+                specs, note = [s for s in specs if s["name"] in ("es_revise", "es_skip")], ES_REVISE_ONLY_NOTE
+        req = req.copy(system=(req.system or "") + note, tools=specs, tool_choice="auto")
         lr = self._run_tools_once(client, req, run_tool, state, max_rounds=max(3, role.max_rounds),
                                   should_stop=lambda: state["done"] is not None or self.clock() > deadline or self.stop_event.is_set())
         if state["done"] is not None:
@@ -802,11 +848,11 @@ class Runner(object):
             note = getattr(client, "note_format_error", None)
             if note and lr.resp is not None:
                 note(lr.resp, ["TRUNCATED"])
-            return self._json_loop(role, client, base.copy(max_tokens=min(int(base.max_tokens) * 2, TRUNC_MAX_TOKENS)), sem, deadline, first_attempt=1)
+            return self._json_loop(role, client, base.copy(max_tokens=min(int(base.max_tokens) * 2, TRUNC_MAX_TOKENS)), sem, deadline, first_attempt=1, check=chk)
         if lr.status not in ("ok",):
             code = {"loop": "LOOP", "max_rounds": "MAX_ROUNDS", "empty": "EMPTY", "truncated": "TRUNCATED", "cancelled": "TIMEOUT"}.get(lr.status, "BAD_FORMAT")
             return {"obj": None, "code": code, "errors": lr.errors or state["rej"][-4:]}
-        obj, errs = schema_mod.check_text(lr.text, role.schema)          # модель ответила старым JSON без вызова инструмента
+        obj, errs = chk(lr.text) if chk else schema_mod.check_text(lr.text, role.schema)          # модель ответила JSON без вызова инструмента (по reply_schema роли; без неё старый entry/1)
         if lr.resp is not None and lr.resp.finish == "length" and errs and errs[0] != "TRUNCATED":
             errs = ["TRUNCATED"] + errs
         if not errs:
@@ -818,9 +864,9 @@ class Runner(object):
             note(lr.resp, errs)
         if errs[0] == "TRUNCATED":
             base = base.copy(max_tokens=min(int(base.max_tokens) * 2, TRUNC_MAX_TOKENS))
-            return self._json_loop(role, client, base, sem, deadline, first_attempt=1)
+            return self._json_loop(role, client, base, sem, deadline, first_attempt=1, check=chk)
         msgs = list(base.messages) + [assistant((lr.text or "(пусто)")[:400]), user(schema_mod.hint(errs))]
-        return self._json_loop(role, client, base, sem, deadline, msgs=msgs, first_attempt=1)
+        return self._json_loop(role, client, base, sem, deadline, msgs=msgs, first_attempt=1, check=chk)
 
     def _run_tools_once(self, client, req, run_tool, state, **kw):
         """toolloop.run, после которого действие не повторяется: если инструмент уже исполнил действие, а следующий раунд модели упал (LM Studio 400
@@ -843,6 +889,8 @@ class Runner(object):
         state = {"done": None, "tool": None, "rej": []}
         llm_info = {"profile": meta.get("profile"), "fallback_from": meta.get("fallback_from")}
         protect = self.health.protect_on or bool(ctx.get("protect"))
+        if not plan:          # плана нет (событие без плана, позиций несколько): инструментам нечего назвать, модель не зовём (раньше: BAD_TYPE:$.plan -> MAX_ROUNDS)
+            return {"obj": None, "code": "NO_PLAN", "errors": [], "rounds": 0}
 
         def run_tool(name, a):
             d = PM_TOOL_DECISION.get(name)
@@ -1042,7 +1090,8 @@ class Runner(object):
                 lv = i.get("level")
                 if i.get("side") == w["side"] and lv and abs(lv - w["level"]) / lv * 100.0 <= self.WATCH_DUP_PCT:
                     return None
-            note = "%s | пропуск %s" % (why, obj.get("skip_code") or "other")
+            # заметка собирается кодом из чисел кандидата (текст и числа модели в note не попадают: он живёт в журнале решений)
+            note = "%s %s у %g, стоп %g, цель %g | пропуск %s" % (w.get("setup") or "none", w["side"], w["level"], w["stop"], w["tp"], obj.get("skip_code") or "other")
             rec = ideas.add_idea(sym, w["side"], note[:300], level=w["level"], stop=w["stop"], tp=w["tp"], tag=w.get("setup") if w.get("setup") != "none" else None,
                                  status="watching", src="entry_scout", root=self.root, now=self.clock(), ttl_h=self.WATCH_TTL_H, mode=ctx.get("mode") or "paper")
             return rec["id"]
@@ -1059,25 +1108,26 @@ class Runner(object):
             iid = self._watch_idea(obj, job, ctx, why)
             self._journal(job, role, agent_id, obj, "note", "SKIP", why + (" | идея %s" % iid if iid else ""), meta, llm, meter, assign)
             return {"outcome": "hold", "code": "SKIP"}
+        jm = dict(meta, cand=ctx["_cand"]) if isinstance(ctx.get("_cand"), dict) else meta      # basis.cand = {n, geometry_ver}: какой кандидат и какой версии геометрии взяла модель (только в журнал, не в шлюз)
         blk = self._entry_block(agent_id, ctx)
         if blk:
-            self._journal(job, role, agent_id, obj, "skip", blk, why, meta, llm, meter, assign)
+            self._journal(job, role, agent_id, obj, "skip", blk, why, jm, llm, meter, assign)
             return {"outcome": "no_action", "code": blk}
         if not ctx.get("session_type"):
-            self._journal(job, role, agent_id, obj, "skip", "NO_SESSION", why, meta, llm, meter, assign)
+            self._journal(job, role, agent_id, obj, "skip", "NO_SESSION", why, jm, llm, meter, assign)
             return {"outcome": "no_action", "code": "NO_SESSION"}
         lp = self.gateway.call(agent_id, "list_plans", {"limit": 100}, meta=meta)        # дедуп по монете: свежий список планов, не досье
         rows = lp.get("plans") if isinstance(lp, dict) and lp.get("ok") is True else None
         if rows is None:
-            self._journal(job, role, agent_id, obj, "skip", "BUSY_UNKNOWN", why, meta, llm, meter, assign)
+            self._journal(job, role, agent_id, obj, "skip", "BUSY_UNKNOWN", why, jm, llm, meter, assign)
             return {"outcome": "no_action", "code": "BUSY_UNKNOWN"}
         if any(isinstance(x, dict) and x.get("symbol", x.get("sym")) == obj["sym"] and x.get("status") not in plan_schema.TERMINAL for x in rows):
-            self._journal(job, role, agent_id, obj, "skip", "SYM_BUSY", why, meta, llm, meter, assign)
+            self._journal(job, role, agent_id, obj, "skip", "SYM_BUSY", why, jm, llm, meter, assign)
             return {"outcome": "no_action", "code": "SYM_BUSY"}
         key = guards.decision_key(role.id, obj["sym"], "propose", {"side": obj["side"], "level": obj["level"], "stop": obj["stop"], "tp": obj["tp"]})
         if not self.repeat.allow(key, self.clock()):
             self.event("error", {"where": "brain", "code": "REPEAT_DECISION"})
-            self._journal(job, role, agent_id, obj, "skip", "REPEAT_DECISION", why, meta, llm, meter, assign)
+            self._journal(job, role, agent_id, obj, "skip", "REPEAT_DECISION", why, jm, llm, meter, assign)
             return {"outcome": "no_action", "code": "REPEAT_DECISION"}
         plan = entryplan.build(obj, ctx)
         args = {"plan": plan, "reason": why or "entry", "event_seq": ctx["event_seq"], "wait_s": 8}
@@ -1093,7 +1143,7 @@ class Runner(object):
                 why = why + (" | идея %s" % iid if iid else "")
             except Exception:
                 pass
-        self._journal(job, role, agent_id, obj, "note" if ok is not False else "skip", code, why, meta, llm, meter, assign)
+        self._journal(job, role, agent_id, obj, "note" if ok is not False else "skip", code, why, jm, llm, meter, assign)
         return {"outcome": "decision" if ok is not False else "no_action", "code": code}
 
     def _execute_review(self, role, obj, job, agent_id, meta, ctx, llm, meter, assign):
@@ -1122,11 +1172,13 @@ class Runner(object):
             basis["profile"] = llm.get("profile")
             if llm.get("fallback_from"):
                 basis["fallback_from"] = llm["fallback_from"]
+        if isinstance(meta.get("cand"), dict):
+            basis["cand"] = {"n": meta["cand"].get("n"), "geometry_ver": meta["cand"].get("geometry_ver")}
         sym = job.get("sym") if isinstance(job.get("sym"), str) and common.RE_SYMBOL.match(job["sym"]) else None
         kinds = [k for k in (job.get("kinds") or []) if isinstance(k, str) and common.RE_IDENT.match(k)][:2] if isinstance(job.get("kinds"), list) else []
         head = ("%s%s | " % (sym, " (%s)" % ",".join(kinds) if kinds else "")) if sym else ""      # без монеты запись «вход бессмыслен» ни о чём не говорит
         rec = {"actor": "brain:%s" % agent_id, "kind": kind, "what": "brain_decision", "why": validate.redact(head + (why or ""), 220),
-               "basis": basis, "res": {"ok": code in ("OK", "HOLD", "ESCALATE", "QUEUED", "SKIP", "IDLE_NO_PLAN"), "code": str(code)[:40]}}
+               "basis": basis, "res": {"ok": code in ("OK", "HOLD", "ESCALATE", "QUEUED", "SKIP", "IDLE_NO_PLAN", "REVISE"), "code": str(code)[:40]}}
         if job.get("plan"):
             rec["plan"] = job["plan"]
         if sym:

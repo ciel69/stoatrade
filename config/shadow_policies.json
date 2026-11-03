@@ -1,0 +1,5 @@
+{"schema": "tb.shadow_policies/1", "policies": [
+ {"id": "P2", "ver": 1, "name": "confirm_follow", "kinds": ["range_5m","turnover_surge","hot_enter","oi_spike","liq_cascade"], "side": "with_dir", "entry": "candle_confirm_limit", "profile": "base", "no_tp": false, "max_horizon": "intraday", "entry_ttl_min": 30, "enabled": true},
+ {"id": "P4", "ver": 1, "name": "fade_confirm", "kinds": ["range_5m","liq_cascade","oi_flush"], "side": "against_dir", "entry": "candle_confirm", "profile": "base", "no_tp": false, "max_horizon": "intraday", "entry_ttl_min": 30, "enabled": true},
+ {"id": "P5", "ver": 1, "name": "time_exit_baseline", "kinds": ["*"], "side": "with_dir", "entry": "market", "profile": "atr", "no_tp": true, "max_horizon": "scalp", "entry_ttl_min": 2, "enabled": true},
+ {"id": "P6", "ver": 1, "name": "random_side_baseline", "kinds": ["*"], "side": "random", "entry": "market", "profile": "atr", "no_tp": false, "max_horizon": "scalp", "entry_ttl_min": 2, "enabled": true}]}

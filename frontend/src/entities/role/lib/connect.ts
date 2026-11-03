@@ -94,18 +94,6 @@ export function credsText(creds: string[] | null | undefined): string {
 const MODE_WORDS: Record<string, string> = { paper: 'бумага', testnet: 'тестовая сеть', live: 'живые деньги' }
 export const modeText = (m: string | null | undefined): string => (m ? (MODE_WORDS[m] ?? m) : '–')
 
-/** Вывод над блоком: сколько провайдеров включено, где работают, сколько бирж и в каком режиме. */
-export function connectSummary(providers: ProviderRow[], exchanges: ExchangeRow[]): string {
-  const on = providers.filter((p) => p.enabled)
-  const cloud = on.filter((p) => !p.local).length
-  const local = on.length - cloud
-  const where = [cloud ? `${cloud} в облаке` : '', local ? `${local} локально` : ''].filter(Boolean).join(', ')
-  const prov = providers.length ? `Включено провайдеров ${on.length} из ${providers.length}${where ? ` (${where})` : ''}` : 'Провайдеры не настроены'
-  const act = exchanges.find((e) => e.active)
-  const ex = act ? `торгует ${act.name}, режим: ${modeText(act.mode)}` : exchanges.length ? 'активной биржи нет' : 'биржи не настроены'
-  return `${prov}; ${ex}.`
-}
-
 const BY_WORDS: Record<string, string> = { 'owner-cli': 'владелец, в терминале', ctl: 'через дашборд' }
 export const swapBy = (by: string | null | undefined): string => (by ? (BY_WORDS[by] ?? 'другим способом') : 'неизвестно')
 

@@ -8,7 +8,12 @@ export interface ActionSpec {
   what?: string
   /** Сколько ждать итог принятой команды (мс), если дольше обычных 60 с (запуск дня идёт до минуты и больше). */
   timeoutMs?: number
-  onDone?: () => void
+  /** После успешного итога; final есть, если итог пришёл от платформы (данные отчёта: списки моделей, проверка подключения). */
+  onDone?: (final?: ActionFinal) => void
+  /** После неудачного итога: text уже словами; final есть, если отказ пришёл от платформы (код и данные: сколько ждать, что не так). */
+  onFail?: (text: string, final?: ActionFinal) => void
+  /** Итог показывает сам вызывающий (строка статуса у формы): общее уведомление о нём не нужно. Диалог рисков остаётся как был. */
+  quiet?: boolean
 }
 
 export type ActionPhase = 'idle' | 'checking' | 'confirm' | 'blocked' | 'sending' | 'waiting' | 'done' | 'failed'

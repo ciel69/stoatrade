@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { connectSummary, credText, credsText, ctxText, exchangeStatus, limitsText, modelsText, perMillion, priceText, providerIssues, swapBy, swapText, swapsLine } from './connect'
+import { credText, credsText, ctxText, exchangeStatus, limitsText, modelsText, perMillion, priceText, providerIssues, swapBy, swapText, swapsLine } from './connect'
 import type { ExchangeRow, ProviderRow, RoleModel, RoleRow } from '../model/types'
 
 const prov = (o: Partial<ProviderRow> = {}): ProviderRow => ({
@@ -43,7 +43,6 @@ describe('подключения', () => {
     expect([exchangeStatus(ex()), exchangeStatus(ex({ active: false })), exchangeStatus(ex({ implemented: false, active: false }))]).toEqual(['активная', 'разрешена', 'пока не поддерживается'])
     expect(credsText(['read', 'trade'])).toBe('чтение, торговля')
     expect(credsText([])).toBe('ключей нет')
-    expect(connectSummary([prov(), prov({ id: 'local', local: true }), prov({ id: 'a', enabled: false })], [ex()])).toBe('Включено провайдеров 2 из 3 (1 в облаке, 1 локально); торгует Bybit, режим: бумага.')
   })
   it('склонения', () => {
     expect([modelsText(1), modelsText(3), modelsText(11)]).toEqual(['1 модель', '3 модели', '11 моделей'])

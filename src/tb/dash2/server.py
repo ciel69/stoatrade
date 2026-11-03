@@ -187,6 +187,8 @@ class Hub(object):
                     await self.day_report_op(ws, m)
                 elif m.get("op") == "exp":
                     await self.exp_op(ws, m)
+                elif m.get("op") == "learning":
+                    await self.learning_op(ws, m)
         except ConnectionClosed:                 # клиент закрыл вкладку или оборвал связь: не ошибка сервера
             pass
         finally:
@@ -228,6 +230,34 @@ class Hub(object):
         try:
             await ws.send(self._msg("exp_detail", 0, res))
         except Exception:
+            pass
+
+    async def learning_op(self, ws, m):
+        """«Учится ли мозг» по запросу (чтение): ответ `learning_detail` только этому соединению. Недопустимый режим -> paper (в отчёте); сбой -> {ok:false}, соединение живо.
+        Если в отчёте блок памяти `computing`, расчёт ждёт фоновая задача и досылает повторное `learning_detail`."""
+        from tb.learn import dashapi
+        mode = m.get("mode") if isinstance(m.get("mode"), str) else None
+        try:
+            res = await asyncio.to_thread(topics.learning_detail, self.root, mode, None)
+        except Exception:                    # детали причины только в журнале слоя learn
+            res = {"ok": False, "mode": mode if mode in topics.MODES else "paper", "error": "failed"}
+        try:
+            await ws.send(self._msg("learning_detail", 0, res))
+        except Exception:
+            return
+        if res.get("ok") and dashapi.is_computing(res):
+            asyncio.ensure_future(self._learning_follow(ws, res.get("mode") or mode))
+
+    async def _learning_follow(self, ws, mode):
+        """Ждёт блок памяти вне цикла событий (до dashapi.FOLLOW_TIMEOUT_S) и отправляет готовый отчёт повторным `learning_detail` тому же соединению."""
+        from tb.learn import dashapi
+        try:
+            res = await asyncio.to_thread(dashapi.follow, self.root, mode, dashapi.FOLLOW_TIMEOUT_S, None)
+            if res is None:
+                return
+            from tb.dash import model
+            await ws.send(self._msg("learning_detail", 0, model.scrub(res)))
+        except Exception:                    # соединение закрылось или расчёт упал: клиент остаётся с computing и может перезапросить
             pass
 
     async def usage_op(self, ws, m):

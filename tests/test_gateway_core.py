@@ -113,7 +113,7 @@ class TestDispatch(_gw.GwBase):
             self.assertFalse(any(b in n for b in bad), n)
             for prop in t.schema["properties"]:
                 self.assertNotIn(prop, ("path", "file", "cmd", "command", "url", "key", "token", "leverage", "margin", "qty", "size"), "%s.%s" % (n, prop))
-        self.assertEqual(len(catalog.TOOLS), 22)      # +get_similar_cases, list_lessons, add_case_review (WP15b)
+        self.assertEqual(len(catalog.TOOLS), 23)      # +get_similar_cases, list_lessons, add_case_review (WP15b), +revise_idea (ревизия живых идей: keep/update/cancel)
 
     def test_rate_limit(self):
         for _ in range(5):

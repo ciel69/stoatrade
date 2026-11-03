@@ -57,6 +57,7 @@ V2 = {
     "intel": "tb.intel.cli",       # фактура и новости (WP13a)
     "control": "tb.control.cli",   # плоскость управления (WP12)
     "memory": "tb.memory.cli",     # память случаев (WP15a)
+    "labels": "tb.labels.cli",     # фабрика меток (R1): status|stats|coverage|show|backfill|rerun|backup|verify
     "risk": "tb.control.risk_cmd",  # уровни риска (WP16): risk level show|set|list|check, risk init-key
     "notify": "tb.lifecycle.notify_cli",  # уведомления ОС: status|on|off|set|test (WP-N)
     "setup": "tb.setup_cli",        # первый запуск и помощник настройки: среда, зависимости, ключи, токены, LLM (вопросы только в терминале)
@@ -94,7 +95,8 @@ USAGE = """использование: ./tb <группа> <команда> [а�
   gateway <tools|agents|agent add|token new|call|audit|check> ...   шлюз инструментов агентов (WP11-A) | mcp serve --agent ID   MCP-сервер по stdio
   llm <providers|check [--live]|usage [--days N] [--by profile|provider|model|role]|presets|provider add|update|remove|enable|disable|model set|remove|key set|status|clear>   слой LLM: провайдеры, шаблоны, ключи (скрытый ввод), проверка (--live: живой запрос), расход
   risk level <show|list|check [--apply]|set N --confirm "..."> | risk init-key   уровни риска 1-5 (WP16; set и init-key только владелец в Terminal)
-  memory <similar|stats|add|show|sync|migrate|verify|review-queue|review|lesson|backtest|compare> ...   память случаев: похожие ситуации, уроки-гипотезы, ретро-проверка (WP15a, WP15b)
+  memory <similar|stats|add|show|sync|migrate|coverage|verify|review-queue|review|lesson|backtest|compare> ...   память случаев: похожие ситуации, уроки-гипотезы, ретро-проверка, доля пустых признаков (WP15a, WP15b, R1)
+  labels <status|stats [--by policy|type]|coverage|show KEY|backfill --since D|rerun --policy ID --since D|backup|verify> [--text]   фабрика меток и теневые политики (R1): backfill и rerun только ставят сигналы в очередь, размечает сервис labels
   day <status|list|report [ID]|checklist|preflight> [--json]   жизненный цикл дня: состояние, итоги, сухой прогон чек-листа закрытия, preflight (WP14; только чтение)
   notify <status|on|off|set КАТЕГОРИЯ on|off|set quiet HH:MM-HH:MM|set quiet off|test>   уведомления ОС: мастер, категории, тихие часы (docs/NOTIFICATIONS.md)
   control <token new|status|gates|audit|cmd|run>   плоскость управления: ключ, токен входа, гейты live, аудит, сервис ctl (WP12)

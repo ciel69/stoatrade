@@ -19,7 +19,7 @@ from tb.platform import services as S
 from tb.platform import supervisor as SV
 
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-FULL = ["exec", "scan", "feed", "context", "intel", "sync", "dispatch", "ctl", "dash", "brain"]
+FULL = ["exec", "scan", "feed", "context", "intel", "sync", "dispatch", "ctl", "dash", "labels", "brain"]      # R1.6: сервис labels (фабрика меток) входит в набор по умолчанию
 OURS = lambda pid: "python -m tb.launcher up"      # noqa: E731  подставная командная строка нашего процесса
 
 

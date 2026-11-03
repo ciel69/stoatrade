@@ -61,9 +61,10 @@ EVENT_TYPES = {
     "news_flash": PRI_WAKE,            # быстрые новости (intel/flash.py): класс, подсказка направления, важность, источник; БЕЗ текста заголовка
 }
 WAKE_MILESTONES = ("r_plus_1", "r_minus_05", "near_target", "target_filled", "hold_expiring", "hold_expired")      # hold_expiring/hold_expired: срок удержания подходит/вышел, таймер не закрывает, решает мозг
-SCANNER_KINDS = ("range_5m", "turnover_surge", "hot_enter", "patrol", "idea_near", "idea_level", "idea_invalidated", "idea_tp", "idea_expired",
+SCANNER_KINDS = ("range_5m", "turnover_surge", "hot_enter", "patrol", "idea_near", "idea_level", "idea_invalidated", "idea_tp", "idea_expired", "idea_stale",
                  "oi_spike", "oi_flush", "funding_extreme", "liq_cascade",           # деривативы (hotscan.DerivGate, marketdata/liqwatch.py)
                  "cvd_divergence", "book_wall", "xex_gap")                           # ордерфлоу (marketdata/flowwatch.py)
+STALE_CODES = ("level_gone", "rr_changed", "price_far", "regime_flip", "btc_drift", "hit_idle")      # причины ревизии идеи (marketdata/ideawatch.py): поле `stale` события idea_stale
 BRAIN_WAKE_CODES = ("R_PLUS", "R_MINUS", "NEAR_TARGET", "CHECK_PLAN", "TIME", "STALLED", "FLOW_TURN",
                     "NEWS", "FAST_MOVE", "STRUCT_BREAK", "CROWD_TURN", "BOOK_WALL", "VOL_SPIKE", "REGIME_CHANGE")   # коды сторожа позиции (logic/watch.py), не из правил плана
 LIMIT_WHICH = ("daily_loss", "stop_streak", "session_budget", "max_open", "drawdown_halt", "cooldown", "rate", "brain_budget", "brain_down")
@@ -106,7 +107,7 @@ _RE_ROT = re.compile(r"^events-(\d{8})(?:-(\d+))?\.jsonl$")
 _ENUM_DIR = ("enum", ("up", "down", "long", "short"))
 D_FIELDS = {
     "scanner_signal": {"kind": ("enum", SCANNER_KINDS), "px": "num", "score": "num", "dir": _ENUM_DIR, "range_5m_pct": "num", "ret_5m_pct": "num",
-                       "turn_surge_5m": "num", "spread_bps": "num", "funding_pct": "num", "idea": "idea", "wake": "bool", "big": "bool",      # big: крупное событие (каскад от big_x порогов монеты)
+                       "turn_surge_5m": "num", "spread_bps": "num", "funding_pct": "num", "idea": "idea", "stale": ("enum", STALE_CODES), "wake": "bool", "big": "bool",      # big: крупное событие (каскад от big_x порогов монеты)
                        "oi_chg_15m_pct": "num", "oi_chg_1h_pct": "num", "liq_usd": "num", "liq_side": ("enum", ("long", "short")),
                        "cvd_pct": "num", "wall_usd": "num", "wall_dist_pct": "num", "wall_side": ("enum", ("bid", "ask")), "xex_bps": "num"},
     "plan_armed": {"rev": "num", "codes": "ids", "preview": "numdict"},

@@ -1,8 +1,7 @@
-import type { PresetRow, ProfileRow, ProviderRow, RoleRow } from '../model/types'
+import type { ProfileRow, RoleRow } from '../model/types'
 
 /**
- * Редкие настройки «для специалиста»: профили моделей (brain.profile), провайдер из шаблона (llm.provider op add), особые параметры роли (brain.role op opts / opts_clear)
- * и замечания к конфигурации. Чистая логика: проверка ввода, аргументы действий, «было → станет», «отразила ли тема». Пустое поле значит «не менять»:
+ * Профили моделей (brain.profile) и особые параметры роли (brain.role op opts / opts_clear). Чистая логика: проверка ввода, аргументы действий, «было → станет», «отразила ли тема». Пустое поле значит «не менять»:
  * сервер не умеет снять отдельное значение параметра, поэтому вернуть стандартные значения роли можно только целиком (opts_clear).
  */
 
@@ -124,16 +123,6 @@ export function paramsText(p: ProfileRow['params'] | null | undefined): string {
   return parts.length ? parts.join(' · ') : 'параметры по умолчанию'
 }
 
-// ---------------------------------------------------------------- провайдер из шаблона
-
-export const presetArgs = (p: Pick<PresetRow, 'id'>): { op: 'add'; id: string; preset: string } => ({ op: 'add', id: p.id, preset: p.id })
-export const presetReflects = (providers: readonly Pick<ProviderRow, 'id'>[] | undefined, id: string): boolean => (providers ?? []).some((p) => p.id === id)
-export const presetsToAdd = (presets: readonly PresetRow[] | undefined): PresetRow[] => (presets ?? []).filter((p) => !p.added)
-export function presetNote(p: PresetRow): string {
-  const parts = [p.base_host ? `адрес ${p.base_host}` : null, p.models.length ? `моделей в шаблоне: ${p.models.length}` : null, p.verified ? 'шаблон проверен' : 'шаблон не проверен, проверьте цены и модели'].filter(Boolean)
-  return parts.join(' · ')
-}
-
 // ---------------------------------------------------------------- особые параметры роли
 
 export interface OptsDraft {
@@ -203,14 +192,4 @@ export function optsReflects(r: RoleRow | null | undefined, a: OptsArgs): boolea
   if (a.params?.temperature != null && r.primary?.params.temperature !== a.params.temperature) return false
   if (a.params?.max_tokens != null && r.primary?.params.max_out_tok !== a.params.max_tokens) return false
   return true
-}
-
-// ---------------------------------------------------------------- замечания к конфигурации
-
-/** Замечание сервера (уже по-русски): лишние пробелы убраны, заглавная буква, точка в конце. Слов-кодов сервер здесь не присылает; пояснение о том, что это за список, стоит в заголовке блока. */
-export function remarkText(raw: string): string {
-  const t = raw.trim().replace(/\s+/g, ' ')
-  if (!t) return ''
-  const s = t.charAt(0).toUpperCase() + t.slice(1)
-  return /[.!?]$/.test(s) ? s : s + '.'
 }

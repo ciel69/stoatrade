@@ -104,6 +104,23 @@ class HomeEventsTopics(Fx):
         self.assertEqual(e["ttl_at"], 8220)                                              # срок жизни плана моментом (округлён до 30 с), а не остатком
         pend = topics._pending([{"id": "L1", "sym": "SOL", "side": "long", "price": 99.0, "cur": 100.0, "dist_pct": -1.0, "left_s": 600.0, "ttl_min": 15}], now)
         self.assertEqual((pend["total"], pend["items"][0]["expires_at"], pend["items"][0]["dist_pct"]), (1, 1600, -1.0))
+        self.assertEqual((pend["items"][0]["src"], pend["items"][0]["plan"]), ("cli", None))
+
+    def test_pending_includes_resting_plan_entries_without_duplicates(self):
+        now = 1000.0
+        card = lambda pid, mode, state, px: {"id": pid, "sym": "ETH", "side": "long", "mode": mode, "status": "armed", "entry_state": state, "price": 2000.0, "stop": 1950.0,
+                                             "targets": [{"id": "t1", "price": 2100.0}], "risk_usdt": 0.4, "leverage": 5, "ttl_left_s": 600.0, "trigger": {"limit_px": px}}
+        v2 = {"plans": {"cards": [card("PL-1", "paper", "resting", 1990.0), card("PL-2", "paper", "waiting", 1980.0), card("PL-3", "live", "resting", 1970.0)]}}
+        p = topics._pending([], now, v2, "paper")
+        self.assertEqual((p["total"], [i["plan"] for i in p["items"]]), (1, ["PL-1"]))           # waiting и чужой режим не попадают
+        it = p["items"][0]
+        self.assertEqual((it["src"], it["price"], it["sl"], it["tp"], it["lev"], it["risk"], it["expires_at"]), ("plan", 1990.0, 1950.0, 2100.0, 5.0, 0.4, 1600))
+        self.assertAlmostEqual(it["dist_pct"], -0.5, places=6)
+        cli = {"id": "L9", "sym": "ETH", "side": "long", "mode": "paper", "price": 1990.0, "cur": 2000.0, "dist_pct": -0.5, "left_s": 300.0}
+        other = dict(cli, id="L8", price=1900.0)
+        d = topics._pending([cli, other], now, v2, "paper")
+        self.assertEqual((d["total"], sorted(i["id"] for i in d["items"])), (2, ["L8", "plan:PL-1"]))     # та же заявка в двух источниках: одна строка
+        self.assertEqual(topics._pending([], now, v2, "all")["total"], 2)
 
     def test_trades_topic_cards_reasons_and_review(self):
         now = time.time()
@@ -350,6 +367,7 @@ class ServerTest(Fx, unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("SECRET", repr(t))                                                                                                     # поля вне белого списка не уходят
         p = t["provider_list"][0]
         self.assertEqual((p["base_host"], p["cred"]["present"], t["exchange_list"][0]["creds"], t["swaps"][0]["target"], t["revisions"]), ("api.deepseek.com", True, ["read"], ["reviewer"], 3))
+        self.assertIs(p["allow_private"], False)                                                                                                 # флаг внутренней сети доходит до формы настроек (по умолчанию выключен)
         self.assertEqual((r["target"], t["profile_list"][0]["id"], t["profile_list"][0]["used_by"]), ("A.entry_scout", "lm", ["A.entry_scout"]))     # имя роли для действий ctl и список профилей для выбора
         self.assertNotIn("SECRET2", repr(t))
         self.assertNotIn("1d1c", repr(t))                                                                                                      # маски ключа в данных нет, только «есть или нет»

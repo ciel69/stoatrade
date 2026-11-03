@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { defaultTab, IdeaDetailPanel, TAB_LABEL, tabCount, useIdeaStore, type IdeaTab } from '@/entities/idea'
+import { defaultTab, IdeaDetailPanel, pendingHint, TAB_LABEL, tabCount, useIdeaStore, type IdeaTab } from '@/entities/idea'
 import { IdeasAuto } from '@/widgets/ideas/ideas-auto'
 import { IdeasList } from '@/widgets/ideas/ideas-list'
-import { UiSegment, UiSidePanel } from '@/shared/ui'
+import { UiSegment, UiSidePanel, UiTip } from '@/shared/ui'
 
 /**
  * Страница «Идеи»: четыре вкладки как на старом дашборде (ждут уровня, стали планом, не сработали, авто-история сканера). Выбор вкладки хранится в адресе (?tab=), вкладка по умолчанию
@@ -45,7 +45,7 @@ const share = computed(() => (snap.value?.stats.agent.taken_share != null ? `${M
         <span><b>{{ snap.stats.agent.total }}</b> идей мозга</span>
         <span><b>{{ share }}</b> стали сделкой</span>
         <span><b>{{ snap.counts.auto_skipped ?? 0 }}</b> событий сканера</span>
-        <span title="исход через 15 и 60 минут"><b>{{ snap.pending }}</b> ждут замера</span>
+        <UiTip dotted :tip="pendingHint"><b>{{ snap.pending }}</b>&nbsp;ждут замера</UiTip>
       </p>
       <UiSegment :model-value="tab" :options="options" label="Вкладка идей" @update:model-value="pick" />
     </header>

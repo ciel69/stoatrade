@@ -88,6 +88,8 @@ export interface ProviderRow {
   note: string | null
   error: string | null
   base_host: string | null
+  /** разрешены адреса во внутренней сети (у старого сервера поля нет) */
+  allow_private?: boolean
   cred: { needed: boolean; present: boolean; perms_ok: boolean | null; env: string | null }
   limits: { concurrent: N; rpm: N; day_usd: N; hour_usd: N; day_toks: N }
   models: ProviderModel[]

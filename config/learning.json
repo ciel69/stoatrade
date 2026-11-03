@@ -1,0 +1,7 @@
+{"schema": "tb.learning_cfg/1",
+ "verdict": {"recent_n": 50, "guard_trades_ratio": 0.5},
+ "windows": [50, 200], "series_points": 120, "weeks": 8, "policy_days": 14,
+ "baseline_policies": ["P5", "P6"],
+ "memory": {"max_trades": 600, "budget_s": 3.0, "ttl_s": 900},
+ "cache": {"ttl_s": 60, "min_interval_s": 10},
+ "pf_bootstrap": {"b": 500, "seed": 20261102, "level": 0.9}}

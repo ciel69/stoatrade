@@ -1,0 +1,7 @@
+{"enabled": true, "base_url": "https://api.bybit.com", "max_rps": 5, "grace_min": 10, "retry_min": 30, "max_attempts": 5,
+ "horizons": [15, 60, 240], "latency_s": 60, "capture_every_s": 15, "label_batch": 20, "checkpoint_min": 10,
+ "capture_types": ["range_5m","turnover_surge","hot_enter","oi_spike","oi_flush","funding_extreme","liq_cascade","cvd_divergence","book_wall","xex_gap"],
+ "warn": {"due": 500, "failed_share": 0.05},
+ "shadow_ctx": {"risk_level": 3, "session_type": "day", "max_horizon": "intraday", "off_plan_ok": true, "day_size_mult": 1.0, "stop_streak": 0, "no_confirm_allowed": false},
+ "default_spread_bps": 2,
+ "coverage_fields": ["atr5_pct","range_15m_pct","ret_1h_pct","btc_ret_1h_pct","dist_sup_pct","dist_res_pct"]}

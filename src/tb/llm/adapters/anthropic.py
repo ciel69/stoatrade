@@ -27,6 +27,9 @@ class AnthropicAdapter(Adapter):
     def probe_request(self):
         return self.provider.base_url + "/v1/models", {}
 
+    def models_request(self):
+        return self.provider.base_url + "/v1/models?limit=1000", {}         # по умолчанию Anthropic отдаёт 20 моделей
+
     def _thinking(self, req):
         if self.model.thinking != "param" or req.thinking in (None, "off"):
             return None

@@ -5,6 +5,7 @@ import { DecisionsPage } from '@/pages/decisions'
 import { ExperimentsPage } from '@/pages/experiments'
 import { HomePage } from '@/pages/home'
 import { IdeasPage } from '@/pages/ideas'
+import { LearningPage } from '@/pages/learning'
 import { MarketPage } from '@/pages/market'
 import { NewsPage } from '@/pages/news'
 import { NotifyPage } from '@/pages/notify'
@@ -29,6 +30,7 @@ export const router = createRouter({
     { path: '/trading/experiments', name: 'experiments', component: ExperimentsPage, meta: { title: 'Торговля: эксперименты' } },
     { path: '/brain/decisions', name: 'decisions', component: DecisionsPage, meta: { title: 'Мозг: решения' } },
     { path: '/brain/brief', name: 'brief', component: BriefPage, meta: { title: 'Мозг: досье' } },
+    { path: '/brain/learning', name: 'learning', component: LearningPage, meta: { title: 'Мозг: учится ли' } },
     { path: '/system/control', name: 'control', component: SystemPage, meta: { title: 'Система: управление' } },
     { path: '/system/settings', name: 'settings', component: SettingsPage, meta: { title: 'Система: настройки' } },
     { path: '/system/notify', name: 'notify', component: NotifyPage, meta: { title: 'Система: уведомления' } },

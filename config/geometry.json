@@ -1,0 +1,5 @@
+{"geometry_ver": "g1", "cluster_pct": 0.15,
+ "profiles": {
+   "base":  {"stop_buf_atr": 0.1, "tp1_min_r": 1.0, "tp1_max_r": 1.5, "scalp_min_tp_costs": 3.0, "max_ok": 3, "max_fail": 2},
+   "chase": {"zone_pct": 0.3, "stop_atr": 0.25, "tp_r": 2.5, "surge_x": 10.0, "range_atr": 4.0},
+   "atr":   {"k_atr": 1.5, "tp_r": 1.5}}}

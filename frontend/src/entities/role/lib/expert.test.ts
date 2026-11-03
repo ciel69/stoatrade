@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { PresetRow, ProfileRow, RoleRow } from '../model/types'
-import { draftOfProfile, emptyOpts, emptyProfile, optsArgs, optsErrors, optsLines, optsReflects, paramsText, presetArgs, presetNote, presetReflects, presetsToAdd, profileArgs, profileErrors, profileLines, profileReflects, remarkText } from './expert'
+import type { ProfileRow, RoleRow } from '../model/types'
+import { draftOfProfile, emptyOpts, emptyProfile, optsArgs, optsErrors, optsLines, optsReflects, paramsText, profileArgs, profileErrors, profileLines, profileReflects } from './expert'
 
 const prof = (o: Partial<ProfileRow> = {}): ProfileRow => ({ id: 'ds', provider: 'deepseek', model: 'flash', model_name: 'deepseek-flash', provider_enabled: true, live_ok: false, params: { temperature: 0.2, max_out_tok: 1200, thinking: 'low' }, ...o })
 const names = { p: (id: string) => id, m: (_p: string, m: string) => m }
@@ -51,21 +51,6 @@ describe('профили моделей', () => {
   })
 })
 
-describe('провайдер из шаблона', () => {
-  const pr = (o: Partial<PresetRow> = {}): PresetRow => ({ id: 'openai', name: 'OpenAI', adapter: 'openai', base_host: 'api.openai.com', verified: false, note: null, models: ['gpt'], added: false, ...o })
-  it('аргументы add берут шаблон по его имени; уже добавленные не предлагаются', () => {
-    expect(presetArgs(pr())).toEqual({ op: 'add', id: 'openai', preset: 'openai' })
-    expect(presetsToAdd([pr(), pr({ id: 'x', added: true })]).map((p) => p.id)).toEqual(['openai'])
-    expect(presetsToAdd(undefined)).toEqual([])
-    expect(presetReflects([{ id: 'openai' }], 'openai')).toBe(true)
-    expect(presetReflects([], 'openai')).toBe(false)
-  })
-  it('описание честно говорит про непроверенный шаблон', () => {
-    expect(presetNote(pr())).toContain('не проверен')
-    expect(presetNote(pr({ verified: true }))).toContain('шаблон проверен')
-  })
-})
-
 describe('особые параметры роли', () => {
   it('ввод проверяется', () => {
     expect(optsErrors({ budget: '0', temperature: '5', maxTokens: 'x' })).toEqual({ budget: expect.any(String), temperature: expect.any(String), maxTokens: expect.any(String) })
@@ -85,13 +70,5 @@ describe('особые параметры роли', () => {
     expect(optsReflects(role(), a)).toBe(false)
     expect(optsReflects(role({ budget_day_usd: 3, primary: { ...role().primary!, params: { temperature: 0.2, max_out_tok: 800, thinking: null } } }), a)).toBe(true)
     expect(optsReflects(null, a)).toBe(false)
-  })
-})
-
-describe('замечания', () => {
-  it('аккуратный текст', () => {
-    expect(remarkText('  провайдер x:   нет адреса ')).toBe('Провайдер x: нет адреса.')
-    expect(remarkText('Готово!')).toBe('Готово!')
-    expect(remarkText('  ')).toBe('')
   })
 })

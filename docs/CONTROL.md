@@ -79,10 +79,10 @@
 `status.json` (пишет `ctl` каждый цикл): состояние платформы (`stopped|starting|running|closing|halted`), режим, `checks` (H1-H8 и W1-W9 для live), KILL, команда мозга, уровень риска (+список уровней), `last`, `banner`. Старше 15 с = «ctl не отвечает», кнопки заблокированы, кроме KILL.
 
 ## Настройки: провайдеры LLM, профили, роли, биржи, ввод ключа (WP-X)
-Действия ctl (аргументы и ответы: `docs/spec_v2/SETTINGS_API.md`): `llm.provider {op,id,...}` (add, update, remove, enable, disable, model_set, model_remove, check, key_clear), `brain.profile {op:set|delete,...}`,
+Действия ctl (аргументы и ответы: `docs/spec_v2/SETTINGS_API.md`): `llm.provider {op,id,...}` (add, update, remove, enable, disable, model_set, model_remove, check, key_clear, models, ping; `models`/`ping` ходят в сеть ключом сервера, не чаще раза в 3 с на провайдера, `E_RATE`; `ping` платный; `allow_private:true` и смена адреса у провайдера с ключом требуют подтверждения/предупреждения, правила URL в SETTINGS_API.md), `brain.profile {op:set|delete,...}`,
 `brain.role {op:chain|opts|opts_clear,...}`, `exchange.set {op,...}`, а также `brain.use {profile, all:true}` («профиль для всех ролей»). Все идут обычным конвейером ctl (подпись, срок, аудит каждой команды,
 `challenge`/nonce/фразы там, где есть риск). Права: в режиме `open_local` эти действия требуют токена (сессия «full», как все «новые и неизвестные»). Live-роли по прежним гейтам `brain.use`;
-живая биржа: фраза `ВКЛЮЧАЮ LIVE НА БИРЖЕ <ID>` и остановленная платформа. Новые коды: `E_EXISTS, E_NO_KEY, E_IN_USE, E_LIVE_IN_USE, E_PROVIDER_OFF, E_CHECK`.
+живая биржа: фраза `ВКЛЮЧАЮ LIVE НА БИРЖЕ <ID>` и остановленная платформа. Новые коды: `E_EXISTS, E_NO_KEY, E_IN_USE, E_LIVE_IN_USE, E_PROVIDER_OFF, E_CHECK, E_RATE`.
 
 ### Ввод ключа LLM-провайдера из дашборда (write-only) и его риск
 Ввод ключа (сообщение `llmkey {"provider","value"}` по WebSocket дашборда, только при `auth.dash2_full`; обрабатывает `dash/keyweb.py` через мост `dash2/ctlbridge.py`) принимает ТОЛЬКО ключи LLM-провайдеров. Секрет идёт в обход очереди ctl: тело запроса (loopback, Origin/Host/CSRF, сессия с токеном) ->

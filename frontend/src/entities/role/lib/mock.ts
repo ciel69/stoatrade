@@ -1,5 +1,6 @@
-import type { ExchangeRow, PresetRow, ProfileRow, ProviderRow, RoleModel, RolesSnapshot } from '../model/types'
+import type { ExchangeRow, ProfileRow, ProviderRow, RoleModel, RolesSnapshot } from '../model/types'
 import type { OptsArgs, ProfileArgs } from './expert'
+import type { AddArgs } from './providerNet'
 
 /** Профили для отладки без сервера (?edit=mock): одно семейство локальных и облачных, один с выключенным провайдером, один без допуска к live. */
 export const MOCK_PROFILES: ProfileRow[] = [
@@ -9,16 +10,6 @@ export const MOCK_PROFILES: ProfileRow[] = [
   { id: 'lm_qwen3_30b', provider: 'local', model: 'qwen3-30b', model_name: 'qwen3-30b', provider_enabled: true, live_ok: false, used_by: [], params: { temperature: null, max_out_tok: null, thinking: null } },
   { id: 'claude_haiku', provider: 'anthropic', model: 'haiku', model_name: 'claude-haiku', provider_enabled: false, live_ok: false, used_by: [], params: { temperature: null, max_out_tok: null, thinking: null } },
 ]
-
-/** Шаблоны провайдеров для отладки. */
-export const MOCK_PRESETS: PresetRow[] = [
-  { id: 'openai', name: 'OpenAI', adapter: 'openai', base_host: 'api.openai.com', verified: false, note: 'Облачный провайдер. Цены и модели в шаблоне нужно сверить.', models: ['gpt-mini', 'gpt'], added: false },
-  { id: 'openrouter', name: 'OpenRouter', adapter: 'openai', base_host: 'openrouter.ai', verified: true, note: null, models: ['auto'], added: false },
-  { id: 'deepseek', name: 'DeepSeek', adapter: 'openai', base_host: 'api.deepseek.com', verified: true, note: null, models: ['flash', 'pro'], added: true },
-]
-
-/** Замечания к конфигурации для отладки. */
-export const MOCK_REMARKS = ['профиль old_one: провайдер anthropic выключен', 'провайдер local: не указан лимит запросов']
 
 const mockModel = (id: string, name: string, price: ProviderRow['models'][number]['price']): ProviderRow['models'][number] => ({ id, name, ctx: 128000, tools: true, tags: [], price })
 
@@ -79,8 +70,6 @@ export function mockSnapshot(s: RolesSnapshot, kind: RoleMock): RolesSnapshot {
   return {
     ...s,
     profile_list: profiles,
-    preset_list: s.preset_list?.length ? s.preset_list : MOCK_PRESETS,
-    errors: s.errors.length ? s.errors : MOCK_REMARKS,
     provider_list: s.provider_list?.length ? s.provider_list : MOCK_PROVIDERS,
     exchange_list: MOCK_EXCHANGES,        // отладка: набор бирж всегда один и тот же, чтобы сценарии (основная, заготовка, без ключа) повторялись
     mode: kind === 'live' ? 'live' : s.mode,
@@ -148,15 +137,38 @@ export function mockProfile(s: RolesSnapshot, a: ProfileArgs): RolesSnapshot {
   return { ...s, profile_list: old ? list.map((p) => (p.id === a.id ? row : p)) : [...list, row] }
 }
 
-/** Отладка: что сделал бы сервер после llm.provider add из шаблона. */
-export function mockPresetAdd(s: RolesSnapshot, id: string): RolesSnapshot {
-  const pr = (s.preset_list ?? []).find((p) => p.id === id)
-  if (!pr || (s.provider_list ?? []).some((p) => p.id === id)) return s
+/** Отладка: что сделал бы сервер после llm.provider add со своим spec: выключенный провайдер, ключ ещё не задан. */
+export function mockProviderAdd(s: RolesSnapshot, a: AddArgs): RolesSnapshot {
+  if ((s.provider_list ?? []).some((p) => p.id === a.id)) return s
+  const spec = a.spec as { name?: string; adapter?: string; base_url?: string; allow_private?: boolean; models?: Record<string, { name: string }> }
+  let host: string | null = null
+  try { host = new URL(String(spec.base_url)).host } catch { host = null }
   const row: ProviderRow = {
-    id, name: pr.name, adapter: pr.adapter, enabled: false, local: false, verified: pr.verified, note: pr.note, error: null, base_host: pr.base_host, cred: { needed: true, present: false, perms_ok: null, env: null },
-    limits: { concurrent: null, rpm: null, day_usd: null, hour_usd: null, day_toks: null }, models: pr.models.map((m) => mockModel(m, m, null)), profiles: [],
+    id: a.id, name: spec.name ?? a.id, adapter: spec.adapter ?? null, enabled: false, local: false, verified: false, note: null, error: null, base_host: host, allow_private: spec.allow_private === true,
+    cred: { needed: true, present: false, perms_ok: null, env: null }, limits: { concurrent: null, rpm: null, day_usd: null, hour_usd: null, day_toks: null },
+    models: Object.entries(spec.models ?? {}).map(([k, m]) => mockModel(k, m.name, { in_miss: 0, in_hit: 0, out: 0 })), profiles: [],
   }
-  return { ...s, provider_list: [...(s.provider_list ?? []), row], preset_list: (s.preset_list ?? []).map((p) => (p.id === id ? { ...p, added: true } : p)) }
+  return { ...s, provider_list: [...(s.provider_list ?? []), row] }
+}
+
+/** Отладка: что сделал бы сервер после model_set (новая модель с нулевой ценой) и после update адреса. */
+export function mockModelSet(s: RolesSnapshot, pid: string, key: string, name: string): RolesSnapshot {
+  return {
+    ...s,
+    provider_list: (s.provider_list ?? []).map((p) => (p.id !== pid || p.models.some((m) => m.id === key) ? p : { ...p, models: [...p.models, { ...mockModel(key, name, { in_miss: 0, in_hit: 0, out: 0 }), tools: false }] })),
+  }
+}
+export function mockAddress(s: RolesSnapshot, pid: string, patch: { name?: string; base_url?: string; allow_private?: boolean; limits?: { day_usd?: number; hour_usd?: number; day_tokens?: number; concurrent?: number } }): RolesSnapshot {
+  let host: string | null = null
+  try { host = patch.base_url ? new URL(patch.base_url).host : null } catch { host = null }
+  const l = patch.limits
+  return {
+    ...s,
+    provider_list: (s.provider_list ?? []).map((p) => (p.id !== pid ? p : {
+      ...p, name: patch.name ?? p.name, base_host: host ?? p.base_host, allow_private: patch.allow_private ?? p.allow_private,
+      limits: l ? { ...p.limits, day_usd: l.day_usd ?? p.limits.day_usd, hour_usd: l.hour_usd ?? p.limits.hour_usd, day_toks: l.day_tokens ?? p.limits.day_toks, concurrent: l.concurrent ?? p.limits.concurrent } : p.limits,
+    })),
+  }
 }
 
 /** Отладка: что сделал бы сервер после brain.role opts. */

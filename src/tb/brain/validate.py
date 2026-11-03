@@ -30,42 +30,23 @@ ENTRY_SKIP_CODES = ("no_setup", "no_confirm", "blackout", "pause", "busy", "rr_l
 ENTRY_TAGS = ("no-confirm", "blackout")
 ENTRY_PROPOSE_KEYS = ("sym", "side", "horizon", "level", "stop", "tp", "setup", "hypothesis", "ttl_min", "confirm", "thesis")
 ENTRY_OPTIONAL_KEYS = ("zone", "size_mult", "tags", "entry_type")
-ENTRY_MIN_RR = 2.0                                  # риск/прибыль брутто не ниже 2, когда в досье нет порога сессии (по средней цене целей при равных долях)
 ENTRY_PRECHECK_CODES = ("WIDE_RANGE", "DAY_NO_PLANS", "NO_SLOTS", "ROOM_CLOSED", "SYM_BUSY", "PAUSE_SYM", "PAUSE_ALL", "MIN_SIZE_SYM", "NO_DATA", "NO_SESSION",
-                        "STALE_DATA")   # отказы по данным досье без вызова модели
+                        "STALE_DATA", "NO_CANDIDATES")   # отказы по данным досье без вызова модели
+PRICE_KEYS = ("level", "zone", "stop", "tp", "price", "sl", "horizon", "confirm", "entry_type")      # ответ entry_reply/1 не называет цены и параметры входа: их берёт код из кандидата
 MAX_DATA_AGE_S = 120.0                              # цена монеты события у сканера/фида старше этого (brief.data.px_age_s) = STALE_DATA; порог: config/brain.json runtime.max_data_age_s
                                                     # (разбор paper 2026-11-02: XPL, hot.json и prices.json устарели на 90 мин, вход разрешён)
 FADE_IMPULSE_ATR = 2.0                              # свеча события от 2 ATR(5м) против входа = импульс (кит, каскад): вход против него без реакции запрещён любому сетапу,
                                                     # кроме sweep_reject и level_reclaim (они по определению после реакции). UAI 2026-11-01: trend_pullback long в свечу -2.85%
 REACTION_SETUPS = ("sweep_reject", "level_reclaim")  # сетапы «после реакции цены»: единственные, которым можно входить против импульса и против паники/эйфории
-ENTRY_SIZE_MULT_MAX = 0.5                           # потолок size_mult, который вообще может назвать модель (только уменьшение)
-ENTRY_MIN_STOP_PCT = 0.1                            # стоп не ближе 0.1% к уровню входа (и не ближе ENTRY_STOP_ATR_MULT*ATR(5м) и трёх спредов)
-ENTRY_STOP_ATR_MULT = 1.5                           # стоп не ближе 1.5 ATR(5м): стоп в одну свечу выбивало шумом за минуты (разбор paper 2026-10-29/30: LIT, USELESS, ERA, XPL)
-ENTRY_STOP_COST_MULT = 2.0                          # стоп не ближе двух издержек круга (session.cost_rt_pct): при стопе 0.23-0.4% комиссии = 0.6-1R, 8 таких сделок BTC/ETH/SOL
-                                                    # 2026-10-29..11-01 дали -3.2R в факте и во всех контрфактах (комиссии 1.96 USDT при PnL -1.64); Bybit taker 0.24% -> пол 0.48%,
-                                                    # лимитный вход (maker, session.cost_rt_maker_pct 0.18%) -> пол 0.35%: scalp остаётся возможен, но только лимитом
-
-
-def stop_floor_pct(ctx, entry_type=None):
-    """Пол ширины стопа от уровня в %: 0.1%, 1.5 ATR(5м), три спреда и две издержки круга (одна формула для validate и cands).
-    entry_type="limit": издержки круга с maker-входом (cost_rt_maker_pct), если досье их даёт."""
-    ctx = ctx or {}
-    cost = ctx.get("cost_rt_pct") or 0.0
-    if entry_type == "limit" and ctx.get("cost_rt_maker_pct"):
-        cost = min(cost, ctx["cost_rt_maker_pct"])
-    return max(ENTRY_MIN_STOP_PCT, ENTRY_STOP_ATR_MULT * (ctx.get("a5_pct") or 0.0), 3.0 * (ctx.get("spread_bps") or 0.0) / 100.0, ENTRY_STOP_COST_MULT * cost)
-
+# Геометрия входа (константы и формулы: пол стопа, ширина стопа шлюза, RR, импульс chase, пороги) живёт в tb.logic.geometry (R1.2); здесь импорт под прежними именами.
+# Пол стопа: 0.1%, 1.5 ATR(5м), три спреда и две издержки круга (Bybit taker 0.24% -> пол 0.48%, maker-вход 0.18% -> 0.35%; разбор 2026-10-29..11-01: -3.2R комиссиями).
+from tb.logic.geometry import (  # noqa: E402,F401
+    CHASE_MIN_LEVEL, CHASE_RANGE_ATR, CHASE_SETUP, CHASE_SURGE_X, ENTRY_MAX_LEVEL_DIST_LOOSE_PCT, ENTRY_MAX_LEVEL_DIST_PCT, ENTRY_MAX_STOP_PCT,
+    ENTRY_MIN_RR, ENTRY_MIN_STOP_PCT, ENTRY_SIZE_MULT_MAX, ENTRY_STOP_ATR_MULT, ENTRY_STOP_COST_MULT, LOOSE_RISK_LEVEL, SESSION_ORDER,
+    _entry_rr, _loose, chase_impulse, exec_stop_pct, stop_floor_pct)
 
 FADE_SETUPS = ("range_fade", "level_reject")        # входы против движения события
-CHASE_SETUP = "momentum_chase"                      # вход по рынку ПО импульсу события (указание владельца 2026-10-31: на высоком риске можно «прокатиться»)
-CHASE_MIN_LEVEL = 4                                 # только уровни риска 4-5 (guard проверяет то же через risk_levels setup_aggr)
-CHASE_SURGE_X = 10.0                                # импульс: оборот 5м от 10x нормы И свеча от 4 ATR(5м), движение в сторону входа. Бэктест 60 дн, 49 монет:
-CHASE_RANGE_ATR = 4.0                               # мягкий порог (3x или 2 ATR) 29.7 тыс. сделок, валовый R -0.02; экстрим 2.3 тыс., +0.11 (12 ч), ловит обвал BTC 29.10 (+2.5R)
 FADE_SURGE_X = 3.0                                  # оборот 5м от этого множителя при движении против входа = импульс, фейд без реакции запрещён
-ENTRY_MAX_STOP_PCT = 10.0
-ENTRY_MAX_LEVEL_DIST_PCT = 3.0                      # уровень входа не дальше 3% от цены
-ENTRY_MAX_LEVEL_DIST_LOOSE_PCT = 5.0                # на уровнях риска 4-5 (paper-разведка входов): до 5%, лимитная заявка ждёт у уровня до ttl
-LOOSE_RISK_LEVEL = 4                                # с этого уровня риска мягче правила диапазона свечи и дальности уровня (entry_scout работает только в paper)
 ENTRY_MAX_ZONE_PCT = 1.0                            # ширина зоны входа без подтверждения не шире 1% от уровня
 LEVEL_POOL_TOL_PCT = 0.3                            # уровень входа обязан совпадать с уровнем из struct/levels/ideas досье (допуск 0.3% или половина ATR 5м):
                                                     # UAI 2026-11-01: структуры по монете не было, локальная модель выдумала уровень, стоп и цели, сделка -2.9R
@@ -96,7 +77,6 @@ def level_pool(brief, sym):
             raw.append(i.get("level"))
     return sorted(set(float(v) for v in raw if _num(v) and v > 0))
 RE_SYM = r"^[A-Z0-9]{2,20}$"
-SESSION_ORDER = ("scalp", "intraday", "swing", "position")
 OPPOSITE_OK = ("range_fade", "level_reject")        # watch против bias допустим только для этих сетапов (07b 5.3)
 CARRY_BASIS = ("trend_intact", "level_held", "volume_supportive", "news_neutral", "event_far", "funding_ok", "stop_at_be", "thesis_valid")
 CARRY_AGAINST = ("news_risk", "volume_fading", "level_lost", "event_near", "funding_high", "range_expanding")
@@ -145,6 +125,17 @@ ENTRY = {"type": "object", "required": ["schema", "event_seq", "decision", "why"
     "setup": {"enum": list(SETUPS)}, "hypothesis": {"type": "string", "pattern": RE_TAG}, "ttl_min": {"type": "integer", "minimum": 5, "maximum": 240},
     "confirm": {"enum": ["candle", "none"]}, "entry_type": {"enum": ["market", "limit"]}, "size_mult":{"type": "number", "minimum": 0.1, "maximum": ENTRY_SIZE_MULT_MAX},
     "tags": {"type": "array", "maxItems": 2, "items": {"enum": list(ENTRY_TAGS)}}, "thesis": _s(280, 10),
+    "why": _s(200, 1), "conf": {"type": "number", "minimum": 0, "maximum": 1}}}
+
+# entry_reply/1: ответ модели в JSON-пути entry_scout (reply_schema роли). Цен нет: модель выбирает кандидата brief.cands по номеру,
+# код разворачивает его в tb.entry/1 (runner._entry_obj). Обязательность полей по decision проверяет semantic (_entry_reply).
+ENTRY_REPLY = {"type": "object", "required": ["decision", "why", "conf"], "properties": {
+    "decision": {"enum": list(ENTRY_DECISIONS)},
+    "candidate": {"type": "integer", "minimum": 1, "maximum": 10}, "setup": {"enum": [s for s in SETUPS if s != "none"]}, "thesis": _s(280, 10),
+    "size_mult": {"type": "number", "minimum": 0.1, "maximum": ENTRY_SIZE_MULT_MAX}, "tags": {"type": "array", "maxItems": 2, "items": {"enum": list(ENTRY_TAGS)}},
+    "hypothesis": {"type": "string", "pattern": RE_TAG},
+    "skip_code": {"enum": list(ENTRY_SKIP_CODES)},
+    "watch": {"type": "object", "required": ["candidate"], "properties": {"candidate": {"type": "integer", "minimum": 1, "maximum": 10}}},
     "why": _s(200, 1), "conf": {"type": "number", "minimum": 0, "maximum": 1}}}
 
 REVIEW = {"type": "object", "required": ["schema", "journal_id", "errors", "rule_followed", "lesson"], "properties": {
@@ -200,7 +191,7 @@ CASEREVIEW = {"type": "object", "required": ["schema", "verdict", "right", "impr
 READER = {"type": "object", "required": ["schema", "items"], "properties": {
     "schema": {"const": "tb.reader/1"}, "items": {"type": "array", "maxItems": 10, "items": {"type": "object", "additionalProperties": _FREE}}}}
 
-SCHEMAS = {"pm/1": PM, "entry/1": ENTRY, "review/1": REVIEW, "casereview/1": CASEREVIEW, "dayplan/1": DAYPLAN, "audit/1": AUDIT, "reader/1": READER}
+SCHEMAS = {"pm/1": PM, "entry/1": ENTRY, "entry_reply/1": ENTRY_REPLY, "review/1": REVIEW, "casereview/1": CASEREVIEW, "dayplan/1": DAYPLAN, "audit/1": AUDIT, "reader/1": READER}
 
 
 def schema_for(schema_id):
@@ -429,11 +420,6 @@ def day_frame_breaks(o, ctx):
     return out
 
 
-def _loose(ctx):
-    """Уровень риска 4-5: разведка входов в paper. Диапазон свечи события не закрывает вход (вход ждёт новую свечу у уровня), уровень допустим дальше."""
-    return (ctx.get("risk_level") or 0) >= LOOSE_RISK_LEVEL
-
-
 def data_stale(ctx):
     """Устарели ли данные монеты события: возраст цены сканера/фида (data_age_s) выше порога max_data_age_s (по умолчанию MAX_DATA_AGE_S),
     или цены монеты нет ни в одном источнике (data_px=False). Нет метки времени при наличии цены = не устарели. Нет блока data в досье = проверки нет."""
@@ -477,7 +463,30 @@ def entry_precheck(ctx):
         return "PAUSE_ALL"
     if (ctx.get("min_size_sym") or 0) > 0:
         return "MIN_SIZE_SYM"                                # размер по риску не дотягивает до минимального лота монеты: план исполнитель всё равно отклонит
+    cands = ctx.get("cands")
+    if isinstance(cands, list) and cands and not any(isinstance(c, dict) and c.get("ok") for c in cands) and not ctx.get("stale_ids"):
+        return "NO_CANDIDATES"                               # кандидаты есть, но ни один не годится (fail по числу): выбирать нечего, модель не зовём. Последняя проверка:
+                                                             # при занятой монете cands=None (SYM_BUSY сработал раньше); при флаге idea_stale модель ещё может сделать es_revise
     return None
+
+
+def price_keys(raw):
+    """Ключи цен и параметров входа в сыром ответе entry_reply/1 (на любой глубине до 3) -> отсортированный список (пусто = чисто)."""
+    out = set()
+
+    def walk(o, d):
+        if d > 3:
+            return
+        if isinstance(o, dict):
+            for k, v in o.items():
+                if str(k).lower() in PRICE_KEYS:
+                    out.add(str(k).lower())
+                walk(v, d + 1)
+        elif isinstance(o, list):
+            for v in o[:20]:
+                walk(v, d + 1)
+    walk(raw, 0)
+    return sorted(out)
 
 
 def audit_context(inp):
@@ -502,6 +511,8 @@ def semantic(schema_id, obj, ctx=None):
         return _pm(obj, ctx)
     if schema_id == "entry/1":
         return _entry(obj, ctx)
+    if schema_id == "entry_reply/1":
+        return _entry_reply(obj)
     if schema_id == "dayplan/1":
         return _dayplan(obj, ctx)
     if schema_id == "audit/1":
@@ -525,6 +536,15 @@ def _deny_keys(o, depth=0):
         for v in o[:20]:
             out += _deny_keys(v, depth + 1)
     return out
+
+
+def _entry_reply(o):
+    """Обязательные и лишние поля ответа entry_reply/1 по decision (схема проверяет типы и диапазоны)."""
+    need, only = {"propose": ("candidate", "setup", "thesis"), "skip": ("skip_code",)}.get(o.get("decision"), ()), {
+        "propose": ("candidate", "setup", "thesis", "size_mult", "tags", "hypothesis"), "skip": ("skip_code", "watch")}.get(o.get("decision"), ())
+    errs = ["ARGS_MISSING:%s" % k for k in need if k not in o]
+    errs += ["ARGS_EXTRA:%s" % k for k in o if k not in ("decision", "why", "conf") and k not in only]
+    return errs
 
 
 def _pm(o, ctx):
@@ -578,13 +598,6 @@ def _pm(o, ctx):
     return errs[:8]
 
 
-def chase_impulse(ctx, sign):
-    """Событие экстремально импульсное и идёт в сторону sign: оборот 5м от CHASE_SURGE_X нормы И диапазон свечи от CHASE_RANGE_ATR ATR(5м), ret_5m в ту же сторону."""
-    surge, ret5, r5, a5 = ctx.get("surge_x"), ctx.get("ret_5m"), ctx.get("range_5m_pct"), ctx.get("a5_pct")
-    strong = surge is not None and surge >= CHASE_SURGE_X and r5 is not None and bool(a5) and r5 >= CHASE_RANGE_ATR * a5
-    return bool(strong and ret5 and ret5 * sign > 0)
-
-
 def chase_errors(o, ctx, sign):
     """momentum_chase: уровень риска 4-5, импульс в сторону входа, вход без подтверждения (confirm none, зона у цены)."""
     errs = []
@@ -595,25 +608,6 @@ def chase_errors(o, ctx, sign):
     if o.get("confirm") != "none":
         errs.append("CHASE_CONFIRM")                         # догоняют по рынку сейчас, свечу не ждут
     return errs
-
-
-def exec_stop_pct(level, px, stop, entry_type=None):
-    """Ширина стопа так, как её мерит шлюз исполнителя (plan_schema.entry_ref: ref_price = цена при решении, у limit цена заявки), и не меньше, чем от уровня.
-    Цена ещё не дошла до уровня -> стоп от неё шире (PENDLE 2026-10-31: 0.89% от цены при 0.8% scalp, шлюз отклонил E_STOP_PCT)."""
-    d = abs(level - stop) / level * 100.0
-    if entry_type != "limit" and px:
-        d = max(d, abs(px - stop) / px * 100.0)
-    return d
-
-
-def _entry_rr(side, level, px, stop, tps):
-    """Риск/прибыль по худшей цене входа (long: max(уровень, цена); short: min) и средней цене целей (равные доли) -> число или None."""
-    ref = level if px is None else (max(level, px) if side == "long" else min(level, px))
-    risk = (ref - stop) if side == "long" else (stop - ref)
-    reward = (sum(tps) / len(tps) - ref) if side == "long" else (ref - sum(tps) / len(tps))
-    if risk <= 0:
-        return None
-    return reward / risk
 
 
 def _entry(o, ctx):

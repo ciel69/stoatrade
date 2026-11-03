@@ -53,6 +53,39 @@ def _scan_block(root, now):
     return {"age_s": round(max(0.0, now - ts), 1) if isinstance(ts, (int, float)) else None}
 
 
+LABELS_WARN = {"due": 500, "failed_share": 0.05}      # запасные пороги; рабочие - config/labels.json:warn
+
+
+def labels_reasons(hb, warn=None):
+    """Причины жёлтого статуса сервиса labels по его heartbeat: due > warn.due; failed_24h > warn.failed_share от захваченных за 24 ч; DB_CORRUPT и предупреждения."""
+    w = dict(LABELS_WARN)
+    w.update(warn if isinstance(warn, dict) else {})
+    hb = hb if isinstance(hb, dict) else {}
+    out = []
+    due, failed, cap = hb.get("due"), hb.get("failed_24h"), hb.get("captured_24h")
+    if isinstance(due, (int, float)) and not isinstance(due, bool) and due > w["due"]:
+        out.append("разметчик labels: очередь созревших меток %d (порог %d)" % (due, w["due"]))
+    if isinstance(failed, (int, float)) and not isinstance(failed, bool) and failed > 0:
+        cap = cap if isinstance(cap, (int, float)) and not isinstance(cap, bool) else 0
+        if failed > w["failed_share"] * max(cap, 1):
+            out.append("разметчик labels: не размечено за 24 ч %d из %d захваченных (порог %d%%)" % (failed, cap, round(w["failed_share"] * 100)))
+    if hb.get("last_error") == "DB_CORRUPT":
+        out.append("разметчик labels: база знаний была повреждена и пересоздана (DB_CORRUPT), старая лежит как state/knowledge.corrupt-*.sqlite")
+    for x in hb.get("warnings") or []:
+        if x == "W_LABELS_SYNC_DIR":
+            out.append("разметчик labels: state/ в папке облачной синхронизации (W_LABELS_SYNC_DIR): SQLite WAL там ломается, перенеси проект")
+    return out
+
+
+def _labels_warn(root):
+    try:
+        from tb.labels import capture
+        w = capture.load_cfg(root).get("warn")
+        return w if isinstance(w, dict) else None
+    except Exception:  # noqa: BLE001 - статус не должен падать из-за конфига меток
+        return None
+
+
 def build_status(root=None, now=None):
     now = time.time() if now is None else now
     cfg = S.load_cfg(root)
@@ -122,6 +155,12 @@ def build_status(root=None, now=None):
             if scan_b["age_s"] > max(lim, 120.0):
                 color = worse("yellow")
                 reasons.append("сканер не обновляет hot.json %d с" % scan_b["age_s"])
+        if (svcs.get("labels") or {}).get("state") == "running":      # R1.6: очередь разметки и доля неразмеченных видны здесь, в шину разметчик не пишет
+            _a, lhb = S.read_hb("labels", root, now)
+            lr = labels_reasons(lhb, _labels_warn(root))
+            if lr:
+                color = worse("yellow")
+                reasons.extend(lr)
     exec_expected = "exec" in svcs or (running and "exec" in (sup.get("services") or []))
     if exec_expected and not ex["alive"] and running:
         if (svcs.get("exec") or {}).get("state") == "running" and (svcs.get("exec") or {}).get("uptime_s", 0) < 60:

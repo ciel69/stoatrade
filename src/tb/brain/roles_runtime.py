@@ -63,13 +63,15 @@ class Role(object):
         self.inputs = list(raw.get("inputs") or [])
         self.prompt = prompt
         self.schema = validate.schema_for(self.output_schema)
+        self.reply_schema = raw.get("reply_schema")                  # схема ответа МОДЕЛИ (entry_reply/1), если она отличается от output_schema (развёрнутый объект, который строит код)
+        self.reply_obj = validate.schema_for(self.reply_schema) if self.reply_schema else None
 
     @property
     def system(self):
-        """Стабильный системный текст: роль + схема (sort_keys). Динамики нет."""
-        sch = json.dumps(compact_schema(self.schema), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        """Стабильный системный текст: роль + схема ответа модели (reply_schema, иначе output_schema; sort_keys). Динамики нет."""
+        sch = json.dumps(compact_schema(self.reply_obj or self.schema), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         head = (self.common.rstrip() + "\n\n") if self.common else ""
-        return "%s%s\n\nRESPONSE SCHEMA (%s):\n%s\n" % (head, self.prompt.rstrip(), self.output_schema, sch)
+        return "%s%s\n\nRESPONSE SCHEMA (%s):\n%s\n" % (head, self.prompt.rstrip(), self.reply_schema or self.output_schema, sch)
 
     @property
     def prompt_hash(self):
@@ -117,6 +119,9 @@ def _check(raw, rid, catalog_names, event_types):
             return "%s: %d..%d" % (k, lo, hi)
     if raw["output_schema"] not in validate.SCHEMAS:
         return "output_schema неизвестна"
+    rs = raw.get("reply_schema")
+    if rs is not None and (rs not in validate.SCHEMAS or raw["output_schema"] != "entry/1" or raw["io"] != "decision_json"):
+        return "reply_schema: неизвестная схема или роль не entry/1 в decision_json"
     if not isinstance(raw["live_risk"], bool):
         return "live_risk: bool"
     wk = raw.get("wake_on", [])

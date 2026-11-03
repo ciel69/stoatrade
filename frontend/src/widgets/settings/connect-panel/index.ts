@@ -1,1 +1,1 @@
-export { default as ConnectPanel } from './ui/ConnectPanel.vue'
+export { default as ExchangeBoard } from './ui/ExchangeBoard.vue'

@@ -104,8 +104,8 @@ def candidates(levels: list[float], ctx: dict, profiles: dict) -> list[dict]
 #        session_type, no_confirm_allowed, no_confirm_max, ...)
 #  -> строки в формате brain/cands.py (n, ok, fail, side, setup, level, zone, stop, tp[], horizon, confirm, entry_type, rr, ...)
 # новое, только для теней:
-def nearest_ok(cands: list[dict], side: str, px: float) -> dict | None   # ok-кандидат стороны с минимальным |level - px|
-def atr_plan(side: str, ctx: dict, profile: dict) -> dict              # профиль atr: стоп max(stop_floor_pct(ctx,"market"), k_atr*a5), тейк tp_r R
+def nearest_ok(cands: list[dict], side: str, px: float, include_chase: bool = False) -> dict | None   # ok-кандидат стороны с минимальным |level - px|; momentum_chase пропускается (вход по рынку, level == px выигрывал бы всегда)
+def atr_plan(side: str, ctx: dict, profile: dict) -> dict | None       # профиль atr: стоп max(stop_floor_pct(ctx,"market"), k_atr*a5), тейк tp_r R; None при нет цены/неверной стороне -> код NO_ATR_PLAN
 ```
 Перенос механический: константы `cands.py` читаются из профилей `base`/`chase`, порядок и формат строк не меняется. Регрессионные фикстуры снимаются со старого `cands.candidates` до переноса.
 
@@ -221,10 +221,10 @@ CREATE INDEX ix_pr_type ON policy_runs(type, t0);
 {"geometry_ver": "g1", "cluster_pct": 0.15,
  "profiles": {
    "base":  {"stop_buf_atr": 0.1, "tp1_min_r": 1.0, "tp1_max_r": 1.5, "scalp_min_tp_costs": 3.0, "max_ok": 3, "max_fail": 2},
-   "chase": {"zone_pct": 0.3, "stop_atr": 0.25, "tp_r": 2.5},
+   "chase": {"zone_pct": 0.3, "stop_atr": 0.25, "tp_r": 2.5, "surge_x": "<из CHASE_SURGE_X>", "range_atr": "<из CHASE_RANGE_ATR>"},
    "atr":   {"k_atr": 1.5, "tp_r": 1.5}}}
 ```
-Ключи и значения задача 2 сверяет с фактическими константами `brain/cands.py` (в том числе неупомянутыми здесь) и дополняет так, чтобы регрессия была точной.
+`candidates(levels, ctx, profiles)` принимает `profiles` и как весь `config/geometry.json`, и как словарь профилей; пропущенные ключи берутся из `DEFAULT_PROFILES` в коде (тест проверяет равенство файла и `DEFAULT_PROFILES`). Пороги импульса chase живут в профиле `chase`, их изменение требует нового `geometry_ver`. Ключи и значения задача 2 сверяет с фактическими константами `brain/cands.py` (в том числе неупомянутыми здесь) и дополняет так, чтобы регрессия была точной.
 
 ### `config/shadow_policies.json`
 
