@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { outcomeList, useIdeaStore, type StatCell } from '@/entities/idea'
+import { outcomeList, statCellHint, useIdeaStore, type StatCell } from '@/entities/idea'
 import { ageText, fixed, signed, useNow } from '@/shared/lib'
+import { UiTip } from '@/shared/ui'
 
 /**
  * Авто-история сканера: события (резкие движения, всплески оборота), в том числе тихие, по которым мозг не торговал. Вход по цене события, издержки круга вычтены.
@@ -26,7 +27,6 @@ const cell = (c: StatCell | undefined, k: 'cont' | 'fade'): string => {
   const win = k === 'cont' ? c.cont_win : c.fade_win
   return `${signed(net)} (${win != null ? Math.round(win * 100) : '–'}%)${low(c) ? ' *' : ''}`
 }
-const title = (c: StatCell | undefined, k: 'cont' | 'fade'): string => (c && c.n ? `n=${c.n}${low(c) ? ' (меньше 30: это не вывод)' : ''} · до издержек ${signed(k === 'cont' ? c.cont_gross : c.fade_gross)}` : '')
 const mineText = computed(() => {
   const g = mine.value
   return g ? horizons.value.map((h) => { const c = g.h[String(h)]; return c?.n ? `${h}м: n=${c.n} ${signed(c.cont_gross)} → ${signed(c.cont_net)} (${Math.round((c.cont_win ?? 0) * 100)}%)` : `${h}м: n=0` }).join(' · ') : ''
@@ -50,8 +50,14 @@ const mineText = computed(() => {
             <tr v-for="g in rows" :key="g.dim + g.name">
               <td class="dim">{{ g.dim }}</td><td>{{ g.name }}</td><td class="n">{{ g.events }}</td>
               <template v-for="h in horizons" :key="h">
-                <td class="n" :class="low(g.h[String(h)]) ? 'dim' : tone(g.h[String(h)]?.n ? g.h[String(h)].cont_net : null)" :title="title(g.h[String(h)], 'cont')">{{ cell(g.h[String(h)], 'cont') }}</td>
-                <td class="n" :class="low(g.h[String(h)]) ? 'dim' : tone(g.h[String(h)]?.n ? g.h[String(h)].fade_net : null)" :title="title(g.h[String(h)], 'fade')">{{ cell(g.h[String(h)], 'fade') }}</td>
+                <td class="n" :class="low(g.h[String(h)]) ? 'dim' : tone(g.h[String(h)]?.n ? g.h[String(h)].cont_net : null)">
+                  <UiTip v-if="statCellHint(g.h[String(h)], 'cont')" :tip="statCellHint(g.h[String(h)], 'cont')!">{{ cell(g.h[String(h)], 'cont') }}</UiTip>
+                  <template v-else>{{ cell(g.h[String(h)], 'cont') }}</template>
+                </td>
+                <td class="n" :class="low(g.h[String(h)]) ? 'dim' : tone(g.h[String(h)]?.n ? g.h[String(h)].fade_net : null)">
+                  <UiTip v-if="statCellHint(g.h[String(h)], 'fade')" :tip="statCellHint(g.h[String(h)], 'fade')!">{{ cell(g.h[String(h)], 'fade') }}</UiTip>
+                  <template v-else>{{ cell(g.h[String(h)], 'fade') }}</template>
+                </td>
               </template>
             </tr>
           </tbody>

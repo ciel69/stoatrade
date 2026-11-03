@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { UiChip, UiRouteStrip, type StripBand, type StripMark } from '@/shared/ui'
+import { UiChip, UiRouteStrip, UiTip, type StripBand, type StripMark } from '@/shared/ui'
 import { duration, fixed, price } from '@/shared/lib'
+import { ideaCaptionHints, ideaDistHint, ideaSideHint, ideaTtlHint, NO_LEVEL_TEXT, noteRu, setupHint, setupLabel } from '../lib/hints'
 import { ideaRisk, ideaRoute, levelWait } from '../lib/idea'
 import type { IdeaItem } from '../model/types'
 
@@ -39,35 +40,38 @@ const bands = computed<StripBand[]>(() => {
 })
 const left = computed(() => (props.idea.expires_epoch != null ? props.idea.expires_epoch - props.now : null))
 const dist = computed(() => (props.idea.dist_level_pct != null ? `${props.idea.dist_level_pct > 0 ? '' : '−'}${fixed(Math.abs(props.idea.dist_level_pct))}%` : '–'))
-const tip = computed(() => [props.idea.tag, props.idea.note, k.value.rr != null ? `RR ${fixed(k.value.rr, 1)} без издержек` : ''].filter(Boolean).join(' · '))
+const note = computed(() => noteRu(props.idea.note))
 </script>
 
 <template>
   <li class="card" :class="{ near: idea.zone, sel: selected }">
-    <button type="button" class="hit" :aria-pressed="selected" :aria-label="`${idea.sym}: открыть идею`" :title="tip" @click="emit('select')" />
+    <button type="button" class="hit" :aria-pressed="selected" :aria-label="`${idea.sym}: открыть идею`" @click="emit('select')" />
     <div class="body">
       <span class="head">
         <span class="sym">{{ idea.sym }}</span>
-        <UiChip>{{ idea.side === 'long' ? 'лонг' : idea.side === 'short' ? 'шорт' : '?' }}</UiChip>
-        <UiChip v-if="idea.tag">{{ idea.tag }}</UiChip>
-        <span class="dist" :class="`w-${wait.tone}`" :title="wait.text">{{ dist }}</span>
-        <span class="ttl" :class="{ soon: left != null && left < 1800 }" :title="left == null ? 'без срока' : 'идея истечёт, если цена не дойдёт до уровня'">{{ left == null ? 'без срока' : left > 0 ? duration(left) : 'срок вышел' }}</span>
+        <UiTip :tip="ideaSideHint(idea.side)"><UiChip>{{ idea.side === 'long' ? 'лонг' : idea.side === 'short' ? 'шорт' : '?' }}</UiChip></UiTip>
+        <span v-if="idea.tag" class="tag"><UiTip :tip="setupHint(idea.tag)"><UiChip><span class="full">{{ setupLabel(idea.tag) }}</span><span class="short">{{ setupLabel(idea.tag, 'short') }}</span></UiChip></UiTip></span>
+        <!-- правая группа прижата к краю своим margin-left: auto, раскладка не зависит от классов на UiTip (у него два корня) -->
+        <span class="right">
+          <UiTip :tip="ideaDistHint(idea)"><span class="dist" :class="`w-${wait.tone}`">{{ dist }}</span></UiTip>
+          <UiTip :tip="ideaTtlHint(left)"><span class="ttl" :class="{ soon: left != null && left < 1800 }">{{ left == null ? 'без срока' : left > 0 ? duration(left) : 'срок вышел' }}</span></UiTip>
+        </span>
       </span>
 
       <UiRouteStrip v-if="r" class="strip" :marks="marks" :bands="bands" :flag="{ at: r.level, text: price(idea.level), markKey: 'level' }"
                     :label="`${idea.sym}: от стопа ${price(idea.stop)} через уровень ${price(idea.level)} к цели ${price(idea.tp)}, цена ${price(idea.now_price)}`" @click="emit('select')">
         <template #caption="{ active, set }">
           <span class="rs-i" :class="{ hot: active === 'stop' }" @pointerenter="set('stop')" @pointerleave="set(null)">
-            <span class="down">{{ price(idea.stop) }}<template v-if="k.risk != null"> −{{ fixed(k.risk) }}%</template></span>
+            <UiTip :tip="ideaCaptionHints.stop"><span class="down">{{ price(idea.stop) }}<template v-if="k.risk != null"> −{{ fixed(k.risk) }}%</template></span></UiTip>
           </span>
           <span class="rs-i rs-end" :class="{ hot: active === 'take' }" @pointerenter="set('take')" @pointerleave="set(null)">
-            <span class="up">{{ price(idea.tp) }}<template v-if="k.reward != null"> +{{ fixed(k.reward) }}%</template></span>
+            <UiTip :tip="ideaCaptionHints.take"><span class="up">{{ price(idea.tp) }}<template v-if="k.reward != null"> +{{ fixed(k.reward) }}%</template></span></UiTip>
           </span>
         </template>
       </UiRouteStrip>
-      <span v-else class="note-only">Уровня или стопа нет: сканер по этой заметке мозг не разбудит.</span>
+      <span v-else class="note-only">{{ NO_LEVEL_TEXT }}</span>
 
-      <span v-if="idea.note" class="note">{{ idea.note }}</span>
+      <span v-if="note" class="note">{{ note }}</span>
     </div>
   </li>
 </template>
@@ -81,6 +85,18 @@ const tip = computed(() => [props.idea.tag, props.idea.note, k.value.rr != null 
 .body { position: relative; pointer-events: none; }
 .strip { pointer-events: auto; margin-top: var(--space-2); }
 .head { display: flex; align-items: center; gap: var(--space-2); }
+.head :deep(.tt) { pointer-events: auto; }        /* тело карточки не ловит мышь (под ним кнопка на всю карточку), а подсказки должны */
+/* длинное название сетапа сжимается с многоточием, а процент и срок остаются у правого края (полное имя в подсказке) */
+.tag { display: flex; min-width: 0; }
+.tag :deep(.tt) { min-width: 0; }
+.tag :deep(.chip) { overflow: hidden; text-overflow: ellipsis; }
+.short { display: none; }
+@media (max-width: 520px) {        /* на телефоне у чипа остаётся около 8 знаков: коротким словом, полное имя в подсказке */
+  .full { display: none; }
+  .short { display: inline; }
+}
+.sym, .right { flex: none; }
+.right { display: flex; align-items: center; gap: var(--space-2); margin-left: auto; }
 .sym { font-size: 17px; font-weight: 700; letter-spacing: -0.01em; }
 .dist { margin-left: auto; font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--muted); }
 .dist.w-near { color: var(--pos); }

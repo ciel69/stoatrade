@@ -1,11 +1,16 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { UiTip } from '@/shared/ui'
 import { fixed, price, signed } from '@/shared/lib'
-import { outcomeList } from '../lib/idea'
+import { levelHint, noteRu, setupHint, setupLabel, stopTakeHint } from '../lib/hints'
+import { ideaRisk, outcomeList } from '../lib/idea'
 import type { IdeaItem } from '../model/types'
 
-/** Раскрытые подробности идеи: тезис, цены, «что было бы» по горизонтам (до и после издержек), связанные план и сделка, пометки. */
+/** Раскрытые подробности идеи: тезис (по-русски, оригинал отдельной строкой, если перевод менял текст), цены, «что было бы» по горизонтам (до и после издержек), связанные план и сделка, пометки. */
 const props = defineProps<{ idea: IdeaItem }>()
+const note = computed(() => noteRu(props.idea.note))
+const translated = computed(() => note.value !== props.idea.note)
+const risk = computed(() => ideaRisk(props.idea))
 const outs = computed(() => outcomeList(props.idea.outcomes))
 const tone = (v: number | null) => (v == null || v === 0 ? '' : v > 0 ? 'up' : 'down')
 const tradeText = computed(() => {
@@ -17,14 +22,16 @@ const tradeText = computed(() => {
 
 <template>
   <div class="det">
-    <p v-if="idea.note" class="note">{{ idea.note }}</p>
+    <p v-if="idea.note" class="note">{{ note }}</p>
+    <p v-if="idea.note && translated" class="muted">Оригинал заметки: <span class="mono">{{ idea.note }}</span></p>
     <dl class="kv">
-      <div v-if="idea.level != null"><dt>Уровень</dt><dd>{{ price(idea.level) }}<template v-if="idea.dist_level_pct != null"> · цена {{ signed(idea.dist_level_pct) }}% от уровня</template></dd></div>
-      <div v-if="idea.stop != null || idea.tp != null"><dt>Стоп / тейк</dt><dd>{{ price(idea.stop) }} / {{ price(idea.tp) }}</dd></div>
+      <div v-if="idea.level != null"><dt><UiTip dotted :tip="levelHint">Уровень</UiTip></dt><dd>{{ price(idea.level) }}<template v-if="idea.dist_level_pct != null"> · цена {{ signed(idea.dist_level_pct) }}% от уровня</template></dd></div>
+      <div v-if="idea.stop != null || idea.tp != null"><dt><UiTip dotted :tip="stopTakeHint">Стоп / тейк</UiTip></dt><dd>{{ price(idea.stop) }} / {{ price(idea.tp) }}</dd></div>
+      <div v-if="risk.rr != null"><dt>Выигрыш к риску</dt><dd>{{ fixed(risk.rr, 1) }} к 1, без издержек</dd></div>
       <div v-if="idea.price != null"><dt>Цена записи</dt><dd>{{ price(idea.price) }}<template v-if="idea.now_price != null"> → {{ price(idea.now_price) }}<template v-if="idea.shift_pct != null"> ({{ signed(idea.shift_pct) }}%)</template></template></dd></div>
       <div v-if="idea.plan_id"><dt>План</dt><dd class="mono">{{ idea.plan_id }}</dd></div>
       <div v-if="tradeText"><dt>Сделка</dt><dd>{{ tradeText }}</dd></div>
-      <div v-if="idea.tag"><dt>Тег</dt><dd>{{ idea.tag }}</dd></div>
+      <div v-if="idea.tag"><dt>Схема входа</dt><dd><UiTip dotted :tip="setupHint(idea.tag)">{{ setupLabel(idea.tag) }}</UiTip></dd></div>
     </dl>
     <table v-if="outs.length" class="what" aria-label="Что было бы по стороне идеи">
       <thead><tr><th>Через</th><th>Ход по стороне</th><th>После издержек</th></tr></thead>
@@ -38,7 +45,7 @@ const tradeText = computed(() => {
       </tbody>
     </table>
     <p v-else-if="idea.status === 'watching' || idea.status === 'idea'" class="muted">Замеры после +15 и +60 минут появятся, когда идея сработает или истечёт.</p>
-    <p v-if="idea.mark_notes.length" class="muted">Пометки: {{ idea.mark_notes.join('; ') }}</p>
+    <p v-if="idea.mark_notes.length" class="muted">Пометки: {{ idea.mark_notes.map(noteRu).join('; ') }}</p>
     <p class="muted mono id">{{ idea.id }}<template v-if="idea.trade && idea.trade.r != null"> · {{ fixed(idea.trade.r, 1) }} R</template></p>
   </div>
 </template>
