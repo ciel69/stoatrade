@@ -1,6 +1,6 @@
 {"version": 1,
  "_note": "Реестр провайдеров LLM (WP11-C1). Секретов нет: ключи лежат в файлах key_file каталога ключей пользователя. Имена моделей и цены только здесь; значения из docs/ref/deepseek_api.md и спецификации НЕ подтверждены: перед включением сверить GET /models и тариф (./tb llm check --live). Цены за 1M токенов, USD.",
- "budget": {"day_usd": 2.0, "hour_usd": 0.5, "day_tokens": 8000000, "hour_tokens": 1000000, "job_usd": 0.05, "warn_frac": 0.8},
+ "budget": {"day_usd": 2.0, "hour_usd": 0.5, "day_tokens": 16000000, "hour_tokens": 1000000, "job_usd": 0.05, "warn_frac": 0.8},
  "providers": {
   "deepseek": {
    "adapter": "deepseek", "base_url": "https://api.deepseek.com", "beta_url": "https://api.deepseek.com/beta",
