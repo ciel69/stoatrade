@@ -289,6 +289,57 @@ class TestMenuPure(unittest.TestCase):
         self.assertEqual(res[0], res[2])
 
 
+class TestSessionWelch(unittest.TestCase):
+    """Вторая итерация (задача 31; Requirement 18.8): условие utc_session — тест Уэлча по значениям кластеров (пар в кластере нет); меню по сессиям
+    включается только блоком second_iteration.session_menu и при мощности >= power_min; без блока меню прежнее."""
+    US = [{"feature": "utc_session", "op": "=", "value": "us"}]
+
+    def rows(self, effect, seed=31, days=14):
+        from tb.memory.features import utc_session
+        rng = random.Random(seed)
+        rows = gen_rows(rng, T0 // H, days * 24, runs=3)
+        for r in rows:
+            if utc_session(r["hour"] % 24) == "us":
+                r["r_net"] = r["r_net"] + effect
+        return rows
+
+    def test_welch_numbers_and_dispatch(self):
+        w = win_of(self.rows(-0.6), T0, T0 + 14 * D)
+        self.assertTrue(VF.is_session_cond(self.US))
+        self.assertFalse(VF.is_session_cond([{"feature": "coin_class", "op": "=", "value": "meme"}]))
+        g = VF.cluster_groups(w, self.US)
+        self.assertEqual(len(g["in"]), 14 * 6)                                                    # 16-22 UTC: 6 часов в сутки, одна сторона
+        sc = VF.screen_welch(w, self.US, 5, CFG)
+        self.assertTrue(sc["ok"], sc)
+        self.assertLess(sc["p"], CFG["verify"]["alpha"] / 5)
+        from tb.core.expstats import _welch
+        ref = _welch([x["r"] for x in g["in"]], [x["r"] for x in g["out"]])
+        self.assertAlmostEqual(sc["p"], ST.one_sided(ref["t"], ref["p"], "lower"), places=8)
+        st, code, nums = VF.holdout(win_of(self.rows(-0.6, seed=32, days=7), T0, T0 + 7 * D), self.US, VF.k_h(CFG), CFG)
+        self.assertEqual((st, code, nums["test"]), ("hyp", None, "welch"))
+        st0, code0, _ = VF.holdout(win_of(self.rows(0.0, seed=33, days=7), T0, T0 + 7 * D), self.US, VF.k_h(CFG), CFG)
+        self.assertEqual(st0, "dropped")
+
+    def test_menu_flag_and_power(self):
+        w = win_of(self.rows(-0.6), T0, T0 + 14 * D)
+        base = MN.build_menu(w, CFG)
+        self.assertNotIn("utc_session", [it["cond"][0]["feature"] for it in base["items"]])        # по умолчанию выключено
+        on = json.loads(json.dumps(CFG))
+        on["second_iteration"]["session_menu"] = {"enabled": True, "power_min": 0.5, "effect_r": 0.6}
+        self.assertEqual(LC.check(on), [])
+        m = MN.build_menu(win_of(self.rows(-0.6), T0, T0 + 14 * D), on)
+        sess = [it for it in m["items"] if it.get("test") == "welch"]
+        self.assertIn(self.US, [it["cond"] for it in sess])
+        self.assertEqual(m["k"], base["k"] + len(sess))
+        for it in sess:
+            self.assertGreaterEqual(it["power"]["power"], 0.5)
+        hard = json.loads(json.dumps(on))
+        hard["second_iteration"]["session_menu"]["power_min"] = 1.0                              # недостижимая цель — сессий в меню нет
+        mh = MN.build_menu(win_of(self.rows(-0.6), T0, T0 + 14 * D), hard)
+        self.assertFalse([it for it in mh["items"] if it.get("test") == "welch"])
+        self.assertIn(MN.SESSION_LOW_POWER, [d["code"] for d in mh["dropped"]])
+
+
 # ---------------------------------------------------------------- симуляции ложных находок
 
 def one_menu(disc_rows, a, b, hold_fn):

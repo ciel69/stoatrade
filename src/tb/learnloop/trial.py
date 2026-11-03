@@ -24,6 +24,8 @@
   (чёрный список по таблице кодов).
 Вторая итерация (задача 29): критерий size_cap хранит param (у skip_when критерий прежний), вердикт — verdict_size (R хита снижается пропорционально
   множителю); активные size_cap прогоны не отсекают. Регистрации size_cap нет: rules.derive порождает только skip_when, allow_size_rules=false.
+Вторая итерация (задача 31): при вердикте promote шаг verdicts проверяет условие по нарушениям (violation_check, Requirement 18.6) по записям
+  rule_eval с правилом в shadow_hits; fail -> reject TRIAL_REJECT (причина VIOLATIONS); not_evaluable / not_evaluable_link не блокируют.
 Модуль не импортирует brain/gateway/llm/venues/executor/control.
 """
 import hashlib
@@ -53,6 +55,7 @@ TRIAL_COLS = ("trial_id", "rule_id", "lesson_id", "env_norm", "criterion", "crit
               "state", "verdict", "numbers", "cut_ts", "closed_ts")
 # причины inconclusive в numbers.reason (код правила NO_VERDICT)
 R_DEADLINE, R_POLICY_OFF, R_OVERLAP = "DEADLINE", "POLICY_OFF", RL.OVERLAP
+R_VIOLATIONS = "VIOLATIONS"                       # причина TRIAL_REJECT: условие по нарушениям (вторая итерация, Requirement 18.6)
 
 
 # ---------------------------------------------------------------- чтение испытаний
@@ -375,8 +378,22 @@ def check_overlaps(conn, cfg, now, rules=None):
     return out
 
 
-def step_trial(conn, t, cfg, now, live=True):
-    """Один проход по открытому испытанию. -> закрытие или None (продолжается)."""
+def violation_check(root, t, win, cfg, mcfg=None, all_cases=None):
+    """Условие по нарушениям (вторая итерация, Requirement 18.6; learnloop.brainref.violations) для испытания t в окне вердикта [start_ts, b).
+    -> {"code": ok | fail | not_evaluable | not_evaluable_link, ...}. Ошибка чтения журнала или случаев -> not_evaluable (не блокирует)."""
+    from tb.learnloop import brainref as BR
+    crit = t["criterion"]
+    b = int(win["b"]) if isinstance(win, dict) and win.get("b") is not None else int(crit["deadline_ts"])
+    try:
+        return BR.violations(root, t["rule_id"], int(crit["start_ts"]), b, cfg, mcfg=mcfg, all_cases=all_cases)
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        return {"code": BR.V_NOT_EVALUABLE, "why": type(e).__name__}
+
+
+def step_trial(conn, t, cfg, now, live=True, root=None, mcfg=None, all_cases=None):
+    """Один проход по открытому испытанию. -> закрытие или None (продолжается).
+    root (вторая итерация): при вердикте promote проверяется условие по нарушениям (violation_check); fail -> reject TRIAL_REJECT с причиной
+    VIOLATIONS, not_evaluable и not_evaluable_link не блокируют. Без root условие не проверяется (прежнее поведение)."""
     crit = t["criterion"]
     s = crit["src"]
     r = V.rule(conn, t["rule_id"])
@@ -394,17 +411,22 @@ def step_trial(conn, t, cfg, now, live=True):
     v = verdict(t, win)
     if st == "deadline" or v["verdict"] is None:
         return close(conn, t, INCONCLUSIVE, "NO_VERDICT", v["numbers"], now, cfg, cut=win["cut_ts"], reason=R_DEADLINE)
+    if v["verdict"] == PROMOTE and root is not None:
+        vc = violation_check(root, t, win, cfg, mcfg=mcfg, all_cases=all_cases)
+        v["numbers"]["violations"] = vc
+        if vc.get("code") == "fail":
+            return close(conn, t, REJECT, "TRIAL_REJECT", v["numbers"], now, cfg, cut=win["cut_ts"], reason=R_VIOLATIONS)
     return close(conn, t, v["verdict"], v["code"], v["numbers"], now, cfg, cut=win["cut_ts"])
 
 
-def run_verdicts(conn, cfg, now, live=None):
+def run_verdicts(conn, cfg, now, live=None, root=None, mcfg=None):
     """Часовой шаг вердиктов: пересечения с продвинутыми правилами, затем каждое открытое испытание (step_trial). live(policy_id, ver) -> bool.
-    -> [закрытия]."""
+    root — корень платформы для условия по нарушениям (вторая итерация; None — не проверяется). -> [закрытия]."""
     now = int(now)
     out = check_overlaps(conn, cfg, now)
     for t in trials(conn, OPEN):
         s = t["criterion"].get("src") or {}
-        res = step_trial(conn, t, cfg, now, True if live is None else live(s.get("policy"), s.get("policy_ver")))
+        res = step_trial(conn, t, cfg, now, True if live is None else live(s.get("policy"), s.get("policy_ver")), root=root, mcfg=mcfg)
         if res:
             out.append(res)
     return out
@@ -584,7 +606,7 @@ def step_verdicts(ctx):
     """Часовой шаг verdicts: пересечения, вердикты и закрытия; затем регистрация ждущих уроков на освободившиеся места (проверка в каждом
     часовом проходе, Requirement 9.5)."""
     live = lambda pid, ver: policy_live(ctx.root, pid, ver)  # noqa: E731
-    closed = run_verdicts(ctx.conn, ctx.cfg, ctx.now, live=live)
+    closed = run_verdicts(ctx.conn, ctx.cfg, ctx.now, live=live, root=ctx.root, mcfg=ctx.mcfg)
     rep = register_pending(ctx.conn, ctx.root, ctx.cfg, ctx.now, policy=_ctx_policy(ctx), mcfg=ctx.mcfg, live=live)
     return {"code": "OK", "closed": len(closed), "registered": len(rep["registered"]), "waiting": len(rep["waiting"]), "rejected": len(rep["rejected"])}
 

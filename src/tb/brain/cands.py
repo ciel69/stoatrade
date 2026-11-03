@@ -7,6 +7,8 @@ R2 (Requirement 7.7, точка (а)): после геометрии канди�
 остаётся в списке на своём месте (номер n прежний) с ok=false и fail="RULE_<id>". Та же функция rule_check вызывается шлюзом в submit_plan
 (точка (б)), поэтому одно решение (монета, сторона, событие) даёт одинаковый результат в обеих точках. При пустом rulebook, режиме без
 применения (выключатель, аренда, недоступная или восстанавливаемая база) и любой ошибке чтения кандидаты не меняются.
+Вторая итерация (Requirement 18.7): правила trial и активные правила в режиме без применения оцениваются без влияния на решение — их
+идентификаторы, которые отсекли бы кандидата, идут в res.shadow_hits (запись rule_eval) и в поле кандидата shadow_hits (только при совпадении).
 """
 import json
 import sqlite3
@@ -99,15 +101,36 @@ def rule_check(root, sym, side, event_seq=None, now=None, view=None, event=False
     view = rule_view(root, now) if view is None else view
     ev = resolve(root, sym, event_seq, now, view) if event is False else event
     res = {"ok": True, "fail": None, "hits": [], "eval": [], "missing": [], "blocked": [], "apply": False}
-    if view and view.get("apply") and view.get("rules"):
+    applies = bool(view and view.get("apply") and view.get("rules"))
+    shadow = _shadow_rules(view)
+    if applies or shadow:
         try:
             from tb.logic import learn_rules as LR
             from tb.memory import features as MF
             feats = MF.rule_features(ev, {"side": side}, _mem_cfg(root) if cfg is None else cfg)
-            res = LR.apply(view, {"side": side, "ok": True}, feats)
+            if applies:
+                res = LR.apply(view, {"side": side, "ok": True}, feats)
+            if shadow:                                   # вторая итерация (Requirement 18.7): совпадения без применения, решение не меняется
+                res = dict(res, shadow_hits=_shadow_hits(view, {"side": side, "ok": True}, feats))
         except RULE_ERRORS:
             pass
     return {"view": view, "event": ev, "res": res}
+
+
+def _shadow_rules(view):
+    """Правила trial и активные в режиме без применения (rulebook_view.shadow_rules) или [] при ошибке/пустом виде."""
+    if not view:
+        return []
+    try:
+        from tb.knowledge import rulebook_view as RV
+        return RV.shadow_rules(view)
+    except RULE_ERRORS:
+        return []
+
+
+def _shadow_hits(view, cand, feats):
+    from tb.knowledge import rulebook_view as RV
+    return RV.shadow_hits(view, cand, feats)
 
 
 def is_rule_fail(c):
@@ -129,7 +152,8 @@ def apply_rules(out, sym, root=None, event_seq=None, now=None, view=None):
         return out
     now = time.time() if now is None else now
     view = rule_view(root, now) if view is None else view
-    if not (view and view.get("apply") and view.get("rules")):
+    applies = bool(view and view.get("apply") and view.get("rules"))
+    if not (applies or _shadow_rules(view)):
         return out
     sides = sorted(set(c.get("side") for c in out if isinstance(c, dict) and c.get("ok") and c.get("side") in ("long", "short")))
     if not sides:
@@ -138,11 +162,15 @@ def apply_rules(out, sym, root=None, event_seq=None, now=None, view=None):
     cfg = _mem_cfg(root)
     for side in sides:
         res = rule_check(root, sym, side, now=now, view=view, event=ev, cfg=cfg)["res"]
-        if res.get("fail"):
-            for c in out:
-                if isinstance(c, dict) and c.get("ok") and c.get("side") == side:
-                    c["ok"] = False
-                    c["fail"] = res["fail"]
+        sh = res.get("shadow_hits") or []
+        for c in out:
+            if not (isinstance(c, dict) and c.get("ok") and c.get("side") == side):
+                continue
+            if sh:
+                c["shadow_hits"] = list(sh)             # вторая итерация: правила, которые отсекли бы кандидата (поле только при совпадении)
+            if res.get("fail"):
+                c["ok"] = False
+                c["fail"] = res["fail"]
     return out
 
 

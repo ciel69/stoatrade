@@ -4,6 +4,7 @@
 группы, разность diff = in_r − out_r. n — число кластеров теста. Порядок — (t0 часа, ключ кластера). Тест только парный (stat.paired).
 Скрининг: n ≥ min_n_menu, средняя разность в направлении claim в обеих половинах окна, одностороннее p < alpha / K.
 Holdout: n ≥ min_n_hyp (иначе N_TOO_SMALL), тот же знак (иначе NO_OOS_SIGN), p < alpha / K_h, K_h = labels_max_new_per_day (иначе NOT_SIGNIFICANT).
+Вторая итерация (задача 31): условие только по utc_session проверяется тестом Уэлча по значениям кластеров (screen_welch, holdout_welch).
 Ключ DUP_ACTIVE — tb.logic.learn_rules.cond_h (16 hex, canon_cond), общий с правилами и версиями; ключ чёрного списка — learn_rules.block_h
 (семейство условия: числовые признаки без порога, категориальные со значением).
 
@@ -174,8 +175,108 @@ def screen(win, cond, k, cfg, side="lower", tc=None):
     return out
 
 
+# ---------------------------------------------------------------- utc_session: тест Уэлча (вторая итерация, задача 31; Requirement 18.8)
+#
+# Условие utc_session = v охватывает кластер целиком (кластер — час и сторона, сессия — функция часа), поэтому кластеров теста с обеими
+# группами нет и парный тест неприменим. Значение кластера — среднее r_net его прогонов; «в условии» — кластеры с хитом, «вне» — остальные;
+# разность diff = mean(in) − mean(out), Уэлч (expstats._welch), одностороннее p в направлении claim.
+
+SESSION_FEATURE = "utc_session"
+
+
+def is_session_cond(cond):
+    """Условие только по utc_session (одно условие `=`): проверяется тестом Уэлча, не парным."""
+    return (isinstance(cond, list) and len(cond) == 1 and isinstance(cond[0], dict) and cond[0].get("feature") == SESSION_FEATURE
+            and cond[0].get("op") == "=")
+
+
+def cluster_groups(src, cond):
+    """Значения кластеров «в условии» и «вне условия» по выборке окна. -> {"in": [{"cluster", "t0", "r"}], "out": [...]} по (t0, кластер).
+    Кластер «в условии», если условие выполнено хотя бы у одного его прогона; для условия utc_session сессия считается по часу кластера
+    (memory.features.utc_session), так что пропуск признака в строке не переносит кластер в другую группу."""
+    p = prepared(src)
+    k = len(p["names"])
+    s, n, h = [0.0] * k, [0] * k, [False] * k
+    if is_session_cond(cond):
+        from tb.memory.features import utc_session
+        v = cond[0]["value"]
+        h = [utc_session(hr % 24) == v for hr in p["hours"]]
+        hits = [False] * len(p["m"])
+    else:
+        hits = hit_vector(p, cond)
+    for c, hit, r in zip(p["cid"], hits, p["r"]):
+        s[c] += r
+        n[c] += 1
+        h[c] = h[c] or bool(hit)
+    out = {"in": [], "out": []}
+    for c in range(k):
+        if n[c]:
+            out["in" if h[c] else "out"].append({"cluster": p["names"][c], "t0": p["hours"][c] * CL.HOUR, "r": s[c] / n[c]})
+    return out
+
+
+def welch_numbers(ins, outs, side="lower"):
+    """Числа теста Уэлча по значениям кластеров: n (кластеров в условии), n_out, diff, se, t, df, p (одностороннее), p2."""
+    from tb.core.expstats import _welch
+    xs, ys = [x["r"] for x in ins], [x["r"] for x in outs]
+    res = _welch(xs, ys) if len(xs) >= 2 and len(ys) >= 2 else None
+    out = {"n": len(xs), "n_out": len(ys), "diff": None, "sd": None, "se": None, "t": None, "df": None, "p": None, "p2": None}
+    if xs and ys:
+        out["diff"] = _r(ST.mean(xs) - ST.mean(ys))
+    if res:
+        out.update(se=_r(res["se"]), t=_r(res["t"]), df=_r(res["df"]), p2=_r(res["p"], 10))
+        out["p"] = _r(ST.one_sided(res["t"], res["p"], side), 10) if res["t"] is not None and res["p"] is not None else None
+    return out
+
+
+def _half_diff(ins, outs, lo, hi):
+    a = [x["r"] for x in ins if lo <= x["t0"] < hi]
+    b = [x["r"] for x in outs if lo <= x["t0"] < hi]
+    return (ST.mean(a) - ST.mean(b)) if a and b else None
+
+
+def screen_welch(win, cond, k, cfg, side="lower", groups=None):
+    """Скрининг условия utc_session тестом Уэлча: n (кластеров в условии) ≥ min_n_hyp и вне условия ≥ min_n_hyp, знак в обеих половинах окна,
+    одностороннее p < alpha / K. Поля те же, что у screen."""
+    g = cluster_groups(win, cond) if groups is None else groups
+    nums = welch_numbers(g["in"], g["out"], side)
+    thr = alpha(cfg) / max(1, int(k))
+    a, b = win["a"], win["b"]
+    mid = a + (b - a) // 2 // CL.HOUR * CL.HOUR
+    h1, h2 = _half_diff(g["in"], g["out"], a, mid), _half_diff(g["in"], g["out"], mid, b)
+    out = dict(nums, thr=thr, k=int(k), halves=[_r(h1), _r(h2)], ok=False, code=None, test="welch")
+    min_n = int(cfg["verify"]["min_n_hyp"])
+    if nums["n"] < min_n or nums["n_out"] < min_n:
+        out["code"] = "BELOW_N"
+    elif not (_sign_ok(h1, side) and _sign_ok(h2, side)):
+        out["code"] = "NO_OOS_SIGN"
+    elif nums["p"] is None or not nums["p"] < thr:
+        out["code"] = "NOT_SIGNIFICANT"
+    else:
+        out["ok"] = True
+    return out
+
+
+def holdout_welch(win, cond, kh, cfg, side="lower"):
+    """Holdout условия utc_session тестом Уэлча: те же коды, что holdout."""
+    g = cluster_groups(win, cond)
+    nums = welch_numbers(g["in"], g["out"], side)
+    thr = alpha(cfg) / max(1, int(kh))
+    nums.update(thr=thr, k_h=int(kh), clusters=[x["cluster"] for x in g["in"][:5]], test="welch")
+    if nums["n"] < int(cfg["verify"]["min_n_hyp"]) or nums["n_out"] < 2:
+        return "dropped", "N_TOO_SMALL", nums
+    if not _sign_ok(nums["diff"], side):
+        return "dropped", "NO_OOS_SIGN", nums
+    if nums["p"] is None or not nums["p"] < thr:
+        return "dropped", "NOT_SIGNIFICANT", nums
+    return "hyp", None, nums
+
+
 def holdout(win, cond, kh, cfg, side="lower"):
-    """Один тест holdout (вызывается не раньше cut_ts окна holdout). -> ("hyp" | "dropped", код | None, числа)."""
+    """Один тест holdout (вызывается не раньше cut_ts окна holdout). -> ("hyp" | "dropped", код | None, числа).
+    Условие только по utc_session — тест Уэлча (holdout_welch), остальные — парный тест."""
+    if is_session_cond(cond):
+        return holdout_welch(win, cond, kh, cfg, side)
     tc = test_clusters(win, cond)
     nums = numbers(tc, side)
     thr = alpha(cfg) / max(1, int(kh))

@@ -164,7 +164,9 @@ class TestAccept(Base):
         rep = self.accept(items, job)
         self.assertEqual(rep["code"], "LLM")
         self.assertEqual([i for i, _ in rep["accepted"]], [0, 1])
-        self.assertEqual(rep["rejected"], [(2, "NOT_IN_DICT"), (3, "NOT_IN_DICT"), (4, "BAD_SCHEMA"), (5, "TOO_MANY")])
+        # (3) regime — непроверяемый на метках признак: справочная проверка по выборке мозга (задача 31), сделок мозга нет -> N_TOO_SMALL
+        self.assertEqual(rep["rejected"], [(2, "NOT_IN_DICT"), (3, "N_TOO_SMALL"), (4, "BAD_SCHEMA"), (5, "TOO_MANY")])
+        self.assertEqual(rep["ref"], [])
         rows = CA.candidates(self.c, status=("new",))
         self.assertEqual(sorted(r["id"] for r in rows), sorted(cid for _, cid in rep["accepted"]))
         for r in rows:
@@ -176,7 +178,7 @@ class TestAccept(Base):
             self.assertEqual(r["evidence"]["llm"]["role"], "day_reviewer")
         ev = self.events()
         self.assertEqual(ev[-1][0], "LLM")
-        self.assertEqual(json.loads(ev[-1][2])["rejected"], [[2, "NOT_IN_DICT"], [3, "NOT_IN_DICT"], [4, "BAD_SCHEMA"], [5, "TOO_MANY"]])
+        self.assertEqual(json.loads(ev[-1][2])["rejected"], [[2, "NOT_IN_DICT"], [3, "N_TOO_SMALL"], [4, "BAD_SCHEMA"], [5, "TOO_MANY"]])
 
     def test_response_level_rejects_whole(self):
         job = self.job()

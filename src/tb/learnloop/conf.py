@@ -121,8 +121,13 @@ SPEC = {
                          "brain_ref": {"min_n": _N, "min_diff_r": _num(0.0, 10.0), "brain_window_days": _DAYS},
                          "freeze": {"freeze_trade_share": _share, "freeze_signal_share": _share,
                                     "freeze_window_days": _DAYS},
-                         "violations": {"brain_hits_min": _N}},
+                         "violations": {"brain_hits_min": _N},
+                         # задача 31 (Requirement 18.8): меню по utc_session с тестом Уэлча; необязательный блок (нет -> выключено)
+                         "session_menu": {"enabled": _bool, "power_min": _share, "effect_r": _num(0.0, 10.0, lo_open=True)}},
 }
+
+# Необязательные ключи (путь через точку): отсутствие — прежнее поведение (функция выключена); присутствующий ключ проверяется как прочие.
+OPTIONAL = frozenset(("second_iteration.session_menu",))
 
 
 # --- формула и согласованность ---
@@ -158,7 +163,8 @@ def _walk(spec, raw, prefix, errs):
     for k, chk in spec.items():
         path = prefix + k
         if k not in raw:
-            errs.append("E_CONF:missing:" + path)
+            if path not in OPTIONAL:
+                errs.append("E_CONF:missing:" + path)
             continue
         v = raw[k]
         if isinstance(chk, dict):

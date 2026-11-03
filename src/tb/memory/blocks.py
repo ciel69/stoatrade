@@ -99,7 +99,7 @@ def top_lessons(root, now, cfg, limit=None, all_lessons=None):
     ls = list(lessons.read_all(root).values()) if all_lessons is None else all_lessons
     out = []
     for l in ls:
-        if l.get("status") not in lessons.ACTIVE:
+        if l.get("status") not in lessons.ACTIVE or lessons.is_ref(l):           # справочные уроки мозгу не показываются (Requirement 18.1)
             continue
         ce = lessons.conf_eff(l, now, cfg)
         if ce < lc.get("hide_below", 0.15):
@@ -294,6 +294,8 @@ def lessons_payload(root, status, limit, now, cfg):
     tc = cfg.get("tool") or {}
     out = []
     for l in lessons.read_all(root).values():
+        if lessons.is_ref(l):                                                    # справочные уроки мозгу не показываются (Requirement 18.1)
+            continue
         if status == "active" and l.get("status") not in lessons.ACTIVE:
             continue
         if status not in ("active", "all") and l.get("status") != status:

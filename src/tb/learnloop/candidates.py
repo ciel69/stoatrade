@@ -21,6 +21,9 @@
                   TOO_BROAD и коды скрининга — только элемент. Принятый элемент проходит скрининг окна поиска (K = K меню + число своих условий модели),
                   claim с effect считает код; прошедшие — lesson_candidates(status=new, src=llm) и далее тот же путь accept/holdout/испытание.
   collect         шаг каждого прохода: готовые ответы -> accept_llm, просроченные (llm_wait_s) -> LLM_FALSE TIMEOUT, чистка порта.
+Задача 31 (Requirement 18.2): словарь входа получает раздел ref — признаки, непроверяемые на метках (brainref.ref_dictionary); элемент с таким
+  признаком не отклоняется NOT_IN_DICT, а идёт на справочную проверку по выборке мозга (brainref.check_candidate): урок evidence.src="brain",
+  ref=true, via="llm" (rep["ref"]) или отказ N_TOO_SMALL; кандидатом lesson_candidates такой элемент не становится и правил не порождает.
 """
 import datetime
 import json
@@ -28,6 +31,7 @@ import json
 from tb.knowledge import rulebook_view as RV
 from tb.knowledge import store2
 from tb.labels import store as LST
+from tb.learnloop import brainref as BR
 from tb.learnloop import clusters as CL
 from tb.learnloop import menu as MN
 from tb.learnloop import port as PT
@@ -421,7 +425,12 @@ def llm_request(conn, root, now, cfg, kind="day", policy=None, env="mainnet", ex
     for i, (it, sc) in enumerate(MN.screen_menu(win, menu, cfg, SIDE)):
         items.append({"id": "M%d" % (i + 1), "cond": it["cond"], "n": sc["n"], "diff": sc["diff"], "p": sc["p"], "share": it["share"], "ok": bool(sc["ok"])})
     pid = day_id(now) if kind == "day" else week_id(now)
-    payload = {"kind": kind, spec["id"]: pid, "env": env, "k": menu["k"], "menu": items, "dict": llm_dictionary(win, cfg), "limit": spec["limit"]}
+    dic = llm_dictionary(win, cfg)
+    try:                                                  # вторая итерация (задача 31): непроверяемые на метках признаки — справочная проверка
+        dic["ref"] = BR.ref_dictionary(root, now, cfg)
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    payload = {"kind": kind, spec["id"]: pid, "env": env, "k": menu["k"], "menu": items, "dict": dic, "limit": spec["limit"]}
     if kind == "day":
         d0 = (now // CL.DAY - 1) * CL.DAY
         payload["day"] = _day_numbers(conn, env, d0, d0 + CL.DAY)
@@ -484,26 +493,38 @@ def _num_value(v, vals):
     raise ItemRejected(NOT_IN_DICT)
 
 
-def _cond_part(c, feats):
+def _cond_part(c, feats, ref=None):
+    """Часть условия по словарю: признак из features (проверяем на метках) или, если его там нет, из ref (непроверяемый на метках признак,
+    справочная проверка по выборке мозга). -> (часть, справочная ли)."""
     if not isinstance(c, dict) or set(c) != {"feature", "op", "value"}:
         raise ItemRejected(BAD_SCHEMA)
     f, op, v = c["feature"], c["op"], c["value"]
+    is_ref = False
+    if isinstance(f, str) and f not in feats and f in (ref or {}):
+        feats, is_ref = ref, True
     if not isinstance(f, str) or f not in feats or op not in feats[f]["ops"]:
         raise ItemRejected(NOT_IN_DICT)
     vals = feats[f]["values"]
     if isinstance(vals, dict):
-        return {"feature": f, "op": op, "value": _num_value(v, vals)}
+        return {"feature": f, "op": op, "value": _num_value(v, vals)}, is_ref
     if op == "in":
         if not isinstance(v, list) or not v or len(v) > LCD.MAX_IN or len(set(map(str, v))) != len(v) or any(not isinstance(x, str) or x not in vals for x in v):
             raise ItemRejected(NOT_IN_DICT)
-        return {"feature": f, "op": op, "value": sorted(v)}
+        return {"feature": f, "op": op, "value": sorted(v)}, is_ref
+    if isinstance(v, bool) and v in vals:                 # логический признак справочного словаря
+        return {"feature": f, "op": op, "value": v}, is_ref
     if not isinstance(v, str) or v not in vals:
         raise ItemRejected(NOT_IN_DICT)
-    return {"feature": f, "op": op, "value": v}
+    return {"feature": f, "op": op, "value": v}, is_ref
+
+
+REF = "REF"                                               # pick справочного кандидата (непроверяемый на метках признак, Requirement 18.2)
 
 
 def check_item(it, menu, dic):
-    """Уровень элемента. -> (cond, id меню | None); ItemRejected(BAD_SCHEMA | NOT_IN_DICT). effect и числа правила модель не задаёт."""
+    """Уровень элемента. -> (cond, id меню | None | REF); ItemRejected(BAD_SCHEMA | NOT_IN_DICT). effect и числа правила модель не задаёт.
+    Признак вне features, но из словаря ref (вторая итерация, задача 31) делает кандидата справочным: pick=REF, условие проверяется по словарю
+    уроков (memory.lessons.validate_cond), дальше — справочная проверка по выборке мозга (learnloop.brainref.check_candidate)."""
     if not isinstance(it, dict):
         raise ItemRejected(BAD_SCHEMA)
     keys = set(it)
@@ -527,9 +548,15 @@ def check_item(it, menu, dic):
     if not isinstance(raw, list) or not (1 <= len(raw) <= int(dic.get("max_cond") or LCD.MAX_COND)):
         raise ItemRejected(BAD_SCHEMA)
     feats = dic.get("features") or {}
-    cond = [_cond_part(c, feats) for c in raw]
+    ref = dic.get("ref") if isinstance(dic.get("ref"), dict) else None
+    parts = [_cond_part(c, feats, ref) for c in raw]
+    cond = [p for p, _r in parts]
     if len(set(c["feature"] for c in cond)) != len(cond):
         raise ItemRejected(BAD_SCHEMA)
+    if any(r for _p, r in parts):
+        if LS.validate_cond(cond):
+            raise ItemRejected(NOT_IN_DICT)
+        return sorted(cond, key=lambda c: c["feature"]), REF
     if LCD.validate_cond(cond):
         raise ItemRejected(NOT_IN_DICT)
     return LR.canon_cond(cond), None
@@ -567,7 +594,7 @@ def accept_llm(conn, root, now, cfg, kind, job, answer, policy=None, env=None):
     menu = dict((m["id"], m["cond"]) for m in payload.get("menu") or [] if isinstance(m, dict) and isinstance(m.get("id"), str) and isinstance(m.get("cond"), list))
     dic = payload.get("dict") or {}
     live = active_hashes(conn, root) | _new_keys(conn, env)
-    seen, valid = set(), []
+    seen, valid, refs = set(), [], []
     for i, it in enumerate(items):
         if i >= spec["limit"]:
             rep["rejected"].append((i, TOO_MANY))
@@ -576,6 +603,14 @@ def accept_llm(conn, root, now, cfg, kind, job, answer, policy=None, env=None):
             cond, pick = check_item(it, menu, dic)
         except ItemRejected as e:
             rep["rejected"].append((i, e.code))
+            continue
+        if pick == REF:
+            key = frozenset(LS._cond_set(cond))
+            if key in seen:
+                rep["rejected"].append((i, DUPLICATE))
+                continue
+            seen.add(key)
+            refs.append((i, cond))
             continue
         c = {"cond": cond, "claim": {"dir": SIDE}}
         keys = cand_keys(c)
@@ -611,6 +646,16 @@ def accept_llm(conn, root, now, cfg, kind, job, answer, policy=None, env=None):
         claim = {"metric": "mean_r", "dir": SIDE, "vs": "base", "effect": VF.effect(tc)}
         rows.append((i, {"menu_id": rep["menu_id"], "src": LLM_SRC, "cond": cond, "claim": claim, "env_norm": env, "ctx_ver": win["ctx_ver"], "k_space": k,
                          "p_screen": sc["p"], "status": "new", "code": None, "evidence": ev, "ts": now}))
+    rep["ref"] = []
+    for i, cond in refs:                                  # справочная проверка по выборке мозга (Requirement 18.2): урок ref или N_TOO_SMALL
+        try:
+            res = BR.check_candidate(root, cond, {"dir": SIDE}, now, cfg, via=LLM_SRC)
+        except (OSError, ValueError, KeyError, TypeError):
+            res = {"code": BR.N_TOO_SMALL, "lesson_id": None}
+        if res["code"] == BR.REF_OK:
+            rep["ref"].append((i, res["lesson_id"]))
+        else:
+            rep["rejected"].append((i, res["code"]))
     rep["rejected"].sort()
     with LST.tx(conn):
         if rows:
@@ -618,8 +663,10 @@ def accept_llm(conn, root, now, cfg, kind, job, answer, policy=None, env=None):
         ids = dict((cand_h(c), c["id"]) for c in candidates(conn, env=env) if c["menu_id"] == rep["menu_id"] and c["src"] == LLM_SRC)
         for i, r in rows:
             rep["accepted"].append((i, ids.get(cand_h(r))))
-        _log(conn, spec["step"], LLM_OK, now, ref=pid, body={"job": jid, "k": k, "accepted": [i for i, _ in rep["accepted"]],
-                                                             "rejected": [[i, c] for i, c in rep["rejected"]]})
+        body = {"job": jid, "k": k, "accepted": [i for i, _ in rep["accepted"]], "rejected": [[i, c] for i, c in rep["rejected"]]}
+        if rep["ref"]:
+            body["ref"] = [[i, lid] for i, lid in rep["ref"]]
+        _log(conn, spec["step"], LLM_OK, now, ref=pid, body=body)
     rep["code"] = LLM_OK
     return rep
 

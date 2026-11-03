@@ -141,10 +141,16 @@ class TestCands(RulesBase):
         """Пустой rulebook, нет базы, просроченная аренда, выключатель, маркер восстановления, сигнал повреждения, ошибка базы — вывод прежний."""
         write_events(self.root, [ev(1, "SOL", "hot_enter", self.now - 30, spread_bps=9.0)])
         base = self.base()
-        same = lambda: self.assertEqual(cands.candidates(fixture_brief(), "SOL", root=self.root, now=self.now), base)      # noqa: E731
+
+        def strip(out):
+            """Вторая итерация (задача 31): в режиме без применения активное правило даёт только поле shadow_hits — решение прежнее."""
+            return [dict((k, v) for k, v in c.items() if k != "shadow_hits") for c in out]
+
+        same = lambda: self.assertEqual(strip(cands.candidates(fixture_brief(), "SOL", root=self.root, now=self.now)), base)      # noqa: E731
         same()                                                                                            # нет базы
         make_db(self.root, self.now, with_rule=False)
         lease(self.root, self.now)
+        self.assertEqual(cands.candidates(fixture_brief(), "SOL", root=self.root, now=self.now), base)    # пустой rulebook: поле в поле
         same()                                                                                            # пустой rulebook R-0001
         shutil.rmtree(self.root)
         os.makedirs(self.root)

@@ -35,6 +35,8 @@ from tb.learnloop import clusters as CL
 from tb.learnloop import hypref as HR
 from tb.learnloop import promote as PR
 from tb.learnloop import reconcile as RC
+from tb.learnloop import retro as RT
+from tb.learnloop import brainref as BR
 from tb.learnloop import trial as TR
 from tb.learnloop import versions as V
 from tb.learnloop import watch as WA
@@ -173,6 +175,8 @@ def default_steps():
         Step("holdouts", "daily", step_holdouts),
         Step("register", "daily", TR.step_register),                                     # trial.register_pending для новых уроков hyp
         Step("day_review", "daily", CA.step_day_review),             # задача 27: роль day_reviewer через порт; без демона/роли LLM_FALSE (llm=false)
+        Step("brain_ref", "daily", BR.step_brain_ref),                # задача 31: справочные уроки мозга (lessons.propose с порогами brain_ref, evidence.ref=true)
+        Step("retro", "daily", RT.step_retro),                       # задача 28: раз в неделю UTC роль retro через порт или LLM_FALSE; иначе NOT_DUE
         Step("verdicts", "hourly", TR.step_verdicts, interval="verdict_s", group="verdict"),
         Step("promote", "hourly", PR.step_promote, interval="verdict_s", group="verdict"),        # пересечения, LOSS_CAP, лимит, promotion_ready
         Step("bounds", "hourly", step_bounds, interval="verdict_s"),
