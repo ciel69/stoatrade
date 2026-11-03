@@ -1,5 +1,8 @@
 """Уроки как гипотезы: `state/lessons.jsonl` (08 п. 4). Формулировки из шаблонов (cond + claim), без свободного текста.
 
+Хранилище по `store` из config/memory.json (R2.9b): "jsonl" (по умолчанию) - файл, как прежде; "sqlite" - таблица lesson_rows базы знаний
+(tb.knowledge.memstore), JSONL не открывается; режим перечитывается под lessons.lock при каждой записи.
+
 Файл append-only с хеш-цепочкой (chain.py), каждая строка = полное состояние урока (rev растёт, kind new|update). Статусы:
 hyp -> confirmed (n_closed>=30 и >=5 дней и >=2 режимов, либо >=15 с эффектом |diff|>t*se с поправкой Бонферрони на число активных уроков, либо решение
 владельца), rejected (новые случаи опровергают или владелец), expired (срок годности без подтверждений), merged (дубликат по условию).
@@ -318,13 +321,44 @@ def conf_eff(lesson, now, cfg):
 
 # ---------------------------------------------------------------- хранилище
 
+def _store(root):
+    from tb.knowledge import memstore
+    return memstore.mode(root)
+
+
+def _rows(root):
+    """Строки хранилища уроков по store (R2.9b): "jsonl" - lessons.jsonl (отсутствующий файл = пусто), "sqlite" - таблица lesson_rows."""
+    if _store(root) == "sqlite":
+        from tb.knowledge import memstore
+        return memstore.snapshot(root, "lesson_rows")[1]           # общие с кешем снимка: read_all отдаёт копии
+    return chain.read(lessons_path(root))[0]
+
+
+def _tail(root):
+    if _store(root) == "sqlite":
+        from tb.knowledge import memstore
+        return memstore.tail(root, "lesson_rows")
+    return chain.tail(lessons_path(root))
+
+
+def _append(root, rec):
+    """Запись строки; режим читается под lessons.lock (перенос держит её же)."""
+    with FileLock(lessons_lock(root), wait=chain.LOCK_WAIT_S):
+        if _store(root) != "sqlite":
+            return chain.append(lessons_path(root), lessons_lock(root), rec, max_bytes=LINE_MAX)
+        from tb.knowledge import memstore
+        return memstore.append(root, "lesson_rows", rec, max_bytes=LINE_MAX)
+
+
 def read_all(root=None):
     """-> {lesson_id: последнее состояние} (битые строки пропущены)."""
-    rows, _ = chain.read(lessons_path(root))
+    rows = _rows(root)
     out = {}
     for r in rows:
         if r.get("schema") == SCHEMA and r.get("lesson_id"):
             out[r["lesson_id"]] = r
+    if out and _store(root) == "sqlite":
+        out = dict((k, _json_copy(v)) for k, v in out.items())
     return out
 
 
@@ -348,7 +382,7 @@ def _write(root, rec):
     errs = privacy.privacy_scan(rec)
     if errs:
         raise ValueError("; ".join(errs))
-    return chain.append(lessons_path(root), lessons_lock(root), rec, max_bytes=LINE_MAX)
+    return _append(root, rec)
 
 
 def _hist(l, now, status, reason):
@@ -367,7 +401,7 @@ class LessonRefused(ValueError):
 
 def _line_bytes(root, rec):
     """Точный размер строки rec в lessons.jsonl (с txt, seq, prev, h); вызывать под lessons.lock, иначе seq может устареть."""
-    seq, last_h, _nl = chain.tail(lessons_path(root))
+    seq, last_h, _nl = _tail(root)
     out = dict(rec, txt=render_txt(rec), seq=seq + 1, prev=last_h, h="0" * 16)
     return len(chain.canon(out).encode("utf-8"))
 

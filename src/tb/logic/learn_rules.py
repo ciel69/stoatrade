@@ -2,9 +2,19 @@
 
 Первая итерация знает один вид правила `skip_when`: правило может только запретить вход (кандидат `ok=false` с кодом `RULE_<id>`, план — `E_RULE_<id>`),
 не добавляет вход, не создаёт кандидата и не меняет размер, плечо, стоп и тейки. Разрешённые входы с правилами — подмножество разрешённых без них
-(свойство 1). Размерные виды (`size_cap`, `require_confirm`) не реализованы: при `allow_size_rules=false` они отклоняются как размерные, при `true` —
-как ещё не реализованные; применены не бывают никогда. Неизвестный вид отклоняется и на записи (validate_rule), и при чтении (apply пропускает
-правило и перечисляет его в `blocked`); результат обработчика вида, который не является чистым запретом, тоже даёт `blocked` (BOUNDS_BLOCKED).
+(свойство 1). Неизвестный вид отклоняется и на записи (validate_rule), и при чтении (apply пропускает правило и перечисляет его в `blocked`);
+результат обработчика вида, который не является чистым запретом, тоже даёт `blocked` (BOUNDS_BLOCKED).
+
+Размерные виды (вторая итерация, задача 29; Requirement 8.2, 8.5, 8.6; решение владельца 3; ROADMAP R7.2):
+  - при `allow_size_rules=false` (по умолчанию) `size_cap` и `require_confirm` не создаются (validate_rule — ошибка «выключены»), не применяются
+    (apply перечисляет их в `blocked`) и при чтении отклоняются; поведение первой итерации не меняется, ключей размера в ответе apply нет;
+  - `size_cap` при `allow_size_rules=true`: param {"size_mult": x}, 0 < x < 1; срабатывание даёт множитель размера x (только снижение), вход не
+    снимает и не добавляет; несколько срабатываний — минимальный множитель. Итог для плана — bounded_size_mult: min(size_mult плана, потолок уровня
+    риска) × множитель правил, то есть не выше потолка и не выше размера без правил; размер и плечо по-прежнему считает guard (правило стоит до него);
+  - `require_confirm` объявлен, но не порождается, пока нет парной политики на тех же сигналах (R1.3/R4): validate_rule отклоняет его и при
+    `allow_size_rules=true` (NOT_AVAILABLE), поэтому он не создаётся (BAD_RULE) и не применяется (blocked).
+Шлюз и мозг (rulebook_view, brain/cands, gateway) читают правила без allow_size_rules, поэтому размерные правила там не действуют до отдельного
+указания владельца.
 
 Правило (как его отдают tb.knowledge.rulebook_view и tb.learnloop.versions):
     {"rule_id": "RL0001", "kind": "skip_when", "cond": [{feature, op, value}], "param": {}, "scope": {"policy", "kinds", "side", "entry"},
@@ -17,8 +27,10 @@ import re
 
 from tb.logic import learn_cond as LC
 
-RULE_KINDS = ("skip_when",)                     # вторая итерация: + "size_cap", "require_confirm" при allow_size_rules
+RULE_KINDS = ("skip_when",)                     # виды при allow_size_rules=false; при true — kinds(True)
 SIZE_KINDS = ("size_cap", "require_confirm")
+SIZE_IMPL = ("size_cap",)                       # размерные виды, которые реализованы (require_confirm ждёт парной политики)
+NOT_AVAILABLE = "NOT_AVAILABLE"
 STATUSES = ("trial", "active", "disabled", "rejected")
 TERMINAL = ("disabled", "rejected")
 SCOPE_SIDES = ("with_dir", "against_dir", "any")
@@ -98,9 +110,23 @@ def _validate_scope(scope):
     return errs
 
 
+def kinds(allow_size_rules=False):
+    """Виды, годные к записи и применению: skip_when; при allow_size_rules=true ещё реализованные размерные (size_cap)."""
+    return RULE_KINDS + (SIZE_IMPL if allow_size_rules else ())
+
+
+def _num01(x):
+    """Число строго в (0, 1) (bool не число)."""
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and x == x and 0.0 < float(x) < 1.0
+
+
+valid_size_mult = _num01                        # параметр size_cap годен (для tb.learnloop.trial.verdict_size)
+
+
 def validate_rule(rule, allow_size_rules=False):
-    """-> список ошибок (пусто — правило годно к записи и применению). Вид из RULE_KINDS, условие из RULE_FEATURES и словаря (learn_cond.validate_cond),
-    параметр skip_when пуст, scope области проверки, env_norm. Размерные виды отклоняются всегда (при allow_size_rules=false — как размерные)."""
+    """-> список ошибок (пусто — правило годно к записи и применению). Вид из kinds(allow_size_rules), условие из RULE_FEATURES и словаря
+    (learn_cond.validate_cond), параметр skip_when пуст, у size_cap {"size_mult": (0,1)}, scope области проверки, env_norm.
+    Размерные виды при allow_size_rules=false отклоняются как выключенные; require_confirm отклоняется всегда (NOT_AVAILABLE)."""
     if not isinstance(rule, dict):
         return ["rule: словарь"]
     errs = []
@@ -108,14 +134,18 @@ def validate_rule(rule, allow_size_rules=False):
     if rid is not None and not (isinstance(rid, str) and RE_RULE_ID.match(rid)):
         errs.append("rule_id: RL и 4-6 цифр")
     kind = rule.get("kind")
-    if kind in SIZE_KINDS:
-        errs.append("kind %s: размерные правила %s" % (kind, "не реализованы" if allow_size_rules else "выключены (allow_size_rules=false)"))
-    elif kind not in RULE_KINDS:
-        errs.append("kind %r не из %s" % (kind, list(RULE_KINDS)))
+    if kind in SIZE_KINDS and not allow_size_rules:
+        errs.append("kind %s: размерные правила выключены (allow_size_rules=false)" % kind)
+    elif kind in SIZE_KINDS and kind not in SIZE_IMPL:
+        errs.append("kind %s: %s, нет парной политики на тех же сигналах (R1.3/R4)" % (kind, NOT_AVAILABLE))
+    elif kind not in kinds(allow_size_rules):
+        errs.append("kind %r не из %s" % (kind, list(kinds(allow_size_rules))))
     errs.extend(LC.validate_cond(rule.get("cond")))
     param = rule.get("param", {})
     if kind == "skip_when" and param not in ({}, None):
         errs.append("param: у skip_when параметров нет")
+    if kind == "size_cap" and allow_size_rules and not (isinstance(param, dict) and set(param) == {"size_mult"} and _num01(param["size_mult"])):
+        errs.append("param: у size_cap {\"size_mult\": x}, 0 < x < 1 (только снижение размера)")
     errs.extend(_validate_scope(rule.get("scope")))
     if rule.get("env_norm") is not None and rule.get("env_norm") not in ENV_NORMS:
         errs.append("env_norm не из %s" % list(ENV_NORMS))
@@ -164,8 +194,23 @@ def _skip_when(rule, cand, feats):
     return {"skip": evaluate(rule, feats) == "hit"}
 
 
-# вид -> обработчик (rule, cand, feats) -> {"skip": bool}. Результат с другими ключами или не-bool — не чистое ужесточение: BOUNDS_BLOCKED.
-HANDLERS = {"skip_when": _skip_when}
+def _size_cap(rule, cand, feats):
+    return {"size_mult": float(rule["param"]["size_mult"]) if evaluate(rule, feats) == "hit" else 1.0}
+
+
+# вид -> обработчик (rule, cand, feats). skip_when -> {"skip": bool}; size_cap -> {"size_mult": x}, 0 < x <= 1. Результат другой формы
+# (лишние ключи, не-bool, множитель вне (0, 1]) — не чистое ужесточение: BOUNDS_BLOCKED. size_cap вызывается, только если allow_size_rules=true.
+HANDLERS = {"skip_when": _skip_when, "size_cap": _size_cap}
+
+
+def _pure(kind, res):
+    """Результат обработчика — чистое ужесточение своего вида (запрет или снижение размера, ничего больше)."""
+    if not isinstance(res, dict):
+        return False
+    if kind == "size_cap":
+        m = res.get("size_mult")
+        return set(res) == {"size_mult"} and isinstance(m, (int, float)) and not isinstance(m, bool) and m == m and 0.0 < float(m) <= 1.0
+    return set(res) == {"skip"} and isinstance(res["skip"], bool)
 
 
 def _base_ok(cand):
@@ -187,34 +232,44 @@ def apply(rules, cand, feats, ctx=None):
     "allow_size_rules": bool}. В режиме без применения ничего не оценивается (совпадения не пишутся, shadow_hits — вторая итерация).
     Применяются только правила со статусом active (статус не указан — active), годные по validate_rule и с env_norm решения (если оно задано).
     eval — оценённые в области правила (hit или pass), missing — правила, которые нельзя оценить (нет события, стороны или признака), out — молча.
-    ok = исходное ok кандидата (у плана — True) и ни одного hit: правило может только снять разрешение."""
+    ok = исходное ok кандидата (у плана — True) и ни одного hit: правило может только снять разрешение.
+
+    Только при ctx.allow_size_rules=true в ответе есть "size_mult" (минимальный множитель сработавших size_cap, 1.0 без срабатываний, всегда в (0, 1])
+    и "size_hits" ([id]); size_cap не меняет ok и fail. Итог размера плана — bounded_size_mult (не выше потолка уровня риска)."""
     ctx = ctx or {}
     lst, view_apply = _rules_of(rules)
     on = ctx.get("apply", True) is not False and view_apply is not False
+    allow_size = bool(ctx.get("allow_size_rules"))
     out = {"ok": _base_ok(cand), "fail": None, "hits": [], "eval": [], "missing": [], "blocked": [], "apply": bool(on)}
+    if allow_size:
+        out.update(size_mult=1.0, size_hits=[])
     if not on:
         return out
     env = ctx.get("env_norm")
-    allow_size = bool(ctx.get("allow_size_rules"))
     for r in sorted((x for x in lst if isinstance(x, dict)), key=lambda x: str(x.get("rule_id"))):
         if r.get("status", "active") != "active":
             continue
         rid = r.get("rule_id")
-        if validate_rule(r, allow_size) or r.get("kind") not in HANDLERS:
+        kind = r.get("kind")
+        if validate_rule(r, allow_size) or kind not in HANDLERS or (kind in SIZE_KINDS and not allow_size):
             out["blocked"].append(rid)
             continue
         if env is not None and r.get("env_norm") not in (None, env):
             continue
-        res = HANDLERS[r["kind"]](r, cand, feats if isinstance(feats, dict) else {})
-        if not isinstance(res, dict) or set(res) != {"skip"} or not isinstance(res["skip"], bool):
-            out["blocked"].append(rid)                   # не чистый запрет (размер, плечо, новый вход): правило не применяется
+        res = HANDLERS[kind](r, cand, feats if isinstance(feats, dict) else {})
+        if not _pure(kind, res):
+            out["blocked"].append(rid)                   # не чистое ужесточение (рост размера, плечо, новый вход): правило не применяется
             continue
         state = evaluate(r, feats if isinstance(feats, dict) else {})
         if state == "missing":
             out["missing"].append(rid)
         elif state in ("hit", "pass"):
             out["eval"].append(rid)
-            if res["skip"]:
+            if kind == "size_cap":
+                if float(res["size_mult"]) < 1.0:
+                    out["size_hits"].append(rid)
+                    out["size_mult"] = min(out["size_mult"], float(res["size_mult"]))
+            elif res["skip"]:
                 out["hits"].append(rid)
     if out["hits"]:
         out["ok"] = False
@@ -225,6 +280,25 @@ def apply(rules, cand, feats, ctx=None):
 def allowed(rules, cand, feats, ctx=None):
     """Разрешён ли вход с этими правилами (исходное ok и ни одного срабатывания)."""
     return apply(rules, cand, feats, ctx)["ok"]
+
+
+def _fnum(x):
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and x == x and x not in (float("inf"), float("-inf"))
+
+
+def bounded_size_mult(size_mult, res, ceiling=None):
+    """Итоговый size_mult плана под размерными правилами: min(size_mult плана, ceiling) × множитель apply (res или число), с отсечкой сверху тем же
+    минимумом. ceiling — потолок уровня риска (risklevels.size_mult_cap: min(уровень, agents.json max_size_mult)); None — только size_mult плана.
+    Гарантии: результат в [0, min(size_mult, ceiling)] — не выше потолка уровня риска и не выше размера без правил (только снижение); множитель
+    вне (0, 1] или нечисло -> 1.0 (правило не применяется, BOUNDS_BLOCKED уже записан apply). Размер и плечо считает guard (Gate.size: qty × size_mult),
+    эта функция только сужает множитель."""
+    base = float(size_mult) if _fnum(size_mult) and size_mult > 0 else 0.0
+    if _fnum(ceiling):
+        base = min(base, max(0.0, float(ceiling)))
+    m = res.get("size_mult", 1.0) if isinstance(res, dict) else res
+    if not (_fnum(m) and 0.0 < float(m) <= 1.0):
+        m = 1.0
+    return min(base, base * float(m))
 
 
 # ---------------------------------------------------------------- ужесточение
@@ -241,18 +315,22 @@ def _active(rules):
 
 
 def is_tightening(before, after, probes=(), allow_size_rules=False):
-    """allowed(after) ⊆ allowed(before): каждое правило before есть в after без изменений, все правила after годны и вида skip_when (запрет);
-    на пробах [(cand, feats, ctx)] разрешённое after разрешено и before. Пустой after при непустом before — ослабление (откат так и проверяется: False)."""
+    """allowed(after) ⊆ allowed(before): каждое правило before есть в after без изменений, все правила after годны и вида skip_when (запрет) или,
+    при allow_size_rules=true, size_cap (снижение размера); на пробах [(cand, feats, ctx)] разрешённое after разрешено и before, а множитель размера
+    after не выше before. Пустой after при непустом before — ослабление (откат так и проверяется: False)."""
     b, a = _active(before), _active(after)
-    if any(validate_rule(r, allow_size_rules) or r.get("kind") != "skip_when" for r in a):
+    if any(validate_rule(r, allow_size_rules) or r.get("kind") not in kinds(allow_size_rules) for r in a):
         return False
     keys_a = set(rule_key(r) for r in a)
     if any(rule_key(r) not in keys_a for r in b):
         return False
     for p in probes:
         cand, feats = p[0], p[1]
-        ctx = p[2] if len(p) > 2 else None
-        if allowed(a, cand, feats, ctx) and not allowed(b, cand, feats, ctx):
+        ctx = dict(p[2] if len(p) > 2 and p[2] else {}, allow_size_rules=bool(allow_size_rules))
+        ra, rb = apply(a, cand, feats, ctx), apply(b, cand, feats, ctx)
+        if ra["ok"] and not rb["ok"]:
+            return False
+        if ra.get("size_mult", 1.0) > rb.get("size_mult", 1.0) + 1e-12:
             return False
     return True
 

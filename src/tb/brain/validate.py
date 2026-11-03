@@ -192,7 +192,24 @@ CASEREVIEW = {"type": "object", "required": ["schema", "verdict", "right", "impr
 READER = {"type": "object", "required": ["schema", "items"], "properties": {
     "schema": {"const": "tb.reader/1"}, "items": {"type": "array", "maxItems": 10, "items": {"type": "object", "additionalProperties": _FREE}}}}
 
-SCHEMAS = {"pm/1": PM, "entry/1": ENTRY, "entry_reply/1": ENTRY_REPLY, "review/1": REVIEW, "casereview/1": CASEREVIEW, "dayplan/1": DAYPLAN, "audit/1": AUDIT, "reader/1": READER}
+# Роли цикла обучения day_reviewer (tb.lesson_cand/1) и retro (tb.retro/1), R2 вторая итерация (Requirements 12.2, 17.4, 17.5). Двухуровневая
+# проверка: здесь — только уровень ответа (JSON, schema, day_id / week_id, неизвестное поле верхнего уровня отклоняют ответ целиком, проверка
+# id — semantic по контексту из задания); элементы items проверяет код цикла (tb.learnloop.candidates: BAD_SCHEMA, NOT_IN_DICT, DUPLICATE, TOO_MANY
+# отклоняют только элемент). Поэтому элемент здесь — объект из идентификаторов, чисел и коротких списков без свободного текста (RE_LTOKEN без пробелов).
+RE_LTOKEN = r"^[A-Za-z0-9_.<>=+-]{1,40}$"
+_LTOK = {"type": "string", "pattern": RE_LTOKEN}
+_LSCALAR = {"anyOf": [_LTOK, {"type": "number"}]}
+_LOBJ = {"type": "object", "additionalProperties": {"anyOf": [_LTOK, {"type": "number"}, {"type": "array", "maxItems": 8, "items": _LSCALAR}]}}
+_LVAL = {"anyOf": [_LTOK, {"type": "number"}, _LOBJ, {"type": "array", "maxItems": 8, "items": {"anyOf": [_LTOK, {"type": "number"}, _LOBJ]}}]}
+LEARN_ITEMS = {"type": "array", "maxItems": 20, "items": {"type": "object", "additionalProperties": _LVAL}}
+LESSON_CAND = {"type": "object", "required": ["schema", "day_id", "items"], "properties": {
+    "schema": {"const": "tb.lesson_cand/1"}, "day_id": {"type": "string", "pattern": r"^D-\d{8}$"}, "items": LEARN_ITEMS}}
+RETRO = {"type": "object", "required": ["schema", "week_id", "items"], "properties": {
+    "schema": {"const": "tb.retro/1"}, "week_id": {"type": "string", "pattern": r"^W-\d{4}-\d{2}$"}, "items": LEARN_ITEMS}}
+
+SCHEMAS = {"pm/1": PM, "entry/1": ENTRY, "entry_reply/1": ENTRY_REPLY, "review/1": REVIEW, "casereview/1": CASEREVIEW, "dayplan/1": DAYPLAN, "audit/1": AUDIT, "reader/1": READER,
+           "lesson_cand/1": LESSON_CAND, "retro/1": RETRO}
+LEARN_ID = {"lesson_cand/1": "day_id", "retro/1": "week_id"}
 
 
 def schema_for(schema_id):
@@ -502,6 +519,13 @@ def audit_context(inp):
     return {"day_id": inp.get("day_id"), "items": items, "det": det, "llm_unavailable": bool(inp.get("llm_unavailable"))}
 
 
+def learn_context(inp):
+    """Контекст lesson_cand/1 и retro/1 из входа задания цикла (данные системы): {"id": day_id или week_id}; ответ с другим id отклоняется целиком."""
+    inp = inp if isinstance(inp, dict) else {}
+    v = inp.get("day_id") or inp.get("week_id")
+    return {"id": v if isinstance(v, str) else None}
+
+
 # ------------------------------------------------------------------ смысловая проверка
 def semantic(schema_id, obj, ctx=None):
     """Дополнительные проверки после схемы -> список кодов (пусто = ок). ctx строится из данных системы (pm_context/dayplan_context/audit_context)."""
@@ -520,6 +544,9 @@ def semantic(schema_id, obj, ctx=None):
         return _audit(obj, ctx)
     if schema_id == "casereview/1":
         return _casereview(obj, ctx)
+    if schema_id in LEARN_ID:
+        want = ctx.get("id")
+        return ["BAD_ID"] if want is not None and obj.get(LEARN_ID[schema_id]) != want else []
     return []
 
 

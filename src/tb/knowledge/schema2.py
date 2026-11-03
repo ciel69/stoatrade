@@ -1,4 +1,4 @@
-"""Схема цикла обучения v2a в state/knowledge.sqlite (design.md, «SQLite state/knowledge.sqlite, схема v2a»): DDL, триггеры, коды, лимиты. Только данные.
+"""Схема цикла обучения v2a (и v2b второй итерации: case_rows, lesson_rows) в state/knowledge.sqlite (design.md, «SQLite state/knowledge.sqlite, схема v2a»): DDL, триггеры, коды, лимиты. Только данные.
 
 Версия хранится в meta.knowledge_v2_ver отдельно от labels_schema_ver; миграция - knowledge.store2.migrate_v2a, а не labels.schema.MIGRATIONS.
 """
@@ -98,3 +98,36 @@ V2A.append("CREATE TRIGGER tr_trials_nu BEFORE UPDATE OF %s ON trials BEGIN SELE
 V2A.append("CREATE TRIGGER tr_trials_nd BEFORE DELETE ON trials BEGIN SELECT RAISE(ABORT, 'APPEND_ONLY trials'); END")
 
 TRIGGERS = tuple(["tr_%s_%s" % (t, w) for t in APPEND_ONLY + INSERT_ONLY for w in ("nu", "nd")] + ["tr_trials_nu", "tr_trials_nd"])
+
+# ---- v2b (вторая итерация, R2.9b, Requirement 3.1): случаи и уроки в базе. Отдельный ключ версии meta.knowledge_v2b_ver: v2a-база без таблиц
+# v2b остаётся зелёной (ready/TABLES/TRIGGERS v2a их не требуют). Строка таблицы = строка прежнего JSONL: body - канонический JSON строки без
+# seq/prev/h, а seq/prev/h - колонки; h = sha256(prev + канон. JSON строки с seq и prev)[:16] (как memory.chain), поэтому цепочка базы совпадает
+# с цепочкой целого файла, а export-jsonl воспроизводит прежний формат.
+V2B_VER = 1
+META_V2B_KEY = "knowledge_v2b_ver"
+MEM_TABLES = ("case_rows", "lesson_rows")
+MEM_KEY = {"case_rows": "case_id", "lesson_rows": "lesson_id"}
+MEM_LOCK = {"case_rows": "cases.lock", "lesson_rows": "lessons.lock"}          # те же блокировки, что у memory.cases / memory.lessons
+MEM_FILE = {"case_rows": "cases.jsonl", "lesson_rows": "lessons.jsonl"}
+SPOOL_NAME = "knowledge.spool.jsonl"     # очередь записей при недоступной базе (Requirement 3.7)
+SPOOL_LOCK = "knowledge.spool.lock"
+PRE_SUFFIX = ".pre-r29"                  # прежние JSONL после переноса
+STORES = ("jsonl", "sqlite")
+
+# коды второй итерации
+PLATFORM_RUNNING = "PLATFORM_RUNNING"
+SPOOL_PENDING = "SPOOL_PENDING"
+FOLD_MISMATCH = "FOLD_MISMATCH"
+
+V2B = [
+    """CREATE TABLE case_rows(seq INTEGER PRIMARY KEY, case_id TEXT NOT NULL, rev INTEGER NOT NULL, kind TEXT NOT NULL, ts TEXT, t_ts INTEGER, type TEXT,
+  mode TEXT, body TEXT NOT NULL, prev TEXT NOT NULL, h TEXT NOT NULL, UNIQUE(case_id, rev))""",
+    "CREATE INDEX ix_case_rows_mt ON case_rows(mode, type, t_ts)",
+    """CREATE TABLE lesson_rows(seq INTEGER PRIMARY KEY, lesson_id TEXT NOT NULL, rev INTEGER NOT NULL, kind TEXT NOT NULL, ts TEXT, status TEXT, src TEXT,
+  body TEXT NOT NULL, prev TEXT NOT NULL, h TEXT NOT NULL, UNIQUE(lesson_id, rev))""",
+]
+for _t in MEM_TABLES:
+    V2B.append("CREATE TRIGGER tr_%s_nu BEFORE UPDATE ON %s BEGIN SELECT RAISE(ABORT, 'APPEND_ONLY %s'); END" % (_t, _t, _t))
+    V2B.append("CREATE TRIGGER tr_%s_nd BEFORE DELETE ON %s BEGIN SELECT RAISE(ABORT, 'APPEND_ONLY %s'); END" % (_t, _t, _t))
+V2B_INDEXES = ("ix_case_rows_mt",)
+V2B_TRIGGERS = tuple("tr_%s_%s" % (t, w) for t in MEM_TABLES for w in ("nu", "nd"))

@@ -15,7 +15,7 @@ import threading
 import time
 
 from tb import paths
-from tb.brain import jobs, lifejobs, swap
+from tb.brain import jobs, learnjobs, lifejobs, swap
 from tb.brain.runner import Runner
 from tb.core import doorbell
 
@@ -28,7 +28,8 @@ FAST_LANE_PRIO = 2          # быстрая полоса: связь/kill/ли�
 def _worker(runner, poll_s, bell=None, max_prio=None):
     while not runner.stop_event.is_set():
         try:
-            did = runner.step(max_prio=max_prio) if max_prio is not None else (lifejobs.step(runner) or runner.step())      # задания жизненного цикла L-* (WP14) раньше событийных
+            # задания жизненного цикла L-* (WP14) раньше событийных, затем задания цикла обучения L-* kind=learnloop (R2), затем события
+            did = runner.step(max_prio=max_prio) if max_prio is not None else (lifejobs.step(runner) or learnjobs.step(runner) or runner.step())
         except Exception:        # воркер не умирает от одного плохого задания: ошибка уже учтена в process
             did = False
         if not did:
@@ -48,7 +49,12 @@ def _seed_rates(runner):
 
 def heartbeat(runner):
     from tb.platform import services as S
-    S.write_hb("brain", runner.snapshot(), root=runner.root, now=runner.clock())
+    snap = runner.snapshot()
+    try:
+        snap["learn_roles"] = learnjobs.roles_status(runner)       # готовность ролей цикла обучения: по ней tb.learnloop.port решает, ставить ли задание
+    except Exception:  # noqa: BLE001 - heartbeat не падает из-за ролей цикла
+        snap["learn_roles"] = {}
+    S.write_hb("brain", snap, root=runner.root, now=runner.clock())
 
 
 def run_daemon(runner=None, root=None, max_seconds=None, poll_s=None, join_s=8.0):
@@ -93,6 +99,7 @@ def run_daemon(runner=None, root=None, max_seconds=None, poll_s=None, join_s=8.0
             if now - last_prune >= 3600:
                 jobs.prune(root, r.clock(), rt["keep_jobs_s"])
                 lifejobs.prune(root, time.time(), rt["keep_jobs_s"])
+                learnjobs.prune(root, time.time())          # задания learnloop, от которых писатель отказался (deadline_ts + 1 ч)
                 last_prune = now
             if now - last_requeue >= 60:
                 with r._lk:

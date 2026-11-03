@@ -22,7 +22,7 @@ from tb.brain import common, entryplan, validate
 from tb.llm import schema as schema_mod
 from tb.llm.types import LLMError, Req, Resp, Usage, assistant, user
 
-ROLES = ("position_manager", "morning_analyst", "reviewer", "day_auditor", "entry_scout")
+ROLES = ("position_manager", "morning_analyst", "reviewer", "day_auditor", "entry_scout", "day_reviewer", "retro")
 LIVE_RISK = ("position_manager", "morning_analyst", "day_auditor")
 EVAL_DEFAULTS = {"min_valid_first": 0.95, "max_critical_violations": 0, "max_violation_rate": 0.05, "min_decision_match": 0.8, "max_usd": 0.5}
 
@@ -50,7 +50,8 @@ def load_scenarios(root=None, role=None):
 def render(role_id, sc):
     """Текст запроса: те же блоки и порядок, что собирает раннер (<brief>, <event>, <facts>, <audit_input>, <case>, <after_decision>)."""
     inp = sc.get("input") or {}
-    order = {"position_manager": ("brief", "event"), "morning_analyst": ("brief", "facts"), "day_auditor": ("audit_input",), "reviewer": ("case", "after_decision"), "entry_scout": ("brief", "event")}[role_id]
+    order = {"position_manager": ("brief", "event"), "morning_analyst": ("brief", "facts"), "day_auditor": ("audit_input",), "reviewer": ("case", "after_decision"), "entry_scout": ("brief", "event"),
+             "day_reviewer": ("learn_input",), "retro": ("learn_input",)}[role_id]
     return "\n".join("<%s>%s</%s>" % (k, common.dumps(inp[k]), k) for k in order if k in inp)
 
 
@@ -68,6 +69,8 @@ def context(role_id, sc):
         ctx = validate.dayplan_context(inp.get("brief"), inp.get("facts"))
     elif role_id == "day_auditor":
         ctx = validate.audit_context(inp.get("audit_input"))
+    elif role_id in ("day_reviewer", "retro"):
+        ctx = validate.learn_context(inp.get("learn_input"))
     else:
         ctx = {}
     ctx.update(sc.get("ctx") or {})

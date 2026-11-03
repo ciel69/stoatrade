@@ -1,4 +1,5 @@
-"""`./tb knowledge <команда>`: verify | backup | restore [--from FILE] | stats | disable-v2 | migrate-v2a (R2.9a, Requirement 2.4, 2.7, 2.10, 16.4).
+"""`./tb knowledge <команда>`: verify | backup | restore [--from FILE] | stats | disable-v2 | migrate-v2a (R2.9a, Requirement 2.4, 2.7, 2.10, 16.4);
+вторая итерация (R2.9b, Requirement 3.2-3.8): migrate [--dry-run] | export-jsonl [--out DIR] | replay-spool.
 
 Вывод: JSON одной строкой (--text: кратко для человека). Коды: 0 успех / зелёный (verify: и жёлтый); 1 - красный verify, отказ команды, нет базы;
 2 - ошибка использования. Сеть и ключи не используются; конфиг цикла только читается (флаг enabled для disable-v2 и migrate-v2a).
@@ -111,6 +112,69 @@ def cmd_migrate(a, root):
     return 0
 
 
+def _mig():
+    from tb.knowledge import migrate2
+    return migrate2
+
+
+def cmd_migrate_mem(a, root):
+    """./tb knowledge migrate [--dry-run]: перенос cases.jsonl / lessons.jsonl в базу (R2.9b)."""
+    M = _mig()
+    if a.dry_run:
+        rep = M.dry_run(root)
+        lines = ["migrate --dry-run: %s (store=%s)%s" % ("готово к переносу" if rep["ok"] else "ПРЕПЯТСТВИЯ " + ",".join(rep["blocking"]), rep["store"],
+                                                         "; платформа работает: %s" % "; ".join(rep["platform_running"][:3]) if rep["platform_running"] else "")]
+        for t, r in sorted(rep["tables"].items()):
+            lines.append("  %s: строк %d, записей %d, битых %d, расхождений хешей %d, дублей %d/%d, без ключа %d" % (
+                r["path"], r["rows"], r["items"], r["broken"], r["hash_mismatch"], r["dup_same"], r["n_dup_conflict"], r["n_bad_rows"]))
+        lines.append("  база: есть=%s v2a=%s v2b=%s строк=%s" % (rep["db"]["db"], rep["db"]["v2a"], rep["db"]["v2b"], rep["db"]["rows"]))
+        _out(rep, a.text, lines)
+        return 0 if rep["ok"] else 1
+    try:
+        rep = M.migrate(root, settle_s=a.settle)
+    except M.MigrateError as e:
+        _err(str(e))
+        _out({"ok": False, "code": e.code, "msg": str(e), "detail": e.detail}, a.text, ["migrate: ОТКАЗ %s" % e])
+        return 1
+    _out(rep, a.text, ["migrate: %s; store=%s; переименовано: %s; копии: %s, %s%s" % (
+        "перенесено" if rep["ok"] else "ПЕРЕНЕСЕНО, НО ПОЯВИЛИСЬ JSONL (%s)" % ",".join(rep["jsonl_after_switch"] + rep["jsonl_after_settle"]), rep["store"],
+        ", ".join(rep["renamed"]) or "-", os.path.basename(rep["backup_db"] or "-"), os.path.basename(rep["backup_files"] or "-"),
+        "".join("\n  %s: перенесено %d (уже было %d), записей %d" % (t, r["inserted"], r["already"], r["items"]) for t, r in sorted(rep["tables"].items())))])
+    return 0 if rep["ok"] else 1
+
+
+def cmd_export_jsonl(a, root):
+    """./tb knowledge export-jsonl [--out DIR]: файлы из таблиц; без --out - в state/ и возврат store=jsonl."""
+    M = _mig()
+    try:
+        rep = M.export_jsonl(root, out_dir=a.out)
+    except M.MigrateError as e:
+        _err(str(e))
+        _out({"ok": False, "code": e.code, "msg": str(e)}, a.text, ["export-jsonl: ОТКАЗ %s" % e])
+        return 1
+    _out(rep, a.text, ["export-jsonl: %s; store=%s" % (rep["out"], rep["store"])]
+         + ["  %s: строк %d, записей %d" % (t, r["rows"], r["items"]) for t, r in sorted(rep["tables"].items())])
+    return 0
+
+
+def cmd_replay_spool(a, root):
+    """./tb knowledge replay-spool: очередь state/knowledge.spool.jsonl в базу (идемпотентно по ключу и rev)."""
+    from tb.knowledge import memstore
+    if memstore.mode(root) != "sqlite":
+        _err("store не sqlite: очередь применяется только к базе")
+        return 1
+    try:
+        rep = memstore.replay(root)
+    except (memstore.Unavailable, store2.KnowledgeError, TimeoutError) as e:
+        _err(str(e))
+        _out({"ok": False, "code": getattr(e, "code", type(e).__name__), "msg": str(e)}, a.text, ["replay-spool: ОТКАЗ %s" % e])
+        return 1
+    rep["ok"] = rep["conflicts"] == 0
+    _out(rep, a.text, ["replay-spool: применено %d, уже были %d, перенумеровано %d, конфликтов %d, осталось %d, битых %d" % (
+        rep["applied"], rep["skipped"], rep["renumbered"], rep["conflicts"], rep["left"], rep["broken"])])
+    return 0 if rep["ok"] else 1
+
+
 def build_parser():
     p = argparse.ArgumentParser(prog="tb knowledge", description="база знаний v2: проверка, копии, восстановление, размеры (R2.9a)")
     sub = p.add_subparsers(dest="cmd")
@@ -129,10 +193,20 @@ def build_parser():
     dv.add_argument("--text", action="store_true")
     mg = sub.add_parser("migrate-v2a", help="явно создать таблицы цикла v2a (копия premigrate) и маркер state/knowledge.v2")
     mg.add_argument("--text", action="store_true")
+    mm = sub.add_parser("migrate", help="перенос cases.jsonl / lessons.jsonl в базу (только при остановленной платформе); --dry-run - отчёт без записи")
+    mm.add_argument("--dry-run", dest="dry_run", action="store_true")
+    mm.add_argument("--settle", type=float, default=2.0, help="пауза проверки, что JSONL не появились после переключения, с")
+    mm.add_argument("--text", action="store_true")
+    ex = sub.add_parser("export-jsonl", help="файлы cases.jsonl / lessons.jsonl из базы; без --out - в state/ и возврат store=jsonl")
+    ex.add_argument("--out", default=None, help="каталог для проверочного экспорта (без переключения store)")
+    ex.add_argument("--text", action="store_true")
+    rp = sub.add_parser("replay-spool", help="применить очередь state/knowledge.spool.jsonl к базе (после restore или сбоя)")
+    rp.add_argument("--text", action="store_true")
     return p
 
 
-HANDLERS = {"verify": cmd_verify, "backup": cmd_backup, "restore": cmd_restore, "stats": cmd_stats, "disable-v2": cmd_disable_v2, "migrate-v2a": cmd_migrate}
+HANDLERS = {"verify": cmd_verify, "backup": cmd_backup, "restore": cmd_restore, "stats": cmd_stats, "disable-v2": cmd_disable_v2, "migrate-v2a": cmd_migrate,
+            "migrate": cmd_migrate_mem, "export-jsonl": cmd_export_jsonl, "replay-spool": cmd_replay_spool}
 
 
 def main(argv, root=None):

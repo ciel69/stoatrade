@@ -15,7 +15,7 @@ RE_PROFILE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,29}$")
 RE_TEAM = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,9}$")
 RE_AGENT = re.compile(r"^[a-z][a-z0-9_-]{0,9}$")
 ROLE_SCOPE = {"news_reader": "shared", "reviewer": "shared", "day_auditor": "shared", "morning_analyst": "team", "position_manager": "team",
-              "entry_scout": "team"}
+              "entry_scout": "team", "day_reviewer": "shared", "retro": "shared"}        # day_reviewer, retro: роли цикла обучения R2 (задания learnloop, brain/learnjobs.py)
 THINKING = ("off", "low", "medium", "high")
 FALLBACK_ON = ("timeout", "http_5xx", "rate", "budget", "format_x2")
 

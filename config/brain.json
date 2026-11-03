@@ -54,6 +54,18 @@
    "fallback": [
     "ds-flash"
    ]
+  },
+  "day_reviewer": {
+   "primary": "ds-flash",
+   "fallback": [
+    "ds-pro"
+   ]
+  },
+  "retro": {
+   "primary": "ds-pro",
+   "fallback": [
+    "ds-flash"
+   ]
   }
  },
  "teams": {

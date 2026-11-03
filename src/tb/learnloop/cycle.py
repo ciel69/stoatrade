@@ -2,9 +2,11 @@
 «Надзор за надзором», «Записи rule_eval», «config/learnloop.json»).
 
 Реестр шагов (default_steps) — список Step(name, period, fn): period
-  pass      каждый проход                         rule_eval_import (перенос записей decisions kind="note", what="rule_eval" в rule_evals)
+  pass      каждый проход                         rule_eval_import (перенос записей decisions kind="note", what="rule_eval" в rule_evals),
+                                                  llm_collect (ответы порта заданий модели, задача 27)
   observe   раз в intervals.observe_s (15 мин)     close_clusters (сигнал runtime/knowledge.corrupt проверяет сервис перед шагами observe)
-  daily     первый проход после daily_after UTC     integrity, backup, menu, accept, holdouts (уроки hyp), register (испытания, задача 14)
+  daily     первый проход после daily_after UTC     integrity, backup, menu, accept, holdouts (уроки hyp), register (испытания, задача 14),
+                                                  day_review (задание роли day_reviewer или LLM_FALSE, задача 27)
   hourly    раз в intervals.<interval>              verdicts (14), promote (15), bounds, reconcile (15), watch (16), hypref (36)
 Проход выполняется, когда наступил срок хотя бы одного шага observe/daily/hourly. Шаг — fn(ctx) -> dict (code: OK, MENU, NO_MENU, NOT_DUE,
 NO_DATA, STUB ...). Исключение шага -> STEP_ERROR (ChainBroken -> CHAIN_BROKEN) в learn_events и следующий шаг; повреждение по
@@ -162,6 +164,7 @@ def default_steps():
     """Реестр шагов в порядке выполнения внутри периода (шаги задач 14–16 и 36 настоящие)."""
     return [
         Step("rule_eval_import", "pass", step_rule_eval_import),
+        Step("llm_collect", "pass", CA.step_llm_collect),             # задача 27: ответы порта learnloop -> кандидаты llm; просрочка -> LLM_FALSE
         Step("close_clusters", "observe", step_close_clusters, group="observe"),
         Step("integrity", "daily", step_integrity),
         Step("backup", "daily", step_backup),
@@ -169,6 +172,7 @@ def default_steps():
         Step("accept", "daily", step_accept),
         Step("holdouts", "daily", step_holdouts),
         Step("register", "daily", TR.step_register),                                     # trial.register_pending для новых уроков hyp
+        Step("day_review", "daily", CA.step_day_review),             # задача 27: роль day_reviewer через порт; без демона/роли LLM_FALSE (llm=false)
         Step("verdicts", "hourly", TR.step_verdicts, interval="verdict_s", group="verdict"),
         Step("promote", "hourly", PR.step_promote, interval="verdict_s", group="verdict"),        # пересечения, LOSS_CAP, лимит, promotion_ready
         Step("bounds", "hourly", step_bounds, interval="verdict_s"),

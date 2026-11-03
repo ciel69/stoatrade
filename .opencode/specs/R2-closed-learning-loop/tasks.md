@@ -214,14 +214,14 @@
   - Зависит от: 9, 19, 20, 22
   - _Requirements: 1.4, 15.8_
 
-- [ ] 24. Вторая итерация: перенос случаев и уроков `knowledge.migrate_v2b`, фасад, экспорт, очередь записей (волна 13)
+- [x] 24. Вторая итерация: перенос случаев и уроков `knowledge.migrate_v2b`, фасад, экспорт, очередь записей (волна 13)
   - `case_rows`, `lesson_rows` с цепочкой; `migrate --dry-run`; `migrate` (проверка остановки платформы `PLATFORM_RUNNING`, копии, блокировки, транзакция, сверка `fold`, откат, переименование в `*.pre-r29`, `store="sqlite"`); писатели перечитывают `store` на каждой записи; проверка отсутствия JSONL после переключения; `export-jsonl` и возврат на `jsonl` только после него; правила от `store` не зависят; очередь `knowledge.spool.jsonl` и `replay-spool`; восстановление после `CHAIN_BROKEN` через `restore` и `replay-spool`; отсутствующий `lessons.jsonl` = пусто
   - критерии приёмки: прежние тесты `memory` проходят без правок при обоих `store`; расхождение откатывает перенос; записи после переключения возвращаются экспортом
   - тесты `tests/test_knowledge_migrate.py`: свойство 4 для обоих режимов, параллельный писатель, спул, экспорт после новых записей
   - Зависит от: 4, 23
   - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8_
 
-- [ ] 25. Вторая итерация: поиск похожих по меткам и решениям `tb.knowledge.similar` (волна 13)
+- [x] 25. Вторая итерация: поиск похожих по меткам и решениям `tb.knowledge.similar` (волна 13)
   - `nearest` с предотбором (метки: `type`/`side`/`utc_session`, последние 5000 по `t0`, индекс `(type, side, t0)`; случаи: последние 2000 по `t_ts` режима и типа), мерой `memory.similar.similarity`; ответ ≤ 2 КБ; `similar.labels=false` по умолчанию
   - критерии приёмки: при `source="brain"` ответ равен прежнему `memory.similar.select`; на 100 000 сигналов и 20 000 случаев `both` ≤ 200 мс
   - тесты `tests/test_knowledge_similar.py`: равенство, пропуски, размер, скорость при `TB_SLOW_TESTS=1`
@@ -229,13 +229,14 @@
   - _Requirements: 3.9, 3.10, 3.11, 3.12_
 
 - [ ] 26. Вторая итерация: переключение боевых данных и RUNBOOK (волна 14)
-  - порядок: `migrate --dry-run`, `./tb down`, копии, `migrate`, `./tb up`, `./tb knowledge verify`; возврат через `export-jsonl`; запись в `docs/RUNBOOK.md`
+  - порядок: `migrate --dry-run`, `./tb down`, копии, `migrate`, индекс поиска похожих `knowledge.similar.migrate_v2s` (задача 25; идемпотентно, до этого поиск по меткам работает через `ix_sig_type` медленнее), `./tb up`, `./tb knowledge verify`; возврат через `export-jsonl`; запись в `docs/RUNBOOK.md`
+  - до переключения перевести на фасад `tb.knowledge.memstore` прямых читателей JSONL (найдено при приёмке задачи 24): `memory/tick.py` (проверяет наличие `cases.jsonl` — при sqlite запускал бы `memory.migrate` каждую минуту), `memory/cli.py` (`./tb memory verify` по цепочке `lessons.jsonl`), `memory/diagnose.py:_lessons_state`, `learn/load.py` (ключ кеша по размерам файлов); прогнать `migrate` и `export-jsonl` на полной копии `state/` вместе с `knowledge.sqlite`
   - критерии приёмки: `verify` без разрывов, статус зелёный, мозг получает досье, возврат проверен на копии
   - тесты `tests/test_knowledge_cutover.py` на фикстуре; ручной прогон отчётом
   - Зависит от: 24, 2
   - _Requirements: 3.3, 3.4, 3.5_
 
-- [ ] 27. Вторая итерация: порт заданий, роли `day_reviewer`, `retro`, обработчик в демоне API-мозга (волна 14)
+- [x] 27. Вторая итерация: порт заданий, роли `day_reviewer`, `retro`, обработчик в демоне API-мозга (волна 14)
   - `tb.learnloop.port` (`L-*.json`, `kind="learnloop"`, TTL `deadline_ts` = `llm_job_ttl_s`, захват O_EXCL с обновлением аренды каждые 30 с и `claim_ttl_s` для брошенных, таймаут ожидания результата `llm_wait_s`, `.result.json`), `brain/learnjobs.py` (свой `pending` по `kind`, так как `lifejobs.pending` отбирает только `lifecycle`), подключение в `brain/api_daemon.py` рядом с `lifejobs.step`/`reset_claims`/`prune` (проверено по коду: `reset_claims` снимает все `.claim` без результата, `lifejobs.prune(root, now, keep_s=259200.0)` удаляет любые `L-*.json`/`L-*.claim` старше 3 суток независимо от `kind`, поэтому TTL меньше 3 суток, тест на это); деградация `llm=false` без демона или при недоступной пробе; роли в `config/brain.json:shared_roles`, `brain/conf.py:ROLE_SCOPE`, `brain/validate.py:SCHEMAS`, `brain/evalrun.py:ROLES`, `config/roles/`; схема `tb.lesson_cand/1`, двухуровневая валидация, кандидаты с источником `llm` (`effect` считает код); учёт `state/llm_calls.jsonl` по роли и строка в `brief.economics`; профиль модели из настроек платформы (решение владельца 4), при недоступности `llm=false`
   - критерии приёмки: частично невалидный ответ даёт принятых кандидатов и коды отказов; недоступность модели не останавливает кодовую ветку; `tb.learnloop` не импортирует `tb.brain`/`tb.gateway`/`tb.llm`
   - тесты `tests/test_learnloop_port.py`, `tests/test_brain_learnjobs.py`, `tests/test_learnloop_candidates_llm.py`, фикстуры `tests/fixtures_roles/day_reviewer.json`, `retro.json`
@@ -249,7 +250,7 @@
   - Зависит от: 27
   - _Requirements: 12.1, 12.2, 12.3, 12.4, 12.5_
 
-- [ ] 29. Вторая итерация: размерные правила `size_cap`, `require_confirm` (волна 15)
+- [x] 29. Вторая итерация: размерные правила `size_cap`, `require_confirm` (волна 15)
   - выполняется во второй итерации и только при `allow_size_rules=true` (по решению владельца 3 выключено; включение и разрешения по уровням риска задаёт владелец отдельным указанием); `size_cap` (параметр в (0,1)), испытание по снимкам со снижением R пропорционально; `require_confirm` требует парной политики на тех же сигналах (добавляется отдельным блоком R1.3/R4) и до этого не порождается
   - критерии приёмки: при `allow_size_rules=false` вид не создаётся и не применяется; размер не выше потолка уровня риска
   - тесты `tests/test_logic_learn_rules_size.py`

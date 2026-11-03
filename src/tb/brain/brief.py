@@ -214,17 +214,28 @@ def _b_risk_level(c):
                        "no_confirm": {"allowed": bool(nc.get("allowed")), "size_mult_max": nc.get("size_mult_max")}, "setups_aggr": common.ident(s.get("setups_aggr"))})
 
 
+def learn_usd(rows):
+    """Расход ролей цикла обучения (learnjobs.ROLES) по строкам state/llm_calls.jsonl: агрегация по полю role (usage.aggregate)."""
+    from tb.brain import learnjobs
+    from tb.llm import usage as usage_mod
+    return sum(g["usd"] for k, g in usage_mod.aggregate(rows, by="role").items() if k in learnjobs.ROLES)
+
+
 def _b_economics(c):
     """Стоимость работы мозга и результат дня (UTC): llm_usd_day = расход на токены, pnl_<mode>_day = результат закрытых сделок дня,
     net_<mode>_day = pnl минус расход. Мозг должен выходить в net >= 0; это не повод ослаблять стоп, RR и лимиты. Только числа."""
     from tb.llm import usage as usage_mod
     day0 = c.now - (c.now % 86400.0)
-    usd = usage_mod.window_totals(usage_mod.read_rows(c.root, since=day0))["usd"]
+    rows = usage_mod.read_rows(c.root, since=day0)
+    usd = usage_mod.window_totals(rows)["usd"]
     pnl = {}
     for t in c.trades:
         if t.get("status") == "closed" and t.get("mode") in ("paper", "live") and str(t.get("ts_close") or "").startswith(c.today):
             pnl[t["mode"]] = pnl.get(t["mode"], 0.0) + (t.get("pnl_usdt") or 0.0)
     out = {"llm_usd_day": _r(usd, 4)}
+    learn = learn_usd(rows)                      # расход ролей цикла обучения (day_reviewer, retro) отдельной строкой; входит в llm_usd_day
+    if learn:
+        out["llm_usd_learn_day"] = _r(learn, 4)
     for m, v in pnl.items():
         out["pnl_%s_day" % m], out["net_%s_day" % m] = _r(v, 4), _r(v - usd, 4)
     try:                                         # квоты выживания по уровню риска (risk_levels.json): минимум входов за сутки и минимум чистой прибыли за сутки

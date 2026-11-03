@@ -22,6 +22,8 @@
 Испытание закрывается вердиктом (state=closed, verdict, numbers, cut_ts, closed_ts) и перестаёт занимать место в max_parallel. promote:
   правило остаётся trial с ожиданием READY (versions.set_wait), продвижение и сверка уроков — задача 15; reject/inconclusive: versions.reject_rule
   (чёрный список по таблице кодов).
+Вторая итерация (задача 29): критерий size_cap хранит param (у skip_when критерий прежний), вердикт — verdict_size (R хита снижается пропорционально
+  множителю); активные size_cap прогоны не отсекают. Регистрации size_cap нет: rules.derive порождает только skip_when, allow_size_rules=false.
 Модуль не импортирует brain/gateway/llm/venues/executor/control.
 """
 import hashlib
@@ -128,7 +130,8 @@ def criterion(rule, smp, active, cfg, start_ts, lesson_id=None):
     active — правила действующей версии на момент старта; start_ts — граница часа."""
     t, a = cfg["trial"], float(cfg["verify"]["alpha"])
     start_ts = int(start_ts)
-    return {"v": CRIT_VER, "metric": "mean_r", "kind": rule["kind"], "test": "paired", "side": SIDE,
+    extra = {"param": dict(rule.get("param") or {})} if rule["kind"] != "skip_when" else {}   # size_cap: множитель в критерии (skip_when — без изменений)
+    return dict(extra, **{"v": CRIT_VER, "metric": "mean_r", "kind": rule["kind"], "test": "paired", "side": SIDE,
             "src": {"policy": smp["policy"], "policy_ver": int(smp["policy_ver"]), "ctx_ver": smp["ctx_ver"], "env_norm": smp["env_norm"]},
             "cond": LR.canon_cond(rule["cond"]), "cond_h": rule.get("cond_h") or LR.cond_h(rule["cond"], SIDE), "scope": rule["scope"],
             "active": sorted((_active_entry(r) for r in active or ()), key=lambda x: str(x["rule_id"])),
@@ -138,7 +141,7 @@ def criterion(rule, smp, active, cfg, start_ts, lesson_id=None):
             "start_ts": start_ts, "deadline_ts": start_ts + int(t["max_days"]) * DAY,
             "cut": {"cluster_close_max_h": int(cfg["clusters"]["cluster_close_max_h"]), "observe_s": int(cfg["intervals"]["observe_s"])},
             "cfg_h": LC.config_hash(cfg)[:16], "lesson": lesson_id,
-            "hold": {"a": smp["a"], "b": smp["b"], "cut_ts": smp["cut_ts"], "h": smp["h"]}}
+            "hold": {"a": smp["a"], "b": smp["b"], "cut_ts": smp["cut_ts"], "h": smp["h"]}})
 
 
 def _ccfg(crit):
@@ -170,7 +173,7 @@ def analyze(crit, win):
     предельные хиты, "nofill_n", "cut_active": строк отсечено активным набором}. Только t0 >= start_ts и scope критерия (свойство 7)."""
     start, scope = int(crit["start_ts"]), crit.get("scope") or {}
     rule = trial_rule(crit)
-    acts = [dict(a, status="active") for a in crit.get("active") or ()]
+    acts = [dict(a, status="active") for a in crit.get("active") or () if a.get("kind", "skip_when") == "skip_when"]   # size_cap прогон не отсекает
     kept, cut_n = [], 0
     for r in _rows(win):
         if int(r["t0"]) < start or not _in_scope(r, scope):
@@ -194,6 +197,8 @@ def verdict(t, win):
     """Чистая функция (Requirement 9.7, 10.1): испытание (criterion) и выборка окна [start_ts, b) -> {"verdict": promote|reject|None, "code", "numbers"}.
     None — кластеров теста меньше n_target. Используются первые n_target кластеров теста по (t0, кластер); средние — по значениям кластеров."""
     crit = t["criterion"] if "criterion" in t else t
+    if crit.get("kind") == "size_cap":
+        return verdict_size(crit, win)
     an = analyze(crit, win)
     n_t = int(crit["n_target"])
     loss = (an["hits"] / float(an["metric"])) if an["metric"] else 0.0
@@ -211,6 +216,39 @@ def verdict(t, win):
     b_ok = loss <= float(crit["max_trade_loss_share"])
     nums.update(n=st["n"], diff=_r(st["mean"]), sd=_r(st["sd"]), se=_r(st["se"]), t=_r(st["t"]), p=_r(st["p"], 10), in_mean=_r(in_mean),
                 base_mean=_r(base_mean), a_ok=bool(a_ok), b_ok=bool(b_ok), last=tc[-1]["cluster"], clusters=[x["cluster"] for x in tc[:5]])
+    if a_ok and b_ok:
+        return {"verdict": PROMOTE, "code": "READY", "numbers": nums}
+    return {"verdict": REJECT, "code": "TRIAL_REJECT", "numbers": nums}
+
+
+def verdict_size(crit, win):
+    """Вердикт испытания size_cap (вторая итерация, задача 29) по тем же снимкам cluster_runs: R предельного хита снижается пропорционально
+    множителю (r_with = m × r_without, у skip_when r_with = 0). Тест тот же (парный по кластерам теста, хиты хуже базы, p < alpha_adj); эффект —
+    сбережённый R на предельный хит (1 − m) × (−in_mean) >= min_effect_r; доля потерянной экспозиции hits × (1 − m) / прогонов <= max_trade_loss_share.
+    Чистая функция; множитель вне (0, 1) — reject TRIAL_REJECT (bad_param) без расчёта. -> {"verdict", "code", "numbers"} как verdict."""
+    m = (crit.get("param") or {}).get("size_mult")
+    if not LR.valid_size_mult(m):
+        return {"verdict": REJECT, "code": "TRIAL_REJECT", "numbers": {"kind": "size_cap", "size_mult": m, "bad_param": True}}
+    m = float(m)
+    an = analyze(crit, win)
+    n_t = int(crit["n_target"])
+    expo = (an["hits"] * (1.0 - m) / float(an["metric"])) if an["metric"] else 0.0
+    nums = {"kind": "size_cap", "size_mult": m, "n_tc": len(an["tc"]), "n_target": n_t, "n_rows": an["metric"], "n_hits": an["hits"],
+            "nofill_n": an["nofill_n"], "cut_active": an["cut_active"], "loss_share": _r(expo), "alpha_adj": crit["alpha_adj"]}
+    if isinstance(win, dict):
+        nums.update(a=win.get("a"), b=win.get("b"), cut_ts=win.get("cut_ts"), h=win.get("hash"))
+    if len(an["tc"]) < n_t:
+        return {"verdict": None, "code": None, "numbers": nums}
+    tc = an["tc"][:n_t]
+    st = ST.paired([x["diff"] for x in tc], SIDE)
+    in_mean = ST.mean([x["in_r"] for x in tc])
+    base_mean = ST.mean([x["out_r"] for x in tc])
+    gain = (1.0 - m) * (-in_mean)
+    a_ok = st["p"] is not None and st["p"] < float(crit["alpha_adj"]) and gain >= float(crit["min_effect_r"])
+    b_ok = expo <= float(crit["max_trade_loss_share"])
+    nums.update(n=st["n"], diff=_r(st["mean"]), sd=_r(st["sd"]), se=_r(st["se"]), t=_r(st["t"]), p=_r(st["p"], 10), in_mean=_r(in_mean),
+                in_with_mean=_r(m * in_mean), gain_r=_r(gain), base_mean=_r(base_mean), a_ok=bool(a_ok), b_ok=bool(b_ok), last=tc[-1]["cluster"],
+                clusters=[x["cluster"] for x in tc[:5]])
     if a_ok and b_ok:
         return {"verdict": PROMOTE, "code": "READY", "numbers": nums}
     return {"verdict": REJECT, "code": "TRIAL_REJECT", "numbers": nums}

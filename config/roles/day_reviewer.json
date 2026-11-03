@@ -1,0 +1,1 @@
+{"schema": "tb.role/1", "id": "day_reviewer", "version": 1, "io": "decision_json", "agent_scope": "shared", "tools": [], "max_rounds": 1, "inputs": ["learn_input"], "output_schema": "lesson_cand/1", "max_output_tokens": 800, "live_risk": false, "params": {"temperature": 0.1}, "wake_on": [], "timeout_s": 120, "retries_format": 2, "common": false}
