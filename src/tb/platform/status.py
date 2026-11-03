@@ -100,7 +100,7 @@ def knowledge_block(root, now):
         return {"color": "yellow", "codes": ["VERIFY_ERROR"], "reasons": ["база знаний: проверка не выполнена (%s)" % type(e).__name__]}
     if rep is None:
         return None
-    return {"color": rep["color"], "codes": list(rep["codes"]), "reasons": list(rep["reasons"])}
+    return {"color": rep["color"], "codes": list(rep["codes"]), "reasons": list(rep["reasons"]), "store": rep.get("store"), "store_src": rep.get("store_src")}
 
 
 LEARN_YELLOW = ("RULES_NO_EVENT", "WARMUP_STUCK", "AUTO_RESTORED", "STALE")
@@ -296,6 +296,10 @@ def format_text(st):
     ex = st["exec"]
     out.append("исполнитель: %s, режим %s, позиций %s, hold %s, KILL %s" % ("жив" if ex["alive"] else "НЕ ЖИВ", ex.get("mode"), ex.get("positions"), ex.get("hold"), "да" if st["kill"] else "нет"))
     out.append("шина: последний seq %s, возраст %s с; сканер: hot.json %s с; непрочитано: %s" % (st["bus"]["last_seq"], st["bus"]["age_s"], st["scanner"]["age_s"], st["unread_total"]))
+    kb = st.get("knowledge") or {}
+    if kb.get("store"):
+        out.append("база знаний: %s; случаи и уроки: store=%s (источник %s)" % (
+            {"green": "ок", "yellow": "жёлтый", "red": "КРАСНЫЙ"}.get(kb.get("color"), kb.get("color")), kb["store"], kb.get("store_src") or "-"))
     if st.get("learnloop"):
         out.append(learnloop_line(st["learnloop"]))
     for n, u in st["links"].items():

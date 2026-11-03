@@ -543,7 +543,9 @@ def verify(root=None, quick=False, counts=True, now=None):
     """Проверка базы знаний (./tb knowledge verify, ./tb status): маркеры, integrity_check (quick_check при quick), цепочки, индексы и триггеры v2a,
     размеры таблиц. -> {"ok", "color", "codes", "reasons", ...}. Красный: DB_CORRUPT, CHAIN_BROKEN, RESTORING, RESTORE_FAILED, SCHEMA_MISMATCH;
     жёлтый: NOT_READY (маркер v2 без таблиц; store=sqlite без файла или таблиц v2b), AUTO_RESTORED (7 суток после автовосстановления),
-    SPOOL_PENDING, JSONL_APPEARED (store=sqlite, а cases.jsonl / lessons.jsonl есть в state/). rep["store"] - активное хранилище случаев и уроков."""
+    SPOOL_PENDING, JSONL_APPEARED (store=sqlite, а cases.jsonl / lessons.jsonl есть в state/), STORE_IN_CONFIG (store корня проекта взят из
+    config/memory.json без маркера state/memory.store). rep["store"] - активное хранилище случаев и уроков, rep["store_src"] - его источник
+    (marker | config-compat | default)."""
     now = time.time() if now is None else now
     path = db_path(root)
     rep = {"ok": True, "color": "green", "codes": [], "reasons": [], "v2": KM.has_v2(root), "db": os.path.exists(path), "restoring": KM.restoring(root),
@@ -559,7 +561,10 @@ def verify(root=None, quick=False, counts=True, now=None):
     if spool_pending(root):
         add(S2.SPOOL_PENDING, "база знаний: в очереди state/%s есть записи случаев/уроков: ./tb knowledge replay-spool" % S2.SPOOL_NAME)
     from tb.knowledge import memstore                     # ленивый импорт: memstore импортирует этот модуль
-    rep["store"] = memstore.mode(root)
+    rep["store"], rep["store_src"] = memstore.mode_info(root)
+    if rep["store_src"] == "config-compat":
+        add(S2.STORE_IN_CONFIG, "store=%s взят из config/memory.json (STORE_IN_CONFIG, переходное состояние): выполните ./tb knowledge store-marker"
+            % rep["store"])
     if rep["store"] == "sqlite":                          # R2.9b: после переключения JSONL не открываются и не должны появляться
         extra = [n for n in (S2.MEM_FILE[t] for t in S2.MEM_TABLES) if os.path.exists(paths.state(n, root=root))]
         if extra:
@@ -655,7 +660,8 @@ def status_check(root=None, now=None, ttl_s=STATUS_TTL_S):
     if not (KM.has_v2(root) or KM.restoring(root) or os.path.exists(KM.restore_failed_path(root))):
         return None
     key = os.path.abspath(paths.state(root=root))
-    cheap = (KM.has_v2(root), KM.restoring(root), os.path.exists(KM.corrupt_path(root)), os.path.exists(KM.restore_failed_path(root)), os.path.exists(db_path(root)))
+    cheap = (KM.has_v2(root), KM.restoring(root), os.path.exists(KM.corrupt_path(root)), os.path.exists(KM.restore_failed_path(root)), os.path.exists(db_path(root)),
+             os.path.exists(paths.state(S2.STORE_MARKER, root=root)))
     hit = _STATUS_CACHE.get(key)
     if hit and hit[1] == cheap and 0 <= now - hit[0] < ttl_s:
         return hit[2]

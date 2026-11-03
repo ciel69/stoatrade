@@ -113,8 +113,11 @@ SPOOL_NAME = "knowledge.spool.jsonl"     # очередь записей при 
 SPOOL_LOCK = "knowledge.spool.lock"
 PRE_SUFFIX = ".pre-r29"                  # прежние JSONL после переноса
 STORES = ("jsonl", "sqlite")
+STORE_MARKER = "memory.store"            # state/memory.store: источник правды о store корня ({"store", "ts", "by"}); нет файла -> "jsonl"
+STORE_SRC = ("marker", "config-compat", "default")   # откуда взят store (config-compat - переходное: store из config/memory.json корня проекта)
 
 # коды второй итерации
+STORE_IN_CONFIG = "STORE_IN_CONFIG"      # store корня проекта взят из config/memory.json без маркера (жёлтый в verify): ./tb knowledge store-marker
 PLATFORM_RUNNING = "PLATFORM_RUNNING"
 SPOOL_PENDING = "SPOOL_PENDING"
 JSONL_APPEARED = "JSONL_APPEARED"        # store=sqlite, а в state/ появился cases.jsonl / lessons.jsonl (жёлтый в verify, отчёт migrate)

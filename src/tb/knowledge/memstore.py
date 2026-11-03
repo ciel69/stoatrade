@@ -1,7 +1,9 @@
 """Хранилище случаев и уроков в базе знаний (R2.9b, Requirement 3.4, 3.6, 3.7, 3.8): бэкенд фасада memory.cases / memory.lessons.
 
-mode(root)        значение store из memory.json (кеш по mtime и размеру файла; читается при каждой записи и каждом чтении); "jsonl" по умолчанию,
-                  битый файл -> последнее известное значение
+mode(root)        store корня (кеш по mtime и размеру файла; читается при каждой записи и каждом чтении): маркер state/memory.store корня;
+                  без маркера - для корня проекта store из config/memory.json (переходная совместимость, жёлтый STORE_IN_CONFIG), для прочих
+                  корней "jsonl". Битый файл -> последнее известное значение. mode_info - то же с источником (marker | config-compat | default)
+write_marker      маркер state/memory.store атомарно (migrate, export-jsonl, store-marker); ensure_marker - ./tb knowledge store-marker
 snapshot          строки таблицы case_rows / lesson_rows в формате прежнего JSONL (dict с seq/prev/h) по порядку seq; дочитывает только новые строки.
                   База недоступна -> строки последней проверенной копии state/backups; поверх - строки очереди, которых нет в источнике
 append            запись строки под блокировкой таблицы (её держит вызывающий: cases.lock / lessons.lock): seq/prev/h считаются в транзакции,
@@ -13,7 +15,7 @@ verify_chain      цепочка строк таблицы (cases.verify / lesso
 signature         подпись таблицы для ключей кешей читателей (seq и h последней строки, очередь); present - в таблице есть строки
 
 JSONL-файлы здесь не открываются. Модуль не импортирует tb.memory.cases / tb.memory.lessons (они импортируют его лениво).
-Тестовые хуки: _FORCE (режим вместо memory.json), _AUTOCREATE (при отсутствии базы или таблиц v2b создать их; в работе выключен:
+Тестовые хуки: _FORCE (режим вместо маркера для не проектного корня), _AUTOCREATE (при отсутствии базы или таблиц v2b создать их; в работе выключен:
 пустая база вместо потерянной не создаётся).
 """
 import calendar
@@ -50,24 +52,28 @@ class Unavailable(Exception):
 
 # ---------------------------------------------------------------- режим
 
-def _cfg_path(root):
-    p = paths.config("memory.json", root=root)
-    if root and not os.path.isfile(p):
-        return paths.config("memory.json", root=paths.DEFAULT_ROOT)
-    return p
+def marker_path(root=None):
+    return paths.state(S2.STORE_MARKER, root=root)
 
 
-def mode(root=None):
-    """-> "jsonl" | "sqlite". Тот же файл, что берёт memory.cfg.load (memory.json корня, иначе файл проекта).
-    Тестовый _FORCE действует только для явно заданного временного корня (не для корня проекта и не для root=None)."""
-    if _FORCE and root and os.path.abspath(root) not in (os.path.abspath(paths.DEFAULT_ROOT), paths.root()):
-        return _FORCE
-    p = os.path.abspath(_cfg_path(root))
+def _norm(p):
+    return os.path.normcase(os.path.abspath(p))
+
+
+def is_project_root(root=None):
+    """Корень проекта - каталог репозитория (paths.DEFAULT_ROOT); root=None -> paths.root() (TB_ROOT тестов - не корень проекта)."""
+    return _norm(root if root else paths.root()) == _norm(paths.DEFAULT_ROOT)
+
+
+def _cached(p):
+    """Значение store из JSON-файла p (кеш по mtime и размеру). -> "jsonl" | "sqlite" | None (нет файла; битый файл без прежнего значения)."""
+    p = os.path.abspath(p)
     hit = _MODE.get(p)
     try:
         st = os.stat(p)
     except OSError:
-        return hit[1] if hit else "jsonl"
+        _MODE.pop(p, None)
+        return None
     sig = (st.st_mtime_ns, st.st_size)
     if hit and hit[0] == sig:
         return hit[1]
@@ -77,9 +83,77 @@ def mode(root=None):
     except (OSError, ValueError, AttributeError):
         v = None
     if v not in S2.STORES:
-        v = hit[1] if hit else "jsonl"
-    _MODE[p] = (sig, v)
+        v = hit[1] if hit else None                       # битый файл -> последнее известное значение
+    if v is not None:
+        _MODE[p] = (sig, v)
     return v
+
+
+def mode_info(root=None):
+    """-> (store, источник). Правила (store - свойство данных корня, а не репозитория):
+    1. есть маркер state/memory.store корня -> его значение ("marker");
+    2. маркера нет: корень проекта -> store из config/memory.json проекта ("config-compat", переходная совместимость: платформа, переключённая
+       кодом до маркера); любой другой корень -> "jsonl" ("default"), его config/memory.json на store не влияет.
+    Тестовый _FORCE действует только для явно заданного корня, отличного от корня проекта и от paths.root() ("force")."""
+    if _FORCE and root and _norm(root) not in (_norm(paths.DEFAULT_ROOT), _norm(paths.root())):
+        return _FORCE, "force"
+    v = _cached(marker_path(root))
+    if v is not None:
+        return v, "marker"
+    if is_project_root(root):
+        v = _cached(paths.config("memory.json", root=paths.DEFAULT_ROOT))
+        if v == "sqlite":
+            return v, "config-compat"
+    return "jsonl", "default"
+
+
+def mode(root=None):
+    """-> "jsonl" | "sqlite" (см. mode_info). Читается при каждой записи и каждом чтении (кеш по mtime)."""
+    return mode_info(root)[0]
+
+
+def write_marker(root, value, by, now=None):
+    """Маркер state/memory.store атомарно (пишут только ./tb knowledge migrate, export-jsonl под cases.lock и lessons.lock и store-marker). -> путь."""
+    if value not in S2.STORES:
+        raise ValueError("store: %r не из %s" % (value, list(S2.STORES)))
+    p = marker_path(root)
+    ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() if now is None else now))
+    atomic_write(p, json.dumps({"store": value, "ts": ts, "by": str(by)}, ensure_ascii=False, sort_keys=True) + "\n")
+    _MODE.pop(os.path.abspath(p), None)
+    return p
+
+
+def read_marker(root=None):
+    """-> содержимое маркера (dict) или None (нет файла / битый)."""
+    try:
+        with open(marker_path(root), encoding="utf-8") as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return d if isinstance(d, dict) else None
+
+
+def restore_marker(root, prev):
+    """Откат маркера к прежнему содержимому prev (None - маркера не было: удалить)."""
+    p = marker_path(root)
+    if prev is None:
+        try:
+            os.remove(p)
+        except FileNotFoundError:
+            pass
+    else:
+        atomic_write(p, json.dumps(prev, ensure_ascii=False, sort_keys=True) + "\n")
+    _MODE.pop(os.path.abspath(p), None)
+
+
+def ensure_marker(root=None, now=None):
+    """./tb knowledge store-marker: маркер из текущего эффективного store (идемпотентно: есть маркер -> ничего не пишет).
+    -> {"ok", "store", "src_before", "created", "path"}."""
+    v, src = mode_info(root)
+    created = src != "marker"
+    if created:
+        write_marker(root, v, "store-marker", now=now)
+    return {"ok": mode_info(root) == (v, "marker"), "store": v, "src_before": src, "created": created, "path": marker_path(root)}
 
 
 def lock_path(table, root=None):

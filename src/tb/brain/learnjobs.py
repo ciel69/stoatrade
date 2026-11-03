@@ -2,7 +2,9 @@
 
 Писатель — `tb.learnloop.port`: `state/brain/jobs/L-*.json` с kind="learnloop" (префикс L- общий с lifecycle; `lifejobs.pending` берёт только
 kind="lifecycle", поэтому здесь свой `pending`). Роли `day_reviewer` (ответ tb.lesson_cand/1) и `retro` (tb.retro/1); профиль модели — из настроек
-платформы, как у любой общей роли (`config/brain.json: shared_roles` или подписанный active.json), жёсткой привязки нет.
+платформы, как у любой общей роли (`config/brain.json: shared_roles` или подписанный active.json), жёсткой привязки нет. В поставке обе роли
+без профиля: пока владелец не назначит профиль (`./tb brain role chain shared.<роль> --primary <профиль>` или форма ролей дашборда), роль
+не назначена — NO_ASSIGNMENT, learn_roles=false, порт цикла отвечает NO_ROLE, модель не вызывается (платный вызов только по выбору владельца).
 
 Протокол (константы совпадают с tb.learnloop.port, проверяет тест; мозг не импортирует tb.learnloop):
   захват  `L-*.claim` (O_EXCL); пока идёт вызов, поток аренды обновляет mtime каждые lease_s (30 с); захват без обновления дольше claim_ttl_s

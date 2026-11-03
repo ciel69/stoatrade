@@ -192,8 +192,8 @@ class TestFacadeParity(Root):
         self.assertTrue(b["verify"]["ok"])
         self.assertEqual(len(a["lessons"]), 2)
 
-    def test_store_read_from_config_each_write(self):
-        """Писатель перечитывает store (кеш по mtime): смена значения в memory.json корня действует на следующую запись."""
+    def test_store_read_from_marker_each_write(self):
+        """Писатель перечитывает store (кеш по mtime): смена маркера state/memory.store корня действует на следующую запись."""
         cases.append_new(mk(0), root=self.root)
         self.assertTrue(os.path.exists(self.st("cases.jsonl")))
         self.assertEqual(MS.mode(self.root), "jsonl")
@@ -201,33 +201,33 @@ class TestFacadeParity(Root):
         with LST.tx(conn):
             store2.apply_v2b(conn)
         conn.close()
-        memcfg.set_store(self.root, "sqlite")
+        MS.write_marker(self.root, "sqlite", "test")
         os.rename(self.st("cases.jsonl"), self.st("cases.jsonl.pre-r29"))
-        self.assertEqual(MS.mode(self.root), "sqlite")
+        self.assertEqual(MS.mode_info(self.root), ("sqlite", "marker"))
         cases.append_new(mk(1), root=self.root)
         self.assertFalse(os.path.exists(self.st("cases.jsonl")))
         self.assertEqual([c["case_id"] for c in cases.load(self.root)], [mk(1)["case_id"]])
 
-    def test_broken_config_keeps_last_mode(self):
-        memcfg.set_store(self.root, "sqlite")
+    def test_broken_marker_keeps_last_mode(self):
+        MS.write_marker(self.root, "sqlite", "test")
         self.assertEqual(MS.mode(self.root), "sqlite")
-        with open(paths.config("memory.json", root=self.root), "a", encoding="utf-8") as f:
+        with open(MS.marker_path(self.root), "a", encoding="utf-8") as f:
             f.write("{broken")
         self.assertEqual(MS.mode(self.root), "sqlite")
 
-    def test_set_store_keeps_formatting(self):
-        p = memcfg.set_store(self.root, "sqlite")
-        with open(paths.config("memory.json", root=paths.DEFAULT_ROOT), encoding="utf-8") as f:
-            orig = f.read()
-        with open(p, encoding="utf-8") as f:
-            new = f.read()
-        self.assertEqual(new, orig.replace('"store": "jsonl"', '"store": "sqlite"'))
-        self.assertEqual(memcfg.load(self.root)["store"], "sqlite")
+    def test_marker_format_and_bad_value(self):
+        p = MS.write_marker(self.root, "sqlite", "migrate", now=NOW)
+        self.assertEqual(p, self.st("memory.store"))
+        d = MS.read_marker(self.root)
+        self.assertEqual((d["store"], d["by"]), ("sqlite", "migrate"))
+        self.assertTrue(d["ts"].endswith("Z"))
         with self.assertRaises(ValueError):
-            memcfg.set_store(self.root, "csv")
+            MS.write_marker(self.root, "csv", "test")
+        self.assertEqual(MS.mode(self.root), "sqlite")
 
-    def test_shipped_store_is_jsonl(self):
-        self.assertEqual(memcfg.load()["store"], "jsonl")
+    def test_shipped_store_value_valid(self):
+        """Ключ store в config/memory.json проекта - только переходная совместимость; значение (если есть) из допустимых."""
+        self.assertIn(memcfg.load().get("store", "jsonl"), S2.STORES)
 
     def test_parallel_writers_sqlite(self):
         with sqlite_mode():
@@ -247,6 +247,90 @@ class TestFacadeParity(Root):
             self.assertTrue(v["ok"], v)
             self.assertEqual(v["n"], 20)
             self.assertEqual(len(cases.load(self.root)), 20)
+
+
+class TestStoreSource(Root):
+    """store - свойство данных корня (маркер state/memory.store), а не config/memory.json репозитория."""
+
+    def write_cfg(self, root, store):
+        with open(paths.config("memory.json", root=paths.DEFAULT_ROOT), encoding="utf-8") as f:
+            d = json.load(f)
+        d["store"] = store
+        os.makedirs(os.path.join(root, "config"), exist_ok=True)
+        with open(paths.config("memory.json", root=root), "w", encoding="utf-8") as f:
+            json.dump(d, f)
+
+    def test_temp_root_ignores_config_store(self):
+        self.write_cfg(self.root, "sqlite")                                  # копия конфига со store=sqlite
+        self.assertEqual(MS.mode_info(self.root), ("jsonl", "default"))
+        cases.append_new(mk(0), root=self.root)
+        self.assertTrue(os.path.exists(self.st("cases.jsonl")))
+        self.assertTrue(cases.verify(self.root)["ok"])
+        v = store2.verify(self.root)
+        self.assertEqual((v["store"], v["store_src"]), ("jsonl", "default"))
+        self.assertNotIn(S2.STORE_IN_CONFIG, v["codes"])
+
+    def test_tb_root_temp_is_not_project_root(self):
+        self.write_cfg(self.root, "sqlite")
+        with mock.patch.dict(os.environ, {"TB_ROOT": self.root}):
+            self.assertFalse(MS.is_project_root(None))
+            self.assertEqual(MS.mode(None), "jsonl")
+
+    def project(self, cfg_store, marker=None):
+        """Корень проекта подменяется временным каталогом (paths.DEFAULT_ROOT), чтобы не трогать боевые state/ и config/."""
+        self.write_cfg(self.root, cfg_store)
+        if marker:
+            MS.write_marker(self.root, marker, "test")
+        return mock.patch.object(paths, "DEFAULT_ROOT", self.root)
+
+    def test_project_root_config_compat(self):
+        with self.project("sqlite"):
+            MS.reset_caches()
+            self.assertTrue(MS.is_project_root(self.root))
+            self.assertEqual(MS.mode_info(self.root), ("sqlite", "config-compat"))
+            v = store2.verify(self.root)
+            self.assertEqual((v["store"], v["store_src"]), ("sqlite", "config-compat"))
+            self.assertIn(S2.STORE_IN_CONFIG, v["codes"])
+            self.assertEqual(v["color"], "yellow")
+            self.assertTrue(any("store-marker" in r for r in v["reasons"]))
+
+    def test_project_root_marker_wins(self):
+        with self.project("sqlite", marker="jsonl"):
+            MS.reset_caches()
+            self.assertEqual(MS.mode_info(self.root), ("jsonl", "marker"))
+            self.assertNotIn(S2.STORE_IN_CONFIG, store2.verify(self.root)["codes"])
+
+    def test_project_root_config_jsonl_is_default(self):
+        with self.project("jsonl"):
+            MS.reset_caches()
+            self.assertEqual(MS.mode_info(self.root), ("jsonl", "default"))
+
+    def test_store_marker_command_idempotent(self):
+        with self.project("sqlite"):
+            MS.reset_caches()
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                code = KCLI.main(["store-marker"], root=self.root)
+            rep = json.loads(buf.getvalue())
+            self.assertEqual(code, 0)
+            self.assertEqual((rep["store"], rep["src_before"], rep["created"]), ("sqlite", "config-compat", True))
+            self.assertEqual(MS.read_marker(self.root)["by"], "store-marker")
+            self.assertEqual(MS.mode_info(self.root), ("sqlite", "marker"))
+            self.write_cfg(self.root, "jsonl")                              # после маркера config на store не влияет
+            self.assertEqual(MS.mode_info(self.root), ("sqlite", "marker"))
+            with open(MS.marker_path(self.root), "rb") as f:
+                before = f.read()
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                code = KCLI.main(["store-marker"], root=self.root)
+            self.assertEqual(code, 0)
+            self.assertFalse(json.loads(buf.getvalue())["created"])
+            with open(MS.marker_path(self.root), "rb") as f:
+                self.assertEqual(f.read(), before)
+
+    def test_store_marker_default_root(self):
+        rep = MS.ensure_marker(self.root)
+        self.assertEqual((rep["store"], rep["src_before"], rep["created"], rep["ok"]), ("jsonl", "default", True, True))
 
 
 # ---------------------------------------------------------------- 3. перенос
@@ -329,7 +413,9 @@ class TestMigrate(Root):
         rep = self.migrate()
         self.assertTrue(rep["ok"], rep)
         self.assertEqual(MS.mode(self.root), "sqlite")
-        self.assertEqual(memcfg.load(self.root)["store"], "sqlite")
+        self.assertEqual(MS.mode_info(self.root), ("sqlite", "marker"))
+        self.assertEqual(MS.read_marker(self.root)["by"], "migrate")
+        self.assertFalse(os.path.exists(paths.config("memory.json", root=self.root)))      # config/ не пишется
         self.assertEqual(sorted(rep["renamed"]), ["cases.jsonl.pre-r29", "lessons.jsonl.pre-r29"])
         self.assertEqual(M2.jsonl_present(self.root), [])
         self.assertTrue(os.path.isfile(os.path.join(rep["backup_files"], "cases.jsonl")))
@@ -372,6 +458,7 @@ class TestMigrate(Root):
         self.assertTrue(os.path.exists(self.st("lessons.jsonl")))
         self.assertFalse(os.path.exists(self.st("cases.jsonl.pre-r29")))
         self.assertFalse(os.path.exists(paths.config("memory.json", root=self.root)))
+        self.assertFalse(os.path.exists(MS.marker_path(self.root)))
         conn = LST.open_ro(self.root)
         try:
             self.assertFalse(store2.ready_v2b(conn))                 # DDL откатилась вместе со строками
@@ -382,17 +469,29 @@ class TestMigrate(Root):
 
     def test_failure_after_rename_restores_files(self):
         self.fill(3)
-        with mock.patch.object(memcfg, "set_store", side_effect=OSError("disk")):
+        with mock.patch.object(MS, "write_marker", side_effect=OSError("disk")):
             with self.assertRaises(OSError):
                 self.migrate()
         self.assertEqual(MS.mode(self.root), "jsonl")
         self.assertTrue(os.path.exists(self.st("cases.jsonl")))
         self.assertFalse(os.path.exists(self.st("cases.jsonl.pre-r29")))
+        self.assertFalse(os.path.exists(MS.marker_path(self.root)))
+
+    def test_failure_after_marker_rolls_marker_back(self):
+        """Сбой после записи маркера (до COMMIT): маркер возвращается к прежнему состоянию (не было - удаляется)."""
+        self.fill(3)
+        with mock.patch.object(MS, "mode", return_value="jsonl"):          # маркер записан, но не читается
+            with self.assertRaises(M2.MigrateError) as cm:
+                self.migrate()
+        self.assertEqual(cm.exception.code, "STORE_NOT_SET")
+        self.assertFalse(os.path.exists(MS.marker_path(self.root)))
+        self.assertEqual(MS.mode(self.root), "jsonl")
+        self.assertTrue(os.path.exists(self.st("cases.jsonl")))
 
     def test_parallel_writer_during_migrate_goes_to_db(self):
         """Писатель, вставший в очередь на cases.lock во время переноса, после переключения пишет в базу, а не в JSONL."""
         self.fill(3, with_lessons=False)
-        real = memcfg.set_store
+        real = MS.write_marker
         started, errs = threading.Event(), []
 
         def writer():
@@ -403,13 +502,13 @@ class TestMigrate(Root):
                 errs.append(e)
         th = threading.Thread(target=writer)
 
-        def slow_set(root, value):
-            p = real(root, value)
+        def slow_set(root, value, by, now=None):
+            p = real(root, value, by, now=now)
             if value == "sqlite" and not th.is_alive() and not started.is_set():
                 th.start()
                 started.wait(5)
             return p
-        with mock.patch.object(memcfg, "set_store", slow_set):
+        with mock.patch.object(MS, "write_marker", slow_set):
             rep = self.migrate()
         th.join(15)
         self.assertEqual(errs, [])

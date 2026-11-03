@@ -228,7 +228,7 @@
   - Зависит от: 4, 23
   - _Requirements: 3.9, 3.10, 3.11, 3.12_
 
-- [~] 26. Вторая итерация: переключение боевых данных и RUNBOOK (волна 14)
+- [x] 26. Вторая итерация: переключение боевых данных и RUNBOOK (волна 14)
   - порядок: `migrate --dry-run`, `./tb down`, копии, `migrate`, индекс поиска похожих `knowledge.similar.migrate_v2s` (задача 25; идемпотентно, до этого поиск по меткам работает через `ix_sig_type` медленнее), `./tb up`, `./tb knowledge verify`; возврат через `export-jsonl`; запись в `docs/RUNBOOK.md`
   - до переключения перевести на фасад `tb.knowledge.memstore` прямых читателей JSONL (найдено при приёмке задачи 24): `memory/tick.py` (проверяет наличие `cases.jsonl` — при sqlite запускал бы `memory.migrate` каждую минуту), `memory/cli.py` (`./tb memory verify` по цепочке `lessons.jsonl`), `memory/diagnose.py:_lessons_state`, `learn/load.py` (ключ кеша по размерам файлов); прогнать `migrate` и `export-jsonl` на полной копии `state/` вместе с `knowledge.sqlite`
   - критерии приёмки: `verify` без разрывов, статус зелёный, мозг получает досье, возврат проверен на копии
@@ -257,7 +257,7 @@
   - Зависит от: 3, 23
   - _Requirements: 8.2_
 
-- [ ] 30. Документация второй итерации (волна 16)
+- [x] 30. Документация второй итерации (волна 16)
   - `docs/ARCHITECTURE.md`, `docs/BRAIN.md`, `docs/RUNBOOK.md`, `docs/ROADMAP.md` (статусы), `docs/spec_v2/08_case_memory.md`; полный `./tb test`
   - промпт роли `day_reviewer` (`config/roles/day_reviewer.md`) дополнить разделом словаря `dict.ref` (признаки, проверяемые справочно по сделкам мозга; найдено при приёмке задачи 31)
   - записать ограничения второй итерации: меню по сессиям (`second_iteration.session_menu`) выключено, пока испытание не получит критерий Уэлча (иначе `UNREACHABLE_N`); `lessons.pool_mode="paper"` не выставлен (тесты memory читают проектный `config/memory.json`); `shadow_hits` нет в таблице `rule_evals` (условие по нарушениям читает журнал решений)

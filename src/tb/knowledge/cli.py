@@ -1,5 +1,5 @@
 """`./tb knowledge <команда>`: verify | backup | restore [--from FILE] | stats | disable-v2 | migrate-v2a (R2.9a, Requirement 2.4, 2.7, 2.10, 16.4);
-вторая итерация (R2.9b, Requirement 3.2-3.8): migrate [--dry-run] | export-jsonl [--out DIR] | replay-spool | index-similar.
+вторая итерация (R2.9b, Requirement 3.2-3.8): migrate [--dry-run] | export-jsonl [--out DIR] | replay-spool | index-similar | store-marker.
 
 Вывод: JSON одной строкой (--text: кратко для человека). Коды: 0 успех / зелёный (verify: и жёлтый); 1 - красный verify, отказ команды, нет базы;
 2 - ошибка использования. Сеть и ключи не используются; конфиг цикла только читается (флаг enabled для disable-v2 и migrate-v2a).
@@ -40,7 +40,8 @@ def learnloop_enabled(root=None):
 def cmd_verify(a, root):
     rep = store2.verify(root, quick=a.quick)
     _out(rep, a.text, ["knowledge verify: %s%s" % (rep["color"], (" (%s)" % ",".join(rep["codes"])) if rep["codes"] else ""),
-                       "v2=%s ver=%s ready=%s integrity=%s размер=%s МБ" % (rep["v2"], rep["ver"], rep["ready"], rep["integrity"], rep["size_mb"])]
+                       "v2=%s ver=%s ready=%s integrity=%s размер=%s МБ store=%s (источник %s)" % (
+                           rep["v2"], rep["ver"], rep["ready"], rep["integrity"], rep["size_mb"], rep.get("store"), rep.get("store_src"))]
          + ["  ! %s" % r for r in rep["reasons"]] + ["  %s: %s" % (k, v) for k, v in sorted(rep["tables"].items())])
     return 1 if rep["color"] == "red" else 0
 
@@ -174,6 +175,20 @@ def cmd_export_jsonl(a, root):
     return 0
 
 
+def cmd_store_marker(a, root):
+    """./tb knowledge store-marker: маркер state/memory.store из текущего эффективного store (идемпотентно). Нужен корню проекта, переключённому
+    до маркера (store из config/memory.json, STORE_IN_CONFIG); после него ключ store в config/memory.json на режим не влияет."""
+    from tb.knowledge import memstore
+    try:
+        rep = memstore.ensure_marker(root)
+    except OSError as e:
+        _err("маркер не записан: %s" % e)
+        return 1
+    _out(rep, a.text, ["store-marker: store=%s, %s (источник был %s)" % (
+        rep["store"], "маркер создан" if rep["created"] else "маркер уже был", rep["src_before"])])
+    return 0 if rep["ok"] else 1
+
+
 def cmd_replay_spool(a, root):
     """./tb knowledge replay-spool: очередь state/knowledge.spool.jsonl в базу (идемпотентно по ключу и rev)."""
     from tb.knowledge import memstore
@@ -221,11 +236,14 @@ def build_parser():
     rp.add_argument("--text", action="store_true")
     ix = sub.add_parser("index-similar", help="индекс поиска похожих signals(type, side, t0) идемпотентно (входит в migrate); при остановленной платформе")
     ix.add_argument("--text", action="store_true")
+    sm = sub.add_parser("store-marker", help="маркер state/memory.store из текущего store (идемпотентно; после переключения без маркера)")
+    sm.add_argument("--text", action="store_true")
     return p
 
 
 HANDLERS = {"verify": cmd_verify, "backup": cmd_backup, "restore": cmd_restore, "stats": cmd_stats, "disable-v2": cmd_disable_v2, "migrate-v2a": cmd_migrate,
-            "migrate": cmd_migrate_mem, "export-jsonl": cmd_export_jsonl, "replay-spool": cmd_replay_spool, "index-similar": cmd_index_similar}
+            "migrate": cmd_migrate_mem, "export-jsonl": cmd_export_jsonl, "replay-spool": cmd_replay_spool, "index-similar": cmd_index_similar,
+            "store-marker": cmd_store_marker}
 
 
 def main(argv, root=None):

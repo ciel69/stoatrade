@@ -4,13 +4,13 @@ dry_run       свернуть cases.jsonl и lessons.jsonl тем же fold, ч
               дубли ключей, состояние базы и платформы); ничего не пишет. Отсутствующий lessons.jsonl = пусто
 migrate       платформа остановлена (иначе PLATFORM_RUNNING) -> cases.lock, lessons.lock -> копии базы (premigrate) и файлов -> одной транзакцией
               схема v2b и строки с сохранением seq, rev, kind, ts (цепочка пересчитывается; у целого файла совпадает с файловой) -> сверка
-              fold(база) == fold(файл) поле в поле, кроме prev и h -> переименование файлов в *.pre-r29 и store="sqlite" -> COMMIT.
-              Любой сбой до COMMIT: ROLLBACK, имена файлов и store прежние. После переключения - копия owner (в ней уже есть case_rows) и проверка,
+              fold(база) == fold(файл) поле в поле, кроме prev и h -> переименование файлов в *.pre-r29 и маркер state/memory.store
+              store="sqlite" -> COMMIT. Любой сбой до COMMIT: ROLLBACK, имена файлов и маркер прежние (config/memory.json не пишется). После переключения - копия owner (в ней уже есть case_rows) и проверка,
               что cases.jsonl / lessons.jsonl отсутствуют и не появились за settle_s. Перед копией owner строится индекс поиска похожих
               (similar_index; сбой индекса перенос не откатывает, повтор - ./tb knowledge index-similar)
 similar_index индекс ix_sig_type_side (tb.knowledge.similar.migrate_v2s) идемпотентно; отдельной командой - при остановленной платформе
 export_jsonl  файлы из таблиц (формат прежний, seq по порядку с 1, цепочка пересчитана) и сверка fold(файл) == fold(база); в state/ - только
-              при остановленной платформе и пустой очереди, затем store="jsonl" (возврат допустим только после успешного экспорта);
+              при остановленной платформе и пустой очереди, затем маркер store="jsonl" (возврат допустим только после успешного экспорта);
               в другой каталог (out_dir) - без переключения. Правила, версии rulebook и испытания от store не зависят и здесь не трогаются
 platform_running  проверка остановки: supervisor.lock, *.pid, свежие *.hb.json живых процессов, зарегистрированные писатели базы
 
@@ -31,7 +31,6 @@ from tb.knowledge import schema2 as S2
 from tb.knowledge import store2
 from tb.labels import store as LST
 from tb.memory import cases as MC
-from tb.memory import cfg as memcfg
 from tb.memory import chain as CH
 from tb.memory import lessons as ML
 
@@ -307,7 +306,7 @@ def migrate(root=None, now=None, settle_s=SETTLE_S, sleep=time.sleep, running=No
                 raise MigrateError(S2.KNOWLEDGE_MIGRATION, "копия базы не сделана: %s" % e) from e
         rep["backup_files"] = _backup_files(root, stamp)
         conn = LST.open_rw(root)
-        renamed, switched = [], False
+        renamed, switched, prev_marker = [], False, None
         try:
             with LST.tx(conn):
                 store2.apply_v2b(conn)
@@ -326,10 +325,11 @@ def migrate(root=None, now=None, settle_s=SETTLE_S, sleep=time.sleep, running=No
                     if os.path.exists(src):
                         _rename(src, src + S2.PRE_SUFFIX, sleep=sleep)
                         renamed.append(src)
-                memcfg.set_store(root, "sqlite")
+                prev_marker = MS.read_marker(root)
+                MS.write_marker(root, "sqlite", "migrate", now=now)
                 switched = True
                 if MS.mode(root) != "sqlite":
-                    raise MigrateError("STORE_NOT_SET", "store=sqlite не читается после записи")
+                    raise MigrateError("STORE_NOT_SET", "store=sqlite не читается после записи маркера")
         except BaseException:
             for src in reversed(renamed):
                 try:
@@ -337,7 +337,7 @@ def migrate(root=None, now=None, settle_s=SETTLE_S, sleep=time.sleep, running=No
                 except OSError:
                     pass
             if switched:
-                memcfg.set_store(root, "jsonl")
+                MS.restore_marker(root, prev_marker)
             raise
         finally:
             conn.close()
@@ -479,7 +479,7 @@ def export_jsonl(root=None, out_dir=None, now=None, running=None):
                 except OSError:
                     pass
         if to_state:
-            memcfg.set_store(root, "jsonl")
+            MS.write_marker(root, "jsonl", "export-jsonl", now=now)
             rep["store"] = MS.mode(root)
     rep["ok"] = True
     return rep

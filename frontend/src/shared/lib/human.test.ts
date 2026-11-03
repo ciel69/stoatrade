@@ -139,7 +139,7 @@ describe('режим определяет серьёзность проверо�
 
 describe('роли мозга словами', () => {
   it('у каждой известной роли есть название и описание без латиницы и служебных слов', () => {
-    expect(ROLE_IDS.length).toBe(6)
+    expect(ROLE_IDS.length).toBe(8)                      // + day_reviewer, retro: роли цикла обучения R2
     for (const r of ROLE_IDS) {
       expect(roleTitle(r)).not.toMatch(/[A-Za-z_]/)
       expect(roleAbout(r)).not.toMatch(/[A-Za-z_]/)

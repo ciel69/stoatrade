@@ -28,6 +28,13 @@ def answer(day=DAY, items=None, **kw):
 
 
 class LearnJobs(BrainBase):
+    def make_brain_doc(self):
+        """Поставка не назначает роли цикла (решение владельца 4): здесь владелец назначил им профили."""
+        d = super().make_brain_doc()
+        d["shared_roles"]["day_reviewer"] = {"primary": "ds-flash", "fallback": ["ds-pro"]}
+        d["shared_roles"]["retro"] = {"primary": "ds-pro", "fallback": ["ds-flash"]}
+        return d
+
     def submit(self, role="day_reviewer", payload=PAYLOAD, now=None, **kw):
         return PT.submit(self.root, role, payload, self.t if now is None else now, CFG, **kw)
 

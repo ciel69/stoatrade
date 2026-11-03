@@ -229,7 +229,9 @@ def apply(rules, cand, feats, ctx=None):
     "blocked": [id], "apply": bool}.
 
     rules — список правил или вид rulebook_view.active(root) (его "apply"=false — режим без применения); ctx: {"apply": bool, "env_norm": str,
-    "allow_size_rules": bool}. В режиме без применения ничего не оценивается (совпадения не пишутся, shadow_hits — вторая итерация).
+    "allow_size_rules": bool}. В режиме без применения ничего не оценивается и совпадения не пишутся; правила trial и активные правила в этом
+    режиме оценивает отдельно knowledge.rulebook_view.shadow_hits (вызывает apply с apply=True; решение не меняется, итог идёт в res.shadow_hits
+    записи rule_eval, Requirement 18.7).
     Применяются только правила со статусом active (статус не указан — active), годные по validate_rule и с env_norm решения (если оно задано).
     eval — оценённые в области правила (hit или pass), missing — правила, которые нельзя оценить (нет события, стороны или признака), out — молча.
     ok = исходное ok кандидата (у плана — True) и ни одного hit: правило может только снять разрешение.

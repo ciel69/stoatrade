@@ -186,7 +186,8 @@ class Cutover(unittest.TestCase):
         self.assertTrue(rep["similar_index"]["ok"] and rep["similar_index"]["created"], rep["similar_index"])
         self.assertTrue(rep["backup_db"] and rep["backup_files"] and rep["backup_after"])
         self.assertEqual(M2.jsonl_present(self.root), [])
-        self.assertEqual(MS.mode(self.root), "sqlite")
+        self.assertEqual(MS.mode_info(self.root), ("sqlite", "marker"))          # переключение - маркер state/memory.store, config/ не пишется
+        self.assertFalse(os.path.exists(os.path.join(self.root, "config", "memory.json")))
 
         # 4. индекс - идемпотентно (повтор ничего не меняет)
         code, ix = run_cli(KCLI.main, ["index-similar"], self.root)
@@ -256,6 +257,7 @@ class Cutover(unittest.TestCase):
         code, ex = run_cli(KCLI.main, ["export-jsonl"], self.root)
         self.assertEqual(code, 0, ex)
         self.assertEqual(ex["store"], "jsonl")
+        self.assertEqual(MS.read_marker(self.root)["by"], "export-jsonl")
         self.assertEqual(sorted(M2.jsonl_present(self.root)), sorted(JSONL))
         back = {"cases": cases.load(self.root, copy=True), "lessons": lessons.read_all(self.root)}
         self.assertEqual(back["cases"], new_state["cases"])
@@ -304,15 +306,16 @@ class Signals(unittest.TestCase):
         cases.append_new(mk(1), root=self.root)
         conn = LST.open_rw(self.root)
         conn.close()
-        memcfg.set_store(self.root, "sqlite")                         # переключено без таблиц v2b
+        MS.write_marker(self.root, "sqlite", "test")                  # переключено без таблиц v2b
         v = store2.verify(self.root)
         self.assertIn(S2.NOT_READY, v["codes"])
         self.assertIn(S2.JSONL_APPEARED, v["codes"])
         self.assertEqual(v["color"], "yellow")
-        memcfg.set_store(self.root, "jsonl")
+        self.assertEqual(v["store_src"], "marker")
+        MS.write_marker(self.root, "jsonl", "test")
         v = store2.verify(self.root)
         self.assertNotIn(S2.JSONL_APPEARED, v["codes"])
-        self.assertEqual(v["store"], "jsonl")
+        self.assertEqual((v["store"], v["store_src"]), ("jsonl", "marker"))
 
     def test_index_without_db(self):
         with self.assertRaises(M2.MigrateError) as cm:
