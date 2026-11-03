@@ -577,7 +577,8 @@ def list_backups(root=None):
         if m:
             ts = datetime.datetime.strptime(m.group(1), "%Y%m%dT%H%M%S").replace(tzinfo=datetime.timezone.utc).timestamp()
             out.append({"path": os.path.join(d, n), "stamp": m.group(1), "reason": m.group(2), "n": int(m.group(3) or 0), "ts": int(ts)})
-    out.sort(key=lambda b: (b["stamp"], b["n"], b["reason"]))
+    # premigrate снята ДО миграции (без таблиц цикла): при равном времени она старше любой другой копии, иначе restore выбрал бы её
+    out.sort(key=lambda b: (b["stamp"], 0 if b["reason"] == "premigrate" else 1, b["n"], b["reason"]))
     return out
 
 

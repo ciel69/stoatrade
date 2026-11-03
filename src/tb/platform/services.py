@@ -1,6 +1,6 @@
 """Сервисы платформы: конфиг `config/platform.json`, пути `runtime/platform/`, команды и окружение дочерних процессов. Владелец: WP11-B.
 
-Сервис = дочерний процесс супервизора. Список и порядок запуска: exec, scan, feed, context, intel, sync, dispatch, ctl, dash (дашборд), labels (фабрика меток, без ключей), mcp, brain. Ключи Bybit получают ТОЛЬКО исполнитель
+Сервис = дочерний процесс супервизора. Список и порядок запуска: exec, scan, feed, context, intel, sync, dispatch, ctl, dash (дашборд), labels (фабрика меток, без ключей), learnloop (цикл обучения R2, без ключей), mcp, brain. Ключи Bybit получают ТОЛЬКО исполнитель
 (launcher грузит ключ в его собственный процесс для testnet/trade) и сервис sync (launcher грузит читающий ключ `read`, только баланс); окружение остальных чистится в `child_env`.
 Без fork и сигнальных API: только subprocess (кроссплатформенно); сетевых вызовов и торговых модулей здесь нет.
 """
@@ -16,11 +16,12 @@ from tb.core import localcfg
 from tb.core.filelock import atomic_write_json
 
 PROFILES = ("paper", "testnet", "trade")
-ORDER = ("exec", "scan", "feed", "context", "intel", "sync", "dispatch", "ctl", "dash", "labels", "mcp", "brain")      # порядок запуска; остановка в обратном, но exec последним (см. stop_order)
+ORDER = ("exec", "scan", "feed", "context", "intel", "sync", "dispatch", "ctl", "dash", "labels", "learnloop", "mcp", "brain")      # порядок запуска; остановка в обратном, но exec последним (см. stop_order)
 SERVICE_NAMES = ORDER
 SECRET_PREFIXES = ("BYBIT_", "ANTHROPIC_")                        # не передаются никому, кроме процесса, который грузит их сам (launcher)
 LABELS_SECRET_PREFIXES = ("BYBIT_", "ANTHROPIC_", "DEEPSEEK_", "OPENAI_")      # сервис labels (R1.6, требование 14.3): никаких ключей, чистка шире общей
 LABELS_SECRET_SUFFIXES = ("_API_KEY", "_SECRET", "_TOKEN")
+SCRUBBED_SERVICES = ("labels", "learnloop")                                    # сервисы без ключей: чистка окружения по labels_secret (R2, Requirement 15.1)
 PROXY_VARS = ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY")
 # что сделать, чтобы закрыть предстартовую проверку P1-P16 (lifecycle.preflight и дашборд показывают одну строку действия)
 PREFLIGHT_FIX = {
@@ -47,9 +48,9 @@ DEFAULTS = {
     "version": 1,
     "profile": "paper",
     "services": {                       # какие сервисы поднимаются по умолчанию в профиле (`--services` перекрывает)
-        "paper": ["exec", "scan", "feed", "context", "intel", "sync", "dispatch", "ctl", "dash", "labels", "brain"],
-        "testnet": ["exec", "scan", "feed", "context", "intel", "sync", "dispatch", "ctl", "dash", "labels", "brain"],
-        "trade": ["exec", "scan", "feed", "context", "intel", "sync", "dispatch", "ctl", "dash", "labels"],
+        "paper": ["exec", "scan", "feed", "context", "intel", "sync", "dispatch", "ctl", "dash", "labels", "learnloop", "brain"],
+        "testnet": ["exec", "scan", "feed", "context", "intel", "sync", "dispatch", "ctl", "dash", "labels", "learnloop", "brain"],
+        "trade": ["exec", "scan", "feed", "context", "intel", "sync", "dispatch", "ctl", "dash", "labels", "learnloop"],
     },
     "supervisor": {
         "poll_s": 1.0,                  # период цикла контроля
@@ -77,6 +78,7 @@ DEFAULTS = {
         "context": {"hb": "file", "hb_stale_s": 180.0, "grace_s": 60.0},
         "sync": {"hb": "file", "hb_stale_s": 900.0, "grace_s": 90.0},
         "labels": {"hb": "file", "hb_stale_s": 120.0, "grace_s": 90.0},        # фабрика меток (tb.labels.service): захват сигналов и разметка свечами, ключей нет
+        "learnloop": {"hb": "file", "hb_stale_s": 900.0, "grace_s": 120.0},    # цикл обучения R2 (tb.learnloop.service): ключей и сети нет; heartbeat и между шагами прохода
     },
     "context": {"poll_s": 15.0},        # период цикла сервиса context (публичные источники: деривативы, DVOL, индекс страха, макро-блэкаут); интервалы источников в config/context_config.json
     "sync": {                           # автосинхронизация капитала: баланс читающим ключом read -> state/portfolio.json
@@ -317,6 +319,8 @@ def service_cmd(name, profile, observe, cfg, py=None):
         return [py, "-m", "tb.platform.contextsvc", "run"]
     if name == "labels":
         return [py, "-m", "tb.labels.service", "run"]
+    if name == "learnloop":
+        return [py, "-m", "tb.learnloop.service", "run"]
     if name == "sync":
         return launcher + ["sync", "run"]              # launcher загружает читающий ключ read в окружение ЭТОГО процесса (не супервизора)
     if name == "ctl":
@@ -351,7 +355,7 @@ def child_env(name, base, root, selected=(), profile="paper"):
         ku = k.upper()
         if ku.startswith(SECRET_PREFIXES) or ku in PROXY_VARS:
             continue
-        if name == "labels" and labels_secret(k):
+        if name in SCRUBBED_SERVICES and labels_secret(k):
             continue
         env[k] = v
     env["TB_ROOT"] = os.path.abspath(root)

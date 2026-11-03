@@ -12,10 +12,16 @@ write_version       новая версия вместе с изменениям
 promote / disable   продвижение (только ужесточение: learn_rules.is_tightening) и выключение активного правила новой версией
 reject_rule         отклонение правила trial без смены версии (чёрный список по коду)
 bounds_check        активное правило, не годное по learn_rules.validate_rule (неизвестный или размерный вид), выключается версией BOUNDS_BLOCKED
-rules_ver (config/memory.json) здесь не меняется никогда (Requirement 7.6). Условия готовности продвижения (promotion_ready) — задача 10.
+rules_ver (config/memory.json) здесь не меняется никогда (Requirement 7.6).
+promotion_ready     условия готовности продвижения (прогрев, Requirement 10.6; задача 10): засчитываемые сутки, события, сторож, серии STEP_ERROR,
+                    копия и integrity_check. Счёт суток и состояние шагов пишет tb.learnloop.cycle (meta learnloop_day / learnloop_state,
+                    строки learn_events step="day").
 """
 import contextlib
+import datetime
+import json
 import re
+import time
 
 from tb.knowledge import rulebook_view as RV
 from tb.knowledge import store2
@@ -312,3 +318,153 @@ def bounds_check(conn, now, cfg, root=None):
     changes = [(r, "disabled", "BOUNDS_BLOCKED") for r in bad if (latest.get(r) or {}).get("status") == "active"]
     return write_version(conn, "BOUNDS_BLOCKED", [r for r in cur["rule_ids"] if r not in bad], now, numbers={"bad": bad}, changes=changes, cfg=cfg,
                          root=root)
+
+
+# ---------------------------------------------------------------- готовность продвижения (прогрев, Requirement 10.6, 15.6)
+
+META_STATE = "learnloop_state"           # состояние цикла: started_ts, last_ready_ts, шаги (ok_ts, err_run, series_ts, day), integrity
+META_DAY = "learnloop_day"               # текущие сутки учёта: day, work_s, hw {час: секунд}, oh [часы с успешным observe], daily {шаг: код}
+DAY_STEP = "day"                         # learn_events: сводка закрытых суток (ref = YYYY-MM-DD, body: counted, full, work_s, ...)
+BAD_EVENT_CODES = ("CHAIN_BROKEN", "DB_CORRUPT", "WATCH_STALE")
+SERIES_GROUPS = ("observe", "verdict", "watch")
+WORK_WINDOW_H = 7 * 24
+READY_CONDS = ("DAYS", "BAD_EVENTS", "WATCH", "STEP_ERRORS", "BACKUP", "INTEGRITY")
+
+
+def _meta_json(conn, key):
+    try:
+        row = conn.execute("SELECT v FROM meta WHERE k=?", (key,)).fetchone()
+    except Exception:  # noqa: BLE001 - нет таблицы meta
+        return None
+    if not row or row[0] is None:
+        return None
+    try:
+        d = json.loads(row[0])
+    except (TypeError, ValueError):
+        return None
+    return d if isinstance(d, dict) else None
+
+
+def state_get(conn):
+    """Состояние цикла из meta.learnloop_state (пустое, если нет)."""
+    return _meta_json(conn, META_STATE) or {}
+
+
+def day_get(conn):
+    """Текущие сутки учёта из meta.learnloop_day или None."""
+    return _meta_json(conn, META_DAY)
+
+
+def meta_put(conn, key, obj):
+    conn.execute("INSERT OR REPLACE INTO meta(k, v) VALUES(?, ?)", (key, json.dumps(obj, sort_keys=True, separators=(",", ":"))))
+
+
+def day_rows(conn):
+    """Сводки закрытых суток (learn_events step="day"), по одной на сутки (последняя запись), от новых к старым."""
+    by = {}
+    try:
+        cur = conn.execute("SELECT ref, body FROM learn_events WHERE step=? ORDER BY seq", (DAY_STEP,))
+        rows = cur.fetchall()
+    except Exception:  # noqa: BLE001 - таблиц цикла нет
+        return []
+    for ref, body in rows:
+        try:
+            b = json.loads(body) if body else {}
+        except ValueError:
+            continue
+        if isinstance(b, dict) and ref:
+            by[ref] = dict(b, day=ref)
+    return [by[k] for k in sorted(by, reverse=True)]
+
+
+def _day_start(day):
+    return int(datetime.datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=datetime.timezone.utc).timestamp())
+
+
+def work_window_start(conn, now, hours=WORK_WINDOW_H, days=None, acc=None):
+    """Начало последних `hours` часов работы сервиса цикла по учёту суток: от текущих суток назад, суммируя work_s.
+    Работы меньше — начало самых ранних учтённых суток (окно «вся работа»)."""
+    days = day_rows(conn) if days is None else days
+    acc = day_get(conn) if acc is None else acc
+    need = float(hours) * 3600.0
+    spans = []
+    if isinstance(acc, dict) and acc.get("day"):
+        spans.append((acc["day"], float(acc.get("work_s") or 0), int(now)))
+    for d in days:
+        if not spans or d["day"] != spans[0][0]:
+            spans.append((d["day"], float(d.get("work_s") or 0), _day_start(d["day"]) + 86400))
+    start = int(now)
+    for day, work, end in spans:
+        start = _day_start(day)
+        if work >= need:
+            return max(start, int(end - need))
+        need -= work
+    return start
+
+
+def promotion_ready(conn, cfg, now, root=None, state=None, check_db=True):
+    """Условия готовности продвижения (все одновременно, Requirement 10.6):
+    DAYS        среди последних warmup_window_days засчитываемых суток не меньше warmup_days полных проходов;
+    BAD_EVENTS  за последние 7 x 24 часа работы сервиса цикла нет CHAIN_BROKEN, DB_CORRUPT, WATCH_STALE в learn_events;
+    WATCH       аренда сторожа runtime/watch_lease.json не старше watch_fresh_h (аренды нет — не готово: до сторожа задачи 16 всегда так);
+    STEP_ERRORS нет серии из step_error_max подряд STEP_ERROR шагов наблюдения, вердикта и сторожа за 24 часа;
+    BACKUP      последняя проверенная копия (state/backups/knowledge-*-<причина>.sqlite) не старше backup_max_age_h;
+    INTEGRITY   PRAGMA integrity_check без ошибок (последним и только если остальное выполнено; check_db=False — не проверять).
+    -> {"ok", "failed": [условия], "details": {...}}. Режим promotion.mode здесь не учитывается (его проверяет шаг продвижения)."""
+    now = int(time.time() if now is None else now)
+    p = cfg["promotion"]
+    st = state_get(conn) if state is None else state
+    failed, det = [], {}
+    days = day_rows(conn)
+    counted = [d for d in days if d.get("counted")][:int(p["warmup_window_days"])]
+    full = sum(1 for d in counted if d.get("full"))
+    det["days"] = {"counted": len(counted), "full": full, "need": int(p["warmup_days"])}
+    if full < int(p["warmup_days"]):
+        failed.append("DAYS")
+    w0 = work_window_start(conn, now, days=days)
+    try:
+        q = "SELECT code, COUNT(*) FROM learn_events WHERE ts>=? AND code IN (%s) GROUP BY code" % ",".join("?" * len(BAD_EVENT_CODES))
+        bad = dict(conn.execute(q, [store2.iso(w0)] + list(BAD_EVENT_CODES)).fetchall())
+    except Exception:  # noqa: BLE001 - таблиц цикла нет
+        bad = {"NOT_READY": 1}
+    det["bad_events"] = {"since": store2.iso(w0), "codes": bad}
+    if bad:
+        failed.append("BAD_EVENTS")
+    lease = RV.read_lease(root) if root is not None else None
+    ts = lease.get("ts") if isinstance(lease, dict) else None
+    if isinstance(ts, bool) or not isinstance(ts, (int, float)):
+        det["watch"] = {"why": "NO_LEASE"}
+        failed.append("WATCH")
+    else:
+        age = now - ts
+        det["watch"] = {"age_s": int(age)}
+        if not (-RV.LEASE_FUTURE_SLACK_S <= age <= int(p["watch_fresh_h"]) * 3600):
+            det["watch"]["why"] = "WATCH_STALE"
+            failed.append("WATCH")
+    series = []
+    for name, s in sorted(((st or {}).get("steps") or {}).items()):
+        if not isinstance(s, dict) or s.get("group") not in SERIES_GROUPS:
+            continue
+        if int(s.get("err_run") or 0) >= int(p["step_error_max"]) or (s.get("series_ts") and now - int(s["series_ts"]) < 86400):
+            series.append(name)
+    det["step_errors"] = series
+    if series:
+        failed.append("STEP_ERRORS")
+    bks = store2.list_backups(root) if root is not None else []
+    last = bks[-1]["ts"] if bks else None
+    det["backup"] = {"age_s": None if last is None else now - last}
+    if last is None or now - last > int(p["backup_max_age_h"]) * 3600:
+        failed.append("BACKUP")
+    if not check_db:
+        det["integrity"] = "skipped"
+    elif failed:
+        det["integrity"] = "not_checked"
+    else:
+        try:
+            res = [r[0] for r in conn.execute("PRAGMA integrity_check").fetchall()]
+        except Exception as e:  # noqa: BLE001
+            res = ["%s: %s" % (type(e).__name__, e)]
+        det["integrity"] = "ok" if res == ["ok"] else res[:3]
+        if res != ["ok"]:
+            failed.append("INTEGRITY")
+    return {"ok": not failed, "failed": failed, "details": det}

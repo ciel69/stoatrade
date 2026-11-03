@@ -372,6 +372,17 @@ class TestBackup(Base):
             finally:
                 k.close()
 
+    def test_premigrate_is_oldest_at_same_stamp(self):
+        # premigrate снята до миграции: при равном времени restore должен выбрать копию после миграции, а не её
+        self.v2()
+        d = store2.backups_dir(self.root)
+        stamp = "20261103T000000"
+        for reason in ("daily", "premigrate", "promote"):
+            open(os.path.join(d, "knowledge-%s-%s.sqlite" % (stamp, reason)), "wb").close()
+        same = [b["reason"] for b in store2.list_backups(self.root) if b["stamp"] == stamp]
+        self.assertEqual(same[0], "premigrate")
+        self.assertNotEqual(same[-1], "premigrate")
+
     def test_rotation_by_reason(self):
         self.v2()
         r1 = store.backup(self.root, today="20261101")                         # копия R1 не трогается

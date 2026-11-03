@@ -91,7 +91,7 @@
   - Зависит от: 1, 2
   - _Requirements: 1.4_
 
-- [~] 10. Каркас цикла и сервис `learnloop`: `tb.learnloop.cycle`, `service`, `versions.promotion_ready` (волна 4)
+- [x] 10. Каркас цикла и сервис `learnloop`: `tb.learnloop.cycle`, `service`, `versions.promotion_ready` (волна 4)
   - реестр шагов (суточные после `daily_after`: бэкап, меню раз в 7 суток, приём кандидатов и проверка holdout, достигших `cut_ts`, создание уроков и регистрация испытаний; `observe` раз в 15 минут — закрытие кластеров; раз в час — вердикты, пересечения и продвижение, сверка статусов уроков меток, сторож) с заглушками для шагов задач 14–16; идемпотентность; блокировка единственного экземпляра; heartbeat; `STEP_ERROR` без остановки; профили paper/testnet/trade; окружение сервиса чистится как у `labels` (`LABELS_SECRET_PREFIXES` в `platform/services.py`); статусы жёлтый (`RULES_NO_EVENT`, `WARMUP_STUCK`, `AUTO_RESTORED`) и красный (`WATCH_STALE`, `CHAIN_BROKEN`, `DB_CORRUPT`)
   - учёт суток (Requirement 15.6): засчитываемые сутки при работе ≥ 12 часов, полный проход при всех суточных шагах (или кодах `NO_MENU`, `NOT_DUE`, `NO_DATA`) и `observe` успешен в ≥ 90% часов работы; сутки < 12 часов нейтральны
   - `promotion_ready`: 7 полных из последних 10 засчитываемых суток, 7 × 24 часа работы без `CHAIN_BROKEN`/`DB_CORRUPT`/`WATCH_STALE`, сторож не старше 3 часов, нет серии `STEP_ERROR`, копия не старше 24 часов и `integrity_check`; `WARMUP_STUCK` (Requirement 10.6); `WATCH_STALE` только если цикл работает непрерывно дольше `lease_h` без успешного сторожа
