@@ -11,7 +11,7 @@ describe('приведение ответа', () => {
     for (const k of LEARNING_MOCKS) {
       const d = normalizeLearning(mockLearning(k as LearningMock, 'paper'))
       expect(d?.ok, k).toBe(true)
-      expect(d?.order).toEqual(['result', 'vs_policy', 'discipline', 'skips', 'exits', 'economics', 'memory', 'lessons', 'versions'])
+      expect(d?.order).toEqual(['result', 'vs_policy', 'discipline', 'skips', 'exits', 'economics', 'memory', 'lessons', 'versions', 'hyps'])
       expect(Object.keys(d!.blocks).sort()).toEqual([...d!.order].sort())
     }
   })

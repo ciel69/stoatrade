@@ -48,7 +48,7 @@ const hasPartial = computed(() => rows.value.some((r) => r.partial))
 
       <UiBandChart class="chart" :points="points" label="Доля верных пропусков по неделям" x-label="Неделя" :height="132" :format="(v: number) => pctText(v)" empty-text="Оценок по неделям пока нет" />
 
-      <div class="scroll">
+      <div class="scroll" tabindex="0" role="region" aria-label="Пропуски и сделки по неделям">
         <table class="tbl">
           <caption class="sr">Пропуски и сделки по неделям</caption>
           <thead>

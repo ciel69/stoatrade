@@ -15,7 +15,7 @@ const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFi
 const VERDICT_STATES: readonly string[] = ['few_data', 'no_difference', 'confirmed']
 
 /** Порядок блоков, если сервер его не прислал. */
-export const DEFAULT_ORDER: readonly string[] = ['result', 'vs_policy', 'discipline', 'skips', 'exits', 'economics', 'memory', 'lessons', 'versions']
+export const DEFAULT_ORDER: readonly string[] = ['result', 'vs_policy', 'discipline', 'skips', 'exits', 'economics', 'memory', 'lessons', 'versions', 'hyps']
 
 function failed(mode: LearningMode, error: string): LearningDetail {
   return {

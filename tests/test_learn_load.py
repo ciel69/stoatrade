@@ -238,7 +238,7 @@ class TestUsageAndSignature(Root):
 
     def test_signature_changes(self):
         s0 = L.source_signature(self.root)
-        self.assertEqual(s0, (None,) * 10)          # R2.6: + lessons.jsonl, swaps.jsonl, knowledge.sqlite, -wal, маркер восстановления
+        self.assertEqual(s0, (None,) * 11)          # R2.6: + lessons.jsonl, swaps.jsonl, knowledge.sqlite, -wal, маркер восстановления, hyp_ref.json
         self.write_trades(tr(1))
         s1 = L.source_signature(self.root)
         self.assertNotEqual(s0, s1)
@@ -248,6 +248,10 @@ class TestUsageAndSignature(Root):
         with open(os.path.join(self.root, "config", "learning.json"), "w", encoding="utf-8") as f:
             f.write("{}")
         self.assertIsNotNone(L.source_signature(self.root)[4])
+        os.makedirs(os.path.join(self.root, "runtime", "learn"), exist_ok=True)          # справка меток блока «Гипотезы» тоже сбрасывает кеш
+        with open(os.path.join(self.root, "runtime", "learn", "hyp_ref.json"), "w", encoding="utf-8") as f:
+            f.write("{}")
+        self.assertIsNotNone(L.source_signature(self.root)[10])
 
 
 if __name__ == "__main__":

@@ -165,9 +165,10 @@ def _stat(path):
 
 def source_signature(root):
     """(размер, mtime_ns) для trades.jsonl, cases.jsonl, exclude_trades.json, llm_calls.jsonl, config/learning.json и (R2.6, блоки «Уроки» и
-    «Версии») lessons.jsonl, brain/swaps.jsonl, knowledge.sqlite с -wal, маркера восстановления базы; нет файла = None."""
+    «Версии») lessons.jsonl, brain/swaps.jsonl, knowledge.sqlite с -wal, маркера восстановления базы, (блок «Гипотезы») runtime/learn/hyp_ref.json;
+    нет файла = None."""
     kdb = labels_store.db_path(root)
     return (_stat(paths.state("trades.jsonl", root=root)), _stat(memcases.cases_path(root)), _stat(paths.state("exclude_trades.json", root=root)),
             _stat(llm_usage.calls_file(root)), _stat(paths.config("learning.json", root=root)),
             _stat(memlessons.lessons_path(root)), _stat(paths.state("brain", "swaps.jsonl", root=root)), _stat(kdb), _stat(kdb + "-wal"),
-            _stat(KM.restoring_path(root)))
+            _stat(KM.restoring_path(root)), _stat(paths.runtime("learn", "hyp_ref.json", root=root)))

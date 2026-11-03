@@ -40,7 +40,7 @@ onMounted(() => requestAnimationFrame(() => { ready.value = true }))        // �
 
       <UiBandChart class="chart" :points="points" label="Доля нарушений правил по неделям" x-label="Неделя" :height="132" :format="(v: number) => pctText(v)" empty-text="Оценок по неделям пока нет" />
 
-      <div class="scroll">
+      <div class="scroll" tabindex="0" role="region" aria-label="Нарушения и ошибки по неделям">
         <table class="tbl">
           <caption class="sr">Нарушения и ошибки по неделям</caption>
           <thead>

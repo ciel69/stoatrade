@@ -27,7 +27,8 @@ VERDICT = ("state", "reason", "text", "n", "n_recent", "n_prev", "diff_r", "p", 
 EST = ("v", "lo", "hi", "n", "lvl")
 EXPECT = {"empty": ("few_data", "n_lt_min"), "few": ("few_data", "n_lt_min"), "nodiff": ("no_difference", "not_significant"),
           "confirmed": ("confirmed", "improved"), "down": ("no_difference", "not_significant"), "mode_unknown": ("no_difference", "no_baseline"),
-          "no_labels": ("no_difference", "no_baseline"), "computing": ("no_difference", "no_baseline"), "full": ("confirmed", "improved")}
+          "no_labels": ("no_difference", "no_baseline"), "computing": ("no_difference", "no_baseline"), "full": ("confirmed", "improved"),
+          "r2": ("no_difference", "not_significant")}
 
 
 def clean(p):
@@ -142,7 +143,7 @@ class TestFixtures(unittest.TestCase):
     def test_est_shape(self):
         for n, p in self.fix.items():
             for k, v in walk(p):
-                if isinstance(v, dict) and "lvl" in v and k not in ("params",):
+                if isinstance(v, dict) and "lvl" in v and k not in ("params",) + tuple(report.ORDER):     # у блоков versions, hyps lvl — уровень интервалов блока
                     self.assertEqual(set(v), set(EST), (n, k))
                     if v["lo"] is not None:
                         self.assertLessEqual(v["lo"], v["hi"])
@@ -175,6 +176,18 @@ class TestFixtures(unittest.TestCase):
         self.assertEqual(full["blocks"]["economics"]["scope"], "platform")
         self.assertTrue(full["blocks"]["result"]["series"]["50"])
         self.assertTrue(full["blocks"]["exits"]["series"]["50"])
+        for n in ("empty", "full"):                                         # без таблиц цикла — заглушка этапа; гипотез без сделок с тегом нет
+            self.assertEqual((f[n]["blocks"]["lessons"]["status"], f[n]["blocks"]["versions"]["status"]), ("stage", "stage"), n)
+            self.assertEqual((f[n]["blocks"]["hyps"]["status"], f[n]["blocks"]["hyps"]["reason"]), ("no_data", "no_trades"), n)
+        r2 = f["r2"]["blocks"]                                              # R2.6 (задача 20): блоки с данными для фронтенда
+        for bid in ("lessons", "versions", "hyps"):
+            self.assertEqual(r2[bid]["status"], "ok", bid)
+        self.assertEqual(r2["lessons"]["best"]["lesson_id"], "L-0002")
+        self.assertEqual([x["verdict"] for x in r2["versions"]["rulebook"]], ["few_data", "not_worse"])
+        self.assertEqual(r2["versions"]["n_pre_r2"], 20)
+        fam = dict((x["family"], x) for x in r2["hyps"]["families"])
+        self.assertIsNotNone(fam["liq-cascade-reclaim"]["ref"])
+        self.assertEqual(fam["oi-build-squeeze"]["n"], 0)
 
     def test_size_and_secrets(self):
         for n, p in self.fix.items():

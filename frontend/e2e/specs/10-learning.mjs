@@ -6,6 +6,7 @@
  */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import path from 'node:path'
 import { scenario, waitFor } from '../lib/harness.mjs'
 import { FRONTEND_DIR } from '../lib/env.mjs'
@@ -290,6 +291,109 @@ scenario('prefers-reduced-motion: на странице нет бесконеч�
   }))
   assert.equal(m.infinite, 0, 'бесконечных анимаций нет')
   assert.ok(m.delays.length > 0 && m.delays.every((d) => d === '0s'), `лесенка задержек отключена: ${m.delays.join(', ')}`)
+})
+
+// ---- блоки R2.6 «Уроки», «Версии мозга до/после» и «Гипотезы» (спека R2, задача 20) по эталону бэкенда payload_r2
+
+const AXE = readFileSync(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8')
+async function axe(page, what) {
+  await page.addScriptTag({ content: AXE })
+  const res = await page.evaluate(async () => {
+    const r = await window.axe.run({ include: [['main']] }, { resultTypes: ['violations'] })
+    return r.violations.map((v) => ({ id: v.id, impact: v.impact, nodes: v.nodes.slice(0, 3).map((n) => n.target.join(' ')) }))
+  })
+  const bad = res.filter((v) => v.impact === 'serious' || v.impact === 'critical')
+  assert.deepEqual(bad, [], `${what}: axe-core нашёл серьёзные нарушения: ${JSON.stringify(bad)}`)
+}
+const section = (page, title) => page.locator('section', { has: page.getByRole('heading', { name: title, level: 2, exact: true }) }).first()
+const sgn = (x, d = 2) => (x > 0 && Number(Math.abs(x).toFixed(d)) !== 0 ? '+' : x < 0 && Number(Math.abs(x).toFixed(d)) !== 0 ? '−' : '') + Math.abs(x).toFixed(d)
+const serveR2 = (dash) => { dash.replies.learning = (m) => ({ topic: 'learning_detail', data: fresh('r2', m.mode) }) }
+
+scenario('R2.6: уроки, версии и гипотезы показывают числа ответа бэкенда с n и интервалами, вердикты словами', async ({ page, open, dash }) => {
+  serveR2(dash)
+  const raw = fixture('r2').blocks
+  await open('/brain/learning')
+  await ready(page)
+  await settle(page)
+  await shot(page, 'learning-1400-r2')
+  const text = await mainText(page)
+  assert.ok(!RAW.test(text), `в тексте страницы сырой код: ${text.match(RAW)?.[0]}`)
+  assert.ok(!EMOJI.test(text), 'эмодзи в тексте')
+  assert.equal(await page.getByRole('region', { name: 'Блоки следующих этапов' }).count(), 0, 'заглушек этапа нет: таблицы цикла есть')
+
+  const ls = await section(page, 'Уроки').innerText()
+  for (const k of ['candidates', 'hyp', 'trials', 'confirmed', 'rules']) assert.ok(ls.includes(String(raw.lessons.funnel[k])), `воронка: ${k}`)
+  assert.ok(ls.includes(raw.lessons.best.text), 'лучший урок')
+  assert.ok(ls.includes(`n = ${raw.lessons.best.n}`), 'n лучшего урока')
+  assert.ok(ls.includes(`${sgn(raw.lessons.best.diff.v)} R`) && ls.includes(`${sgn(raw.lessons.best.diff.lo)} R`) && ls.includes(`${sgn(raw.lessons.best.diff.hi)} R`), 'разница урока с интервалом')
+
+  const vr = await section(page, 'Версии мозга до/после').innerText()
+  for (const p of [...raw.versions.rulebook, ...raw.versions.swaps]) {
+    assert.ok(vr.includes(`${p.after.n} сдел`) && vr.includes(`${p.before.n} сдел`), `n до/после: ${p.kind}`)
+    if (p.diff.v !== null) assert.ok(vr.includes(`от ${sgn(p.diff.lo)} до ${sgn(p.diff.hi)}`), `интервал разницы: ${p.kind}`)
+  }
+  assert.match(vr, /не хуже/)
+  assert.match(vr, /данных мало/)
+  assert.match(vr, /для вывода нужно 100/)
+
+  const hy = section(page, 'Гипотезы')
+  const ht = await hy.innerText()
+  for (const f of raw.hyps.families) {
+    assert.ok(ht.includes(f.n >= 30 ? `${f.n} сделок, порог 30 пройден` : `${f.n} из 30`), `прогресс ${f.family}`)
+    if (f.n) assert.ok(ht.includes(`${sgn(f.r.v)} R`) && ht.includes(`от ${sgn(f.r.lo)} до ${sgn(f.r.hi)}`), `R ${f.family}`)
+  }
+  assert.match(ht, /мало данных \(n < 30\)/, 'n < 30 помечено')
+  assert.equal(await hy.getByRole('meter').count(), raw.hyps.families.length, 'полоса прогресса у каждого семейства')
+  assert.equal((ht.match(/Что говорят тысячи сигналов/g) ?? []).length, raw.hyps.families.filter((f) => f.ref).length, 'справка меток там, где она есть')
+
+  // подсказка справки открывается с клавиатуры и говорит, что статус она не меняет
+  await hy.getByRole('button', { name: 'Что говорят тысячи сигналов' }).first().focus()
+  await page.getByRole('tooltip').waitFor()
+  assert.match(await page.getByRole('tooltip').innerText(), /статус гипотезы он не меняет/)
+})
+
+for (const theme of ['dark', 'light']) {
+  scenario(`R2.6: axe-core (${theme === 'dark' ? 'тёмная' : 'светлая'} тема) без серьёзных нарушений, 390 px без горизонтальной прокрутки`, { colorScheme: theme, viewport: { width: 390, height: 844 } }, async ({ page, open, dash }) => {
+    serveR2(dash)
+    await open('/brain/learning')
+    await ready(page)
+    await settle(page)
+    await section(page, 'Гипотезы').waitFor()
+    await shot(page, `learning-390-${theme}-r2`)
+    await noOverflow(page, `390 px, r2, ${theme}`)
+    await section(page, 'Уроки').locator('details.tbl summary').click()
+    await noOverflow(page, '390 px, r2, недели уроков раскрыты')
+    await axe(page, `r2, ${theme}`)
+  })
+}
+
+scenario('R2.6: axe-core на заглушках этапа и пустом блоке гипотез (эталон full)', async ({ page, open, dash }) => {
+  serveLearning(dash)
+  await open('/brain/learning')
+  await ready(page)
+  await settle(page)
+  assert.match(await page.getByRole('region', { name: 'Блоки следующих этапов' }).innerText(), /Уроки[\s\S]*Появится на этапе 2/)
+  assert.match(await section(page, 'Гипотезы').innerText(), /Бумажных сделок с гипотезой пока нет/)
+  await axe(page, 'full')
+})
+
+scenario('R2.6, prefers-reduced-motion: полосы гипотез заполнены сразу, без переходов и анимаций в новых блоках', async ({ page, open, dash }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  serveR2(dash)
+  await open('/brain/learning')
+  await ready(page)
+  await section(page, 'Гипотезы').waitFor()
+  const m = await page.evaluate(() => {
+    const ms = (s) => Math.max(0, ...s.split(',').map((x) => (x.trim().endsWith('ms') ? parseFloat(x) : parseFloat(x) * 1000)).filter(Number.isFinite))
+    const own = [...document.querySelectorAll('section.hy *, section.ls *, section.vr *')]
+    const worst = own.map((e) => ms(getComputedStyle(e).transitionDuration) + ms(getComputedStyle(e).transitionDelay) + (getComputedStyle(e).animationName !== 'none' ? ms(getComputedStyle(e).animationDuration) : 0))
+      .reduce((a, b) => Math.max(a, b), 0)
+    const bars = [...document.querySelectorAll('section.hy .bar i')].map((e) => getComputedStyle(e).transform)
+    return { worst, bars, anims: document.getAnimations().filter((a) => a.effect?.target?.closest?.('section.hy .bar')).length }
+  })
+  assert.ok(m.worst <= 160, `в новых блоках при reduce только короткие смены цвета: ${m.worst} мс`)
+  assert.equal(m.anims, 0, 'полосы не анимируются')
+  assert.equal(m.bars[0], 'matrix(1, 0, 0, 1, 0, 0)', 'первая полоса (n ≥ 30) заполнена сразу')
 })
 
 // ---- фокус и клавиатура

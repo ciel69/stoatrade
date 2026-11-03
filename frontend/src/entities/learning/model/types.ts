@@ -112,6 +112,43 @@ export interface MemoryBlock extends LearningBlock {
   history: { status: BlockStatus; stage?: number; roadmap?: string; note?: string } | null
 }
 
+/** Блок «Уроки» (R2.6, src/tb/learn/stages.py: lessons_block). Уроки меток — по env_norm режима, уроки мозга — по всем режимам (brain_modes = all). */
+export interface LessonsByStatus { status: string; brain: number; labels: number; total: number }
+export interface LessonsFunnel { candidates: number; hyp: number; trials: number; trials_closed: number; confirmed: number; rules: number }
+export interface LessonsWeek { week: string; partial: boolean; created_brain: number; created_labels: number; confirmed: number; rejected: number }
+export interface BestLesson {
+  lesson_id: string | null; src: 'labels' | 'brain' | string; status: string | null; n: number; small: boolean
+  /** модуль claim.effect */
+  effect: number | null; metric: string | null; dir: string | null; vs: string | null
+  /** разность урока с 95% t-интервалом */
+  diff: Est | null; text: string
+}
+export interface LessonsBlock extends LearningBlock {
+  env_norm?: string; brain_modes?: string; n_lessons?: number; best_min_n?: number
+  by_status?: LessonsByStatus[]; by_source?: { brain: number; labels: number }; funnel?: LessonsFunnel; weeks?: LessonsWeek[]; best?: BestLesson | null
+}
+
+/** Блок «Версии мозга до/после» (R2.6, stages.versions_block). Сторона сравнения: сделки, средний R, доля нарушений. */
+export interface VersionSide { n: number; r: Est | null; viol: Est | null; n_rf: number; small: boolean }
+export type VersionVerdict = 'few_data' | 'worse' | 'not_worse'
+export interface VersionPairBase { ts: number | null; before: VersionSide; after: VersionSide; diff: Est | null; p: number | null; verdict: VersionVerdict }
+export interface RulebookPair extends VersionPairBase { kind: 'rulebook'; from: string | null; to: string | null; reason_code: string | null; rules_n: number }
+export interface SwapPair extends VersionPairBase { kind: 'model' | 'prompt'; kinds: string[]; seqs: number[]; targets: string[]; to: string[] }
+export interface VersionsBlock extends LearningBlock {
+  mode?: string; min_n?: number; lvl?: number; n_trades?: number; n_pre_r2?: number; rulebook_vers?: string[]; rulebook?: RulebookPair[]; swaps?: SwapPair[]
+}
+
+/** Блок «Гипотезы» (R2, Requirement 19.6; stages.hyps_block): бумажные сделки по семействам, справка меток — ориентир, статус не меняет. */
+export type HypStatus = 'confirmed' | 'accumulating' | 'not_confirmed'
+export interface HypRef { policy: string | null; policy_ver: number | null; kinds: string[]; env_norm: string; window_days: number | null; n: number; r: Est | null }
+export interface HypFamily {
+  family: string; n: number; n_target: number; small: boolean; r: Est | null; win: number | null; p: number | null; status: HypStatus; confirmable: boolean; ref: HypRef | null
+}
+export interface HypsBlock extends LearningBlock {
+  mode?: string; env_norm?: string; min_n?: number; lvl?: number; k?: number; alpha_adj?: number | null; n_trades?: number; n_confirmed?: number; ref_ts?: number | null
+  families?: HypFamily[]
+}
+
 export interface LearningMeta {
   built_ms: number | null
   cached: boolean

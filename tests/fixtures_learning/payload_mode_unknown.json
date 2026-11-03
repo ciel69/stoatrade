@@ -728,6 +728,23 @@
     }
    }
   },
+  "hyps": {
+   "alpha_adj": 0.05,
+   "env_norm": "mainnet",
+   "families": [],
+   "id": "hyps",
+   "k": 1,
+   "lvl": 0.95,
+   "min_n": 30,
+   "mode": "paper",
+   "n_confirmed": 0,
+   "n_trades": 40,
+   "note": "Бумажных сделок с гипотезой пока нет.",
+   "reason": "no_trades",
+   "ref_ts": null,
+   "status": "no_data",
+   "title": "Гипотезы"
+  },
   "lessons": {
    "id": "lessons",
    "note": "появится на этапе 2",
@@ -1233,7 +1250,8 @@
   "economics",
   "memory",
   "lessons",
-  "versions"
+  "versions",
+  "hyps"
  ],
  "schema": "tb.learning/1",
  "verdict": {

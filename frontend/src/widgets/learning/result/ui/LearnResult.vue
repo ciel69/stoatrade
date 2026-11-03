@@ -100,7 +100,7 @@ const message = computed(() => bv.value.message || (bv.value.kind === 'data' && 
 .stats { margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--space-3) var(--space-5); padding-top: var(--space-3); border-top: 1px solid var(--line); }
 .stat { display: grid; gap: 2px; align-content: start; min-width: 0; }
 .stat dt { font-size: 12px; color: var(--muted); display: grid; }
-.hint { font-size: 11px; opacity: 0.8; }
+.hint { font-size: 11px; }        /* без прозрачности: приглушённый цвет уже даёт иерархию, а opacity роняла контраст светлой темы ниже 4.5:1 */
 .stat dd { margin: 0; font-variant-numeric: tabular-nums; }
 .val { font-size: 20px; font-weight: 700; line-height: 1.3; letter-spacing: -0.01em; text-wrap: balance; }
 .val.pos { color: var(--pos); }
