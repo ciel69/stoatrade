@@ -208,6 +208,7 @@ FIELDS = {
     "thesis": _n("str", minlen=THESIS_LEN[0], maxlen=THESIS_LEN[1], req=True),
     "tags": _n("obj", default={}, fields={
         "experiment": _TAG, "variant": _VARIANT, "setup": _TAG, "hypothesis": _TAG,
+        "hyp_raw": _TAG,                                   # R2 (Requirement 19.2): исходный тег гипотезы, ставший `other` (ставит шлюз, для аудита)
         "extra": _n("arr", item=_TAG, max=5),
     }),
     "entry": _n("obj", req=True, fields={

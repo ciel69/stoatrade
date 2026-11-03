@@ -31,6 +31,7 @@ from tb.knowledge import store2
 from tb.labels import store as LST
 from tb.learnloop import candidates as CA
 from tb.learnloop import clusters as CL
+from tb.learnloop import trial as TR
 from tb.learnloop import versions as V
 
 HOUR = 3600
@@ -164,8 +165,8 @@ def default_steps():
         Step("menu", "daily", step_menu),
         Step("accept", "daily", step_accept),
         Step("holdouts", "daily", step_holdouts),
-        Step("register", "daily", stub(14), stub=True, task=14),                         # trial.register для новых уроков hyp
-        Step("verdicts", "hourly", stub(14), interval="verdict_s", group="verdict", stub=True, task=14),
+        Step("register", "daily", TR.step_register),                                     # trial.register_pending для новых уроков hyp
+        Step("verdicts", "hourly", TR.step_verdicts, interval="verdict_s", group="verdict"),
         Step("promote", "hourly", stub(15), interval="verdict_s", group="verdict", stub=True, task=15),   # пересечения, LOSS_CAP, promotion_ready
         Step("bounds", "hourly", step_bounds, interval="verdict_s"),
         Step("reconcile", "hourly", stub(15), interval="reconcile_s", stub=True, task=15),

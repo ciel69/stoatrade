@@ -130,7 +130,7 @@
   - Зависит от: 11, 12
   - _Requirements: 7.4, 7.5, 7.7, 7.11, 8.3_
 
-- [ ] 14. Испытание: `tb.learnloop.trial` (волна 6)
+- [x] 14. Испытание: `tb.learnloop.trial` (волна 6)
   - `register` в том же проходе, что создание урока `hyp` (критерий с активным набором правил на момент старта, `alpha_adj` = alpha / `max_parallel`, `overlap_share_max`, `scope`, `env_norm`, `ctx_ver`, хеш конфига); проверка хеша holdout по выборке окна (`SAMPLE_CHANGED`); `estimate_reach` (`UNREACHABLE_N`); лимит `max_parallel` по открытым (до вердикта) испытаниям и ожидание регистрации до `wait_max_days` (`BUDGET`)
   - числа только из выборки окна `cluster_runs` (`pass_active` от набора критерия, предельные хиты, база испытания, `nofill_n`), кластеры теста; `verdict` (чистая; первые `n_target` кластеров теста по `(t0, key)`, только при наступившем `cut_ts`, средние по значениям кластеров, `cut_ts` в `trials`; окно `[start_ts, deadline_ts)`, `inconclusive` (`NO_VERDICT`) без набора `n_target` не раньше `deadline_ts + cluster_close_max_h + observe_s` по строкам с `closed_ts ≤` этой границы; `inconclusive` при отключённой записанной версии политики; смена `ctx_ver` — сразу `inconclusive` `CTX_CHANGED` без чёрного списка; `RESTORED` после автовосстановления); испытание закрывается вердиктом
   - пересечение по строкам при продвижении другого правила: доля прогонов-хитов испытания в его окне, отсекаемых продвинутым правилом, > `overlap_share_max` ⇒ `NO_VERDICT` (`OVERLAP`) без чёрного списка; иначе испытание продолжается
@@ -298,7 +298,7 @@
   - Зависит от: 3
   - _Requirements: 19.1, 19.3, 19.4_
 
-- [ ] 35. Нормализация гипотезы при подаче плана: `gateway/catalog.py`, `core/plan_schema.py`, `brain/entryplan.py`, `brain/runner.py` (волна 6)
+- [x] 35. Нормализация гипотезы при подаче плана: `gateway/catalog.py`, `core/plan_schema.py`, `brain/entryplan.py`, `brain/runner.py` (волна 6)
   - `h_submit` (общая точка `entry_scout` и `chat`) заменяет `tags.hypothesis` семейством `hyps.family`; неизвестное — `other` и `tags.hyp_raw` (новое необязательное поле `plan_schema`, шаблон `RE_TAG`); план не отклоняется
   - раннер по умолчанию подставляет семейство сетапа (`brain/entryplan.py:68`); описания инструментов (`brain/runner.py:93`, описание `submit_plan` в `gateway/catalog.py`) перечисляют семейства
   - критерии приёмки: план с `hypothesis="Range_Fade"` принимается с `range-fade`; план с неизвестным тегом принимается с `other` и `hyp_raw`; правила `rule_eval` (задача 13) и прочие проверки `h_submit` не меняются

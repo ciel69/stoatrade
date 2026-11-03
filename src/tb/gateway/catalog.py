@@ -16,7 +16,7 @@ from tb import paths
 from tb.brain import brief as brief_mod
 from tb.brain import common
 from tb.brain import events_cli, idearev, plan_cli
-from tb.core import bus, decisions, expstats, ideas, journal, plan_schema, portfolio, risklevels, tradectx
+from tb.core import bus, decisions, expstats, hyps, ideas, journal, plan_schema, portfolio, risklevels, tradectx
 from tb.gateway import registry as _registry
 from tb.logic import learn_rules
 from tb.memory import blocks as memblocks, cases as memcases, cfg as memcfg, features as memfeatures, lessons as memlessons, query as memquery, review as memreview
@@ -675,11 +675,39 @@ def _stamp_tags(raw, ctx):
     raw["tags"] = tags
 
 
+def _tag_safe(v):
+    """Строка -> вид шаблона RE_TAG (нижний регистр, чужие символы -> `-`, не длиннее 40) или None, если короче 2 символов."""
+    s = re.sub(r"[^a-z0-9._-]+", "-", str(v).lower()).strip("-")[:40]
+    return s if re.match(RE_TAG, s) else None
+
+
+def _norm_hyp(raw):
+    """R2 (Requirement 19.2): tags.hypothesis -> семейство словаря (hyps.family); неизвестное -> `other` и исходник в tags.hyp_raw (для аудита).
+    План из-за гипотезы не отклоняется: пустой тег убирается, hyp_raw от модели не принимается (его ставит только шлюз)."""
+    tags = raw.get("tags")
+    if not isinstance(tags, dict):
+        return
+    tags.pop("hyp_raw", None)
+    v = tags.get("hypothesis")
+    if v is None:
+        tags.pop("hypothesis", None)
+        return
+    fam, src = hyps.family(v if isinstance(v, str) else json.dumps(v, ensure_ascii=False))
+    if fam is None:
+        tags.pop("hypothesis", None)
+        return
+    tags["hypothesis"] = fam
+    src = _tag_safe(src) if src is not None else None
+    if src:
+        tags["hyp_raw"] = src
+
+
 def h_submit(ctx, a):
     raw = dict(a["plan"])
     for k in plan_schema.EXEC_FIELDS:
         raw.pop(k, None)
     _stamp_tags(raw, ctx)
+    _norm_hyp(raw)                     # до проверки схемы, правил rulebook и записи rule_eval: в плане и журнале уже семейство
     lim = ctx.agent.limits
     if "mode" not in raw and lim["modes"] == ["paper"]:
         raw["mode"] = "paper"
@@ -905,7 +933,9 @@ _reg(Tool("show_plan", "Show one plan: whitelisted spec (numbers and identifiers
           out=("id", "spec", "own_thesis", "rt", "events", "decisions")))
 _reg(Tool("submit_plan", "Submit a new trading plan (schema tb.plan/1; see the plan schema/template). Validated offline, checked against this agent's limits "
           "(symbols, mode, risk in USDT and % of equity, size_mult, no pyramiding), then queued for the executor which runs guard. You never set size, leverage or "
-          "margin. Entry/stop/targets are prices in quote currency. Answer: ok true/false, or ok null = queued (do not resend).",
+          "margin. Entry/stop/targets are prices in quote currency. tags.hypothesis is a hypothesis family, one of: " +
+          ", ".join(f for f in hyps.HYP_FAMILIES if f != hyps.OTHER) + "; any other value is stored as other (original in tags.hyp_raw), "
+          "the plan is not rejected for it. Answer: ok true/false, or ok null = queued (do not resend).",
           dict({"plan": _obj("The plan object (tb.plan/1)."), "reason": REASON}, **{k: v for k, v in CMD_COMMON.items() if k != "reason"}), "plan.submit", h_submit,
           required=["plan"], out=("cmd_id", "plan_id", "rev", "guard_preview", "executor", "gateway_actor"), write=True))
 _reg(Tool("amend_plan", "Amend a plan with a JSON Merge Patch of the current plan (no revision needed: it is checked against the current plan). Stops can only be "

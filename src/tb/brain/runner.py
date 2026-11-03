@@ -19,7 +19,7 @@ import time
 
 from tb import paths
 from tb.brain import common, conf as conf_mod, entryplan, fallback, guards, jobs, roles_runtime, swap, validate
-from tb.core import decisions, plan_schema
+from tb.core import decisions, hyps, plan_schema
 
 TRUNC_MAX_TOKENS = 8192         # потолок удвоения лимита вывода при обрезанном ответе
 from tb.llm import budget as budget_mod, schema as schema_mod, toolloop, usage as usage_mod
@@ -75,7 +75,9 @@ PM_TOOL_SPECS = [
 ES_TTL = entryplan.ES_TTL                  # разворачивание кандидата в tb.entry/1 живёт в entryplan.expand (общий код для инструментов и JSON-пути)
 ES_WHY = {"why": {"type": "string", "maxLength": 200, "description": "short reason in Russian: reason | fact with a number | risk"}}
 ES_FAIL_SKIP = entryplan.ES_FAIL_SKIP
-ES_CONF = {"conf": {"type": "number", "minimum": 0, "maximum": 1, "description": "confidence 0..1 (default 0.6)"}}
+HYP_DESC = ("optional hypothesis family, one of: %s (default: the family of the setup; any other value is stored as other)"
+            % ", ".join(f for f in hyps.HYP_FAMILIES if f != hyps.OTHER))          # список из config/hypotheses.json (R2, Requirement 19.2)
+ES_CONF = {"conf":{"type": "number", "minimum": 0, "maximum": 1, "description": "confidence 0..1 (default 0.6)"}}
 
 
 def _es_spec(name, desc, props, req):
@@ -90,7 +92,7 @@ ES_TOOL_SPECS = [
              {"candidate": {"type": "integer", "minimum": 1, "maximum": 10, "description": "the n of a brief.cands row with ok=true"},
               "setup": {"type": "string", "enum": [s for s in validate.SETUPS if s != "none"], "description": "setup that fits (a momentum_chase row keeps its own)"},
               "thesis": {"type": "string", "maxLength": 280, "description": "one sentence in Russian with the level and a number"},
-              "hypothesis": {"type": "string", "pattern": validate.RE_TAG, "description": "optional hypothesis tag a-z0-9._- (default: the setup)"},
+              "hypothesis": {"type": "string", "pattern": validate.RE_TAG, "description": HYP_DESC},
               "size_mult": {"type": "number", "minimum": 0.1, "maximum": validate.ENTRY_SIZE_MULT_MAX, "description": "optional, decrease only: never above the candidate's own size_mult"},
               "tags": {"type": "array", "maxItems": 2, "items": {"enum": list(validate.ENTRY_TAGS)}, "description": "optional extra tags; the candidate's own tags come first, at most 2 in total"},
               **ES_CONF}, ("candidate", "setup")),
