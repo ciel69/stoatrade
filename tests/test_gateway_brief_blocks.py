@@ -72,11 +72,12 @@ class TestBriefBuild(TR.RulesBase):
         TR.lease(self.root, self.now)
         self.assertEqual(self.build(), base_start)                                       # пустой rulebook: досье прежнее поле в поле
         self.assertEqual(self.build("event", sym="SOL"), base_event)
+        now0 = self.now
         self.setUp()
+        self.now = now0                         # то же «сейчас», что у base_start: метки времени внутри блоков досье не переходят через границу секунды
         self.active_rule()
         b = self.build()
         self.assertEqual((b["rulebook"]["ver"], b["rulebook"]["apply"], [r["id"] for r in b["rulebook"]["rules"]]), ("R-0002", True, ["RL0001"]))
-        # setUp() заново берёт время: ts досье может отличаться на секунду, остальное поле в поле
         self.assertEqual({k: v for k, v in b.items() if k not in ("rulebook", "ts")}, {k: v for k, v in base_start.items() if k != "ts"})
         self.assertIn("rulebook", self.build("event", sym="SOL"))
 

@@ -44,6 +44,7 @@ class Base(unittest.TestCase):
         self.e = _ctl.Env(self)
         self.e.w("config/control.json", {"version": 1, "auth": {"mode": self.mode, "remember_days": 30}})
         self.web = ctlweb.CtlWeb(self.e.root)
+        _ctl.short_ctl_wait(self)          # ctl здесь не запущен: challenge ждёт ответа 0,3 с вместо 4 с и отдаёт тот же 504
 
     def open_session(self, web=None, now=NOW):
         code, obj, extra = (web or self.web).get("/api/ctl/session", {}, hdr(), now)

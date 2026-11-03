@@ -48,6 +48,48 @@ def synthetic(n=40):
     return out
 
 
+def put_cases(root, lst):
+    """Пишет случаи так же, как cases.append_new по одному (валидация, rev=1, цепочка seq/prev/h, дубль и длинная строка -> CaseError; записанное
+    до ошибки остаётся), но в хранилище jsonl одной записью файла: на Windows каждый append_new несколько раз открывает файлы и блокировку
+    (~10 мс на случай), а оснастке нужны сотни и тысячи случаев. Хранилище sqlite (тестовый _FORCE обёрток) -> прежний путь через append_new.
+    Проверки самой записи (append_new, блокировка, обрыв хвоста) зовут cases.append_new напрямую."""
+    from tb.core.filelock import FileLock
+    from tb.memory import chain
+    if cases._store(root) != "jsonl":
+        for c in lst:
+            cases.append_new(c, root=root)
+        return
+    path, lock = cases.cases_path(root), cases.cases_lock(root)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    lines = []
+    try:
+        with FileLock(lock, wait=chain.LOCK_WAIT_S):
+            ids = set(cases._state(root).ids)
+            seq, last_h, nl = chain.tail(path)
+            try:
+                for c in lst:
+                    norm, errs = cases.validate(dict(c))
+                    if errs:
+                        raise cases.CaseError("; ".join(errs))
+                    norm["rev"] = 1
+                    if norm["case_id"] in ids:
+                        raise cases.CaseError("exists: %s" % norm["case_id"])
+                    out = dict(norm, seq=seq + 1, prev=last_h)
+                    out["h"] = chain.make_hash(last_h, out)
+                    line = chain.canon(out)
+                    if len(line.encode("utf-8")) > cases.MAX_BYTES:
+                        raise cases.CaseError("строка %d байт > %d" % (len(line.encode("utf-8")), cases.MAX_BYTES))
+                    ids.add(norm["case_id"])
+                    seq, last_h = seq + 1, out["h"]
+                    lines.append(line)
+            finally:
+                if lines:
+                    with open(path, "ab") as f:
+                        f.write((("" if nl else "\n") + "\n".join(lines) + "\n").encode("utf-8"))
+    finally:
+        cases._refresh(root)
+
+
 class TmpRoot(unittest.TestCase):
     """Временный TB_ROOT-подобный корень: self.root с state/ и config/ (memory.json берётся из проекта)."""
 
@@ -61,8 +103,7 @@ class TmpRoot(unittest.TestCase):
         shutil.rmtree(self.root, ignore_errors=True)
 
     def put(self, lst):
-        for c in lst:
-            cases.append_new(c, root=self.root)
+        put_cases(self.root, lst)
 
     def copy_fixtures(self):
         for src, dst in (("trades_snapshot.jsonl", "trades.jsonl"), ("ideas_snapshot.jsonl", "ideas.jsonl"), ("hot_outcomes_snapshot.jsonl", "hot_outcomes.jsonl")):

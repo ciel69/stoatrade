@@ -37,6 +37,7 @@ class Base(unittest.TestCase):
         self.fresh()
         self.stop = threading.Event()
         _ctl.pump(self.c, self.stop)
+        _ctl.patient_ctl_wait(self, self.stop)
         self.addCleanup(self.stop.set)
 
     def fake_reconf(self, profile, observe, timeout):
@@ -76,6 +77,11 @@ class Base(unittest.TestCase):
         for _ in range(200):
             res = self.b.result_of(cid)
             if res:
+                # ctl пишет результат в outbox раньше строки аудита (handlers.finish): дождаться и её, иначе под нагрузкой rows() её ещё не видит
+                for _ in range(100):
+                    if any(x.get("id") == cid for x in audit.tail(self.e.root, 300)):
+                        break
+                    time.sleep(0.05)
                 return res
             time.sleep(0.05)
         return None
@@ -252,7 +258,15 @@ class TestFlow(Base):
         r = self.cmd(dict(LIVE, accepted=ids), nonce=d["nonce"], phrases=d["phrases"])
         res = self.final(r["accepted_id"])
         self.assertEqual((res["status"], res["code"]), ("done", "OK"), res)
-        row = [x for x in self.rows() if x["code"] == "OK" and x["result"] == "ok" and x["src"] == "dash"][-1]
+        # ctl пишет ответ в outbox раньше строки аудита (handlers.finish): под параллельной нагрузкой ждём строку
+        deadline, ok_rows = time.monotonic() + 15.0, []
+        while time.monotonic() < deadline:
+            ok_rows = [x for x in self.rows() if x["code"] == "OK" and x["result"] == "ok" and x["src"] == "dash"]
+            if ok_rows:
+                break
+            time.sleep(0.05)
+        self.assertTrue(ok_rows, "строка аудита day.start OK не появилась за 15 с")
+        row = ok_rows[-1]
         self.assertEqual(row["mode"], "live")
         self.assertEqual(sorted(w["id"] for w in row["warnings_accepted"]), ids)
         self.assertEqual(sorted(w["id"] for w in ctlstate.platform_state(self.e.root)["live_waivers"]), ids)

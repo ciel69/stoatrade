@@ -8,7 +8,7 @@ import tempfile
 
 import _bootstrap  # noqa: F401
 import _labels_helpers as H
-from _memory_helpers import mk
+from _memory_helpers import mk, put_cases as put_cases_bulk
 from tb.labels import store
 from tb.learn import report
 from tb.memory import cases as memcases
@@ -88,8 +88,8 @@ def skip_recs(rng, n, ts, mode="paper", type="skip", start=1000):
 
 
 def put_cases(root, lst):
-    for c in lst:
-        memcases.append_new(c, root=root)
+    """Случаи в корень (пакетно, как append_new по одному: _memory_helpers.put_cases)."""
+    put_cases_bulk(root, lst)
 
 
 def usage_recs(rng, end=NOW, days=50):

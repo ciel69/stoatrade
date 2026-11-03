@@ -22,6 +22,7 @@
 ```json
 "allow": [
   "Bash(./tb test)",
+  "Bash(./tb test *)",
   "Bash(./tb help)",
   "Bash(./tb bybit read balance)",
   "Bash(./tb bybit read positions)",
