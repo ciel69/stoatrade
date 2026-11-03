@@ -125,7 +125,7 @@ def cmd_migrate(a, root, cfg):
 
 
 def cmd_verify(a, root, cfg):
-    c, l = cases.verify(root), lessons.chain.verify(lessons.lessons_path(root))
+    c, l = cases.verify(root), lessons.verify(root)          # цепочки в активном хранилище (store: jsonl | sqlite)
     res = {"ok": bool(c["ok"] and l["ok"]), "cases": c, "lessons": l}
     _out(res)
     return 0 if res["ok"] else 1

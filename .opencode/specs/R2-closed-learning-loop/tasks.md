@@ -228,7 +228,7 @@
   - Зависит от: 4, 23
   - _Requirements: 3.9, 3.10, 3.11, 3.12_
 
-- [ ] 26. Вторая итерация: переключение боевых данных и RUNBOOK (волна 14)
+- [~] 26. Вторая итерация: переключение боевых данных и RUNBOOK (волна 14)
   - порядок: `migrate --dry-run`, `./tb down`, копии, `migrate`, индекс поиска похожих `knowledge.similar.migrate_v2s` (задача 25; идемпотентно, до этого поиск по меткам работает через `ix_sig_type` медленнее), `./tb up`, `./tb knowledge verify`; возврат через `export-jsonl`; запись в `docs/RUNBOOK.md`
   - до переключения перевести на фасад `tb.knowledge.memstore` прямых читателей JSONL (найдено при приёмке задачи 24): `memory/tick.py` (проверяет наличие `cases.jsonl` — при sqlite запускал бы `memory.migrate` каждую минуту), `memory/cli.py` (`./tb memory verify` по цепочке `lessons.jsonl`), `memory/diagnose.py:_lessons_state`, `learn/load.py` (ключ кеша по размерам файлов); прогнать `migrate` и `export-jsonl` на полной копии `state/` вместе с `knowledge.sqlite`
   - критерии приёмки: `verify` без разрывов, статус зелёный, мозг получает досье, возврат проверен на копии

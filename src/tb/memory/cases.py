@@ -505,6 +505,31 @@ def append_update(case_id, patch, root=None, ts=None):
     return row
 
 
+def present(root=None):
+    """Хранилище случаев не пусто: store="jsonl" - файл cases.jsonl существует (как прежде), "sqlite" - в case_rows (или очереди) есть строки."""
+    if _store(root) == "sqlite":
+        from tb.knowledge import memstore
+        return memstore.present(root, "case_rows")
+    return os.path.exists(cases_path(root))
+
+
+def _stat(path):
+    try:
+        st = os.stat(path)
+        return (st.st_size, st.st_mtime_ns)
+    except OSError:
+        return None
+
+
+def signature(root=None):
+    """Подпись хранилища случаев для ключей кешей: store="jsonl" - (размер, mtime_ns) cases.jsonl или None (как прежде), "sqlite" -
+    memstore.signature (последняя строка case_rows и очередь)."""
+    if _store(root) == "sqlite":
+        from tb.knowledge import memstore
+        return memstore.signature(root, "case_rows")
+    return _stat(cases_path(root))
+
+
 def verify(root=None):
     """Цепочка хешей + повторная проверка схемы и приватности всех свёрнутых случаев (store="sqlite": цепочка таблицы case_rows)."""
     if _store(root) == "sqlite":

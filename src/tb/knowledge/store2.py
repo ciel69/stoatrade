@@ -542,7 +542,8 @@ def _red(codes):
 def verify(root=None, quick=False, counts=True, now=None):
     """Проверка базы знаний (./tb knowledge verify, ./tb status): маркеры, integrity_check (quick_check при quick), цепочки, индексы и триггеры v2a,
     размеры таблиц. -> {"ok", "color", "codes", "reasons", ...}. Красный: DB_CORRUPT, CHAIN_BROKEN, RESTORING, RESTORE_FAILED, SCHEMA_MISMATCH;
-    жёлтый: NOT_READY (маркер v2 без таблиц), AUTO_RESTORED (7 суток после автовосстановления)."""
+    жёлтый: NOT_READY (маркер v2 без таблиц; store=sqlite без файла или таблиц v2b), AUTO_RESTORED (7 суток после автовосстановления),
+    SPOOL_PENDING, JSONL_APPEARED (store=sqlite, а cases.jsonl / lessons.jsonl есть в state/). rep["store"] - активное хранилище случаев и уроков."""
     now = time.time() if now is None else now
     path = db_path(root)
     rep = {"ok": True, "color": "green", "codes": [], "reasons": [], "v2": KM.has_v2(root), "db": os.path.exists(path), "restoring": KM.restoring(root),
@@ -557,6 +558,13 @@ def verify(root=None, quick=False, counts=True, now=None):
         rep["size_mb"] = round(os.path.getsize(path) / 1048576.0, 2)
     if spool_pending(root):
         add(S2.SPOOL_PENDING, "база знаний: в очереди state/%s есть записи случаев/уроков: ./tb knowledge replay-spool" % S2.SPOOL_NAME)
+    from tb.knowledge import memstore                     # ленивый импорт: memstore импортирует этот модуль
+    rep["store"] = memstore.mode(root)
+    if rep["store"] == "sqlite":                          # R2.9b: после переключения JSONL не открываются и не должны появляться
+        extra = [n for n in (S2.MEM_FILE[t] for t in S2.MEM_TABLES) if os.path.exists(paths.state(n, root=root))]
+        if extra:
+            add(S2.JSONL_APPEARED, "store=sqlite, но в state/ есть %s (JSONL_APPEARED): кто-то пишет в обход фасада; см. RUNBOOK, раздел R2.9b"
+                % ", ".join(extra))
     failed = KM.read_json(KM.restore_failed_path(root))
     if isinstance(failed, dict):
         add(S2.RESTORE_FAILED, "база знаний: восстановление прервано (%s), нужен ./tb knowledge restore" % failed.get("code"))
@@ -569,6 +577,8 @@ def verify(root=None, quick=False, counts=True, now=None):
     if not rep["db"]:
         if rep["v2"]:
             add(S2.DB_CORRUPT, "база знаний: файла нет при маркере state/knowledge.v2 (пустая база не создаётся): ./tb knowledge restore")
+        elif rep["store"] == "sqlite":
+            add(S2.NOT_READY, "store=sqlite, но файла базы знаний нет (NOT_READY): записи случаев и уроков идут в очередь")
         return _finish(rep)
     try:
         conn = LST.open_ro(root)
@@ -598,7 +608,9 @@ def verify(root=None, quick=False, counts=True, now=None):
             elif rep["v2"]:
                 add(S2.NOT_READY, "база знаний: маркер v2 есть, таблиц цикла нет (NOT_READY): цикл не стартует")
             rep["v2b"] = ready_v2b(conn)
-            if rep["v2b"]:                                # вторая итерация: цепочки случаев и уроков (быстрый статус - только хвост)
+            if rep.get("store") == "sqlite" and not rep["v2b"]:
+                add(S2.NOT_READY, "store=sqlite, но таблиц case_rows/lesson_rows нет (NOT_READY): записи случаев и уроков идут в очередь")
+            if rep["v2b"]:                              # вторая итерация: цепочки случаев и уроков (быстрый статус - только хвост)
                 for t in S2.MEM_TABLES:
                     rep["chains"][t] = ch = verify_line_chain(conn, t, tail_only=quick)
                     if not ch["ok"]:

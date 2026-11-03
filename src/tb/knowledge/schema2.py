@@ -117,6 +117,7 @@ STORES = ("jsonl", "sqlite")
 # коды второй итерации
 PLATFORM_RUNNING = "PLATFORM_RUNNING"
 SPOOL_PENDING = "SPOOL_PENDING"
+JSONL_APPEARED = "JSONL_APPEARED"        # store=sqlite, а в state/ появился cases.jsonl / lessons.jsonl (жёлтый в verify, отчёт migrate)
 FOLD_MISMATCH = "FOLD_MISMATCH"
 
 V2B = [

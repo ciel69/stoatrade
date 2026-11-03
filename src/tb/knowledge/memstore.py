@@ -9,7 +9,8 @@ append            запись строки под блокировкой таб
                   строка уходит в очередь state/knowledge.spool.jsonl (формат строки - колонки таблицы и поле table)
 replay            ./tb knowledge replay-spool: очередь в базу идемпотентно по (ключ, rev): та же строка уже есть -> пропуск; update случая с занятым
                   rev -> rev = последний + 1; прочие конфликты остаются в очереди. Писатель сам применяет очередь своей таблицы перед записью
-verify_chain      цепочка строк таблицы (cases.verify в режиме sqlite)
+verify_chain      цепочка строк таблицы (cases.verify / lessons.verify в режиме sqlite)
+signature         подпись таблицы для ключей кешей читателей (seq и h последней строки, очередь); present - в таблице есть строки
 
 JSONL-файлы здесь не открываются. Модуль не импортирует tb.memory.cases / tb.memory.lessons (они импортируют его лениво).
 Тестовые хуки: _FORCE (режим вместо memory.json), _AUTOCREATE (при отсутствии базы или таблиц v2b создать их; в работе выключен:
@@ -300,6 +301,36 @@ def tail(root, table):
     """-> (last_seq, last_h, True) как chain.tail."""
     _gen, rows = snapshot(root, table)
     return (rows[-1]["seq"], rows[-1]["h"], True) if rows else (0, GENESIS, True)
+
+
+def _stat(path):
+    try:
+        st = os.stat(path)
+        return (st.st_size, st.st_mtime_ns)
+    except OSError:
+        return None
+
+
+def signature(root, table):
+    """Подпись содержимого таблицы для ключей кешей читателей при store="sqlite" (learn.load.source_signature, memory_vs_base):
+    ("sqlite", файл базы (inode), seq и h последней строки, размер/mtime очереди). Меняется при каждой записи случаев/уроков и не меняется
+    от записей меток в ту же базу. База недоступна -> ("sqlite", None, код)."""
+    try:
+        conn = _open_ro(root)
+    except (sqlite3.Error, Unavailable) as e:
+        return ("sqlite", None, getattr(e, "code", None) or type(e).__name__, _stat(store2.spool_path(root)))
+    try:
+        top = conn.execute("SELECT seq, h FROM %s ORDER BY seq DESC LIMIT 1" % table).fetchone() if store2._has_table(conn, table) else None
+    except sqlite3.Error as e:
+        return ("sqlite", None, type(e).__name__, _stat(store2.spool_path(root)))
+    finally:
+        conn.close()
+    return ("sqlite", _file_id(root), tuple(top) if top else None, _stat(store2.spool_path(root)))
+
+
+def present(root, table):
+    """В таблице есть строки (с учётом очереди) - аналог «файл JSONL существует» для режима sqlite."""
+    return tail(root, table)[0] > 0
 
 
 def verify_chain(root, table):

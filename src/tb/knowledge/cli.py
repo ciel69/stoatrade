@@ -1,5 +1,5 @@
 """`./tb knowledge <команда>`: verify | backup | restore [--from FILE] | stats | disable-v2 | migrate-v2a (R2.9a, Requirement 2.4, 2.7, 2.10, 16.4);
-вторая итерация (R2.9b, Requirement 3.2-3.8): migrate [--dry-run] | export-jsonl [--out DIR] | replay-spool.
+вторая итерация (R2.9b, Requirement 3.2-3.8): migrate [--dry-run] | export-jsonl [--out DIR] | replay-spool | index-similar.
 
 Вывод: JSON одной строкой (--text: кратко для человека). Коды: 0 успех / зелёный (verify: и жёлтый); 1 - красный verify, отказ команды, нет базы;
 2 - ошибка использования. Сеть и ключи не используются; конфиг цикла только читается (флаг enabled для disable-v2 и migrate-v2a).
@@ -127,7 +127,8 @@ def cmd_migrate_mem(a, root):
         for t, r in sorted(rep["tables"].items()):
             lines.append("  %s: строк %d, записей %d, битых %d, расхождений хешей %d, дублей %d/%d, без ключа %d" % (
                 r["path"], r["rows"], r["items"], r["broken"], r["hash_mismatch"], r["dup_same"], r["n_dup_conflict"], r["n_bad_rows"]))
-        lines.append("  база: есть=%s v2a=%s v2b=%s строк=%s" % (rep["db"]["db"], rep["db"]["v2a"], rep["db"]["v2b"], rep["db"]["rows"]))
+        lines.append("  база: есть=%s v2a=%s v2b=%s строк=%s индекс похожих=%s" % (rep["db"]["db"], rep["db"]["v2a"], rep["db"]["v2b"], rep["db"]["rows"],
+                                                                         rep.get("similar_index")))
         _out(rep, a.text, lines)
         return 0 if rep["ok"] else 1
     try:
@@ -136,10 +137,26 @@ def cmd_migrate_mem(a, root):
         _err(str(e))
         _out({"ok": False, "code": e.code, "msg": str(e), "detail": e.detail}, a.text, ["migrate: ОТКАЗ %s" % e])
         return 1
-    _out(rep, a.text, ["migrate: %s; store=%s; переименовано: %s; копии: %s, %s%s" % (
+    si = rep.get("similar_index") or {}
+    _out(rep, a.text, ["migrate: %s; store=%s; переименовано: %s; копии: %s, %s%s\n  индекс похожих: %s" % (
         "перенесено" if rep["ok"] else "ПЕРЕНЕСЕНО, НО ПОЯВИЛИСЬ JSONL (%s)" % ",".join(rep["jsonl_after_switch"] + rep["jsonl_after_settle"]), rep["store"],
         ", ".join(rep["renamed"]) or "-", os.path.basename(rep["backup_db"] or "-"), os.path.basename(rep["backup_files"] or "-"),
-        "".join("\n  %s: перенесено %d (уже было %d), записей %d" % (t, r["inserted"], r["already"], r["items"]) for t, r in sorted(rep["tables"].items())))])
+        "".join("\n  %s: перенесено %d (уже было %d), записей %d" % (t, r["inserted"], r["already"], r["items"]) for t, r in sorted(rep["tables"].items())),
+        ("есть (%s, %s с)" % ("создан" if si.get("created") else "уже был", si.get("elapsed_s"))) if si.get("ok")
+        else "НЕ СОЗДАН (%s): повторить ./tb knowledge index-similar" % (si.get("error") or si.get("code") or "-"))])
+    return 0 if rep["ok"] else 1
+
+
+def cmd_index_similar(a, root):
+    """./tb knowledge index-similar: индекс поиска похожих (type, side, t0) на signals идемпотентно; только при остановленной платформе."""
+    M = _mig()
+    try:
+        rep = M.similar_index(root)
+    except M.MigrateError as e:
+        _err(str(e))
+        _out({"ok": False, "code": e.code, "msg": str(e)}, a.text, ["index-similar: ОТКАЗ %s" % e])
+        return 1
+    _out(rep, a.text, ["index-similar: %s %s (ver=%s, %s с)" % (rep["index"], "создан" if rep["created"] else "уже был", rep["ver"], rep["elapsed_s"])])
     return 0 if rep["ok"] else 1
 
 
@@ -202,11 +219,13 @@ def build_parser():
     ex.add_argument("--text", action="store_true")
     rp = sub.add_parser("replay-spool", help="применить очередь state/knowledge.spool.jsonl к базе (после restore или сбоя)")
     rp.add_argument("--text", action="store_true")
+    ix = sub.add_parser("index-similar", help="индекс поиска похожих signals(type, side, t0) идемпотентно (входит в migrate); при остановленной платформе")
+    ix.add_argument("--text", action="store_true")
     return p
 
 
 HANDLERS = {"verify": cmd_verify, "backup": cmd_backup, "restore": cmd_restore, "stats": cmd_stats, "disable-v2": cmd_disable_v2, "migrate-v2a": cmd_migrate,
-            "migrate": cmd_migrate_mem, "export-jsonl": cmd_export_jsonl, "replay-spool": cmd_replay_spool}
+            "migrate": cmd_migrate_mem, "export-jsonl": cmd_export_jsonl, "replay-spool": cmd_replay_spool, "index-similar": cmd_index_similar}
 
 
 def main(argv, root=None):

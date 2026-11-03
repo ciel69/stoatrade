@@ -6,7 +6,9 @@ migrate       платформа остановлена (иначе PLATFORM_RUN
               схема v2b и строки с сохранением seq, rev, kind, ts (цепочка пересчитывается; у целого файла совпадает с файловой) -> сверка
               fold(база) == fold(файл) поле в поле, кроме prev и h -> переименование файлов в *.pre-r29 и store="sqlite" -> COMMIT.
               Любой сбой до COMMIT: ROLLBACK, имена файлов и store прежние. После переключения - копия owner (в ней уже есть case_rows) и проверка,
-              что cases.jsonl / lessons.jsonl отсутствуют и не появились за settle_s
+              что cases.jsonl / lessons.jsonl отсутствуют и не появились за settle_s. Перед копией owner строится индекс поиска похожих
+              (similar_index; сбой индекса перенос не откатывает, повтор - ./tb knowledge index-similar)
+similar_index индекс ix_sig_type_side (tb.knowledge.similar.migrate_v2s) идемпотентно; отдельной командой - при остановленной платформе
 export_jsonl  файлы из таблиц (формат прежний, seq по порядку с 1, цепочка пересчитана) и сверка fold(файл) == fold(база); в state/ - только
               при остановленной платформе и пустой очереди, затем store="jsonl" (возврат допустим только после успешного экспорта);
               в другой каталог (out_dir) - без переключения. Правила, версии rulebook и испытания от store не зависят и здесь не трогаются
@@ -191,7 +193,7 @@ def dry_run(root=None, now=None):
     """Отчёт без записи (Requirement 3.2)."""
     files = dict((t, read_file(t, root)) for t in S2.MEM_TABLES)
     rep = {"ok": True, "dry_run": True, "store": MS.mode(root), "tables": dict((t, files[t][0]) for t in files), "db": _db_state(root),
-           "platform_running": platform_running(root, now), "spool_pending": store2.spool_pending(root),
+           "platform_running": platform_running(root, now), "spool_pending": store2.spool_pending(root), "similar_index": similar_index_state(root),
            "pre_r29": [os.path.basename(file_path(t, root)) + S2.PRE_SUFFIX for t in S2.MEM_TABLES if os.path.exists(file_path(t, root) + S2.PRE_SUFFIX)]}
     rep["cases"], rep["lessons"] = files["case_rows"][0]["items"], files["lesson_rows"][0]["items"]
     rep["blocking"] = _blocking(files) + (["ALREADY_SQLITE"] if rep["store"] == "sqlite" else []) + (["PRE_EXISTS"] if rep["pre_r29"] else [])
@@ -342,6 +344,10 @@ def migrate(root=None, now=None, settle_s=SETTLE_S, sleep=time.sleep, running=No
         rep["renamed"] = [os.path.basename(p) + S2.PRE_SUFFIX for p in renamed]
         rep["store"] = "sqlite"
         rep["jsonl_after_switch"] = jsonl_present(root)
+    try:                                                  # индекс поиска похожих (задача 25): перенос уже выполнен, сбой индекса его не откатывает
+        rep["similar_index"] = similar_index(root, now=now, check_running=False)
+    except MigrateError as e:
+        rep["similar_index"] = {"ok": False, "code": e.code, "error": str(e)}
     try:
         rep["backup_after"] = store2.make_backup(root, "owner", now=now, sleep=sleep)
     except (store2.KnowledgeError, OSError, sqlite3.Error) as e:
@@ -354,6 +360,56 @@ def migrate(root=None, now=None, settle_s=SETTLE_S, sleep=time.sleep, running=No
     if not rep["ok"]:
         rep["code"] = "JSONL_APPEARED"
     return rep
+
+
+# ---------------------------------------------------------------- индекс поиска похожих
+
+def similar_index(root=None, now=None, running=None, check_running=True):
+    """./tb knowledge index-similar и шаг migrate: индекс ix_sig_type_side ON signals(type, side, t0) (tb.knowledge.similar.migrate_v2s,
+    свой ключ meta.knowledge_similar_ver), идемпотентно: повтор ничего не меняет. Отдельной командой - только при остановленной платформе
+    (построение индекса на большой signals держит запись базы). -> {"ok", "ver", "created", "elapsed_s"}; отказ -> MigrateError."""
+    from tb.knowledge import similar as KS
+    if check_running:
+        busy = (running or platform_running)(root, now)
+        if busy:
+            raise MigrateError(S2.PLATFORM_RUNNING, "платформа работает (%s): сначала ./tb down" % "; ".join(busy[:5]), busy)
+    if KM.restoring(root):
+        raise MigrateError(S2.RESTORING, "идёт восстановление базы")
+    if not os.path.exists(LST.db_path(root)):
+        raise MigrateError("NO_DB", "нет базы знаний")
+    t0 = time.monotonic()
+    try:
+        conn = LST.open_rw(root)
+    except (sqlite3.Error, LST.SchemaMigrationError) as e:
+        raise MigrateError("INDEX_FAILED", "база знаний не открыта: %s" % e) from e
+    try:
+        had = KS.has_index(conn) and KS._meta_ver(conn) >= KS.SIM_VER
+        ver = KS.migrate_v2s(conn)
+        ok = KS.has_index(conn)
+    except (store2.KnowledgeError, sqlite3.Error) as e:
+        raise MigrateError("INDEX_FAILED", str(e)) from e
+    finally:
+        conn.close()
+    return {"ok": ok, "ver": ver, "index": KS.INDEX_NAME, "created": not had, "elapsed_s": round(time.monotonic() - t0, 3)}
+
+
+def similar_index_state(root=None):
+    """-> True/False (индекс поиска похожих есть) или None (базы нет / не читается). Только чтение."""
+    from tb.knowledge import similar as KS
+    if not os.path.exists(LST.db_path(root)) or KM.restoring(root):
+        return None
+    try:
+        conn = LST.open_ro(root)
+    except sqlite3.Error:
+        return None
+    if conn is None:
+        return None
+    try:
+        return KS.has_index(conn) and KS._meta_ver(conn) >= KS.SIM_VER
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------- экспорт

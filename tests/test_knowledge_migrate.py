@@ -63,7 +63,6 @@ EXCLUDE = {
     "test_memory_lessons_r2.TestCreateLabels.test_row_size_truncates_ids": "читает строки lessons.jsonl через chain.read",
     "test_memory_lessons_r2.TestConcurrentCreate.test_thread_and_process": "второй процесс без тестового хука режима (store в нём из memory.json)",
     "test_memory_diagnose.TestEdges.test_truncated_last_line": "дописывает оборванную строку в cases.jsonl",
-    "test_memory_diagnose.TestFunnel.test_dup_active": "memory.diagnose читает lessons.jsonl напрямую (не через фасад)",
 }
 
 

@@ -1,6 +1,6 @@
 """Диагноз R2.0 «почему уроков 0»: воронка кодового `lessons.propose` по случаям и причины по данным (Requirement 1).
 
-Только чтение: cases.jsonl, lessons.jsonl, config/memory.json (и alpha из config/learnloop.json, если файл есть). Ничего не пишет в state/;
+Только чтение: случаи и уроки через фасад memory.cases / memory.lessons (cases.jsonl, lessons.jsonl или таблицы базы по store), config/memory.json (и alpha из config/learnloop.json, если файл есть). Ничего не пишет в state/;
 единственная допустимая запись — отчёт по --out внутри runtime/ (write_out).
 
 Воронка повторяет отбор `lessons.propose`: пул -> одиночные условия и пары -> n >= min_n_propose -> не дубль активного урока -> |diff| >= min_diff_r ->
@@ -12,7 +12,7 @@ import json
 import os
 
 from tb import paths
-from tb.memory import agg, cases, chain, lessons
+from tb.memory import agg, cases, lessons
 
 DROP_CODES = ("POOL_TOO_SMALL", "BELOW_N", "DUP_ACTIVE", "BELOW_DIFF", "BELOW_SHARE", "BUDGET")
 REASONS = ("DATA_VOLUME", "DATA_QUALITY", "MULTIPLICITY", "NONE")
@@ -60,10 +60,11 @@ def _known(c, f):
 
 
 def _lessons_state(root):
-    path = lessons.lessons_path(root)
-    if not os.path.isfile(path):
+    """Уроки через фасад по store (R2.9b): "jsonl" - lessons.jsonl как прежде (нет файла = "файла нет"), "sqlite" - строки lesson_rows
+    (пустая таблица = то же, что нет файла)."""
+    if not lessons.present(root):
         return {"file": False, "n": 0, "broken": 0, "by_status": dict((s, 0) for s in lessons.STATUSES), "line": "lessons: 0 (файла нет)"}, {}
-    rows, broken = chain.read(path)
+    rows, broken = lessons.read_raw(root)
     last = {}
     for r in rows:
         if r.get("schema") == lessons.SCHEMA and r.get("lesson_id"):

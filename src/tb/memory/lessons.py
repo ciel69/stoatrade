@@ -19,6 +19,7 @@ tb.learnloop.brainref; правил не порождают, applicable их н�
 from_hint и refresh.
 """
 import math
+import os
 import time
 
 from tb import paths
@@ -378,6 +379,40 @@ def _append(root, rec):
             return chain.append(lessons_path(root), lessons_lock(root), rec, max_bytes=LINE_MAX)
         from tb.knowledge import memstore
         return memstore.append(root, "lesson_rows", rec, max_bytes=LINE_MAX)
+
+
+def read_raw(root=None):
+    """-> (строки хранилища уроков по порядку, число битых строк): "jsonl" - chain.read(lessons.jsonl), "sqlite" - копии строк lesson_rows
+    (битых строк в таблице нет: 0)."""
+    if _store(root) == "sqlite":
+        return [_json_copy(r) for r in _rows(root)], 0
+    return chain.read(lessons_path(root))
+
+
+def present(root=None):
+    """Хранилище уроков есть: "jsonl" - файл lessons.jsonl существует (как прежде), "sqlite" - в lesson_rows (или очереди) есть строки."""
+    if _store(root) == "sqlite":
+        from tb.knowledge import memstore
+        return memstore.present(root, "lesson_rows")
+    return os.path.isfile(lessons_path(root))
+
+
+def signature(root=None):
+    """Подпись хранилища уроков для ключей кешей: "jsonl" - (размер, mtime_ns) lessons.jsonl или None (как прежде), "sqlite" -
+    memstore.signature (последняя строка lesson_rows и очередь)."""
+    if _store(root) == "sqlite":
+        from tb.knowledge import memstore
+        return memstore.signature(root, "lesson_rows")
+    return cases._stat(lessons_path(root))
+
+
+def verify(root=None):
+    """Цепочка хешей уроков в активном хранилище -> {"ok","n","bad_seq","broken"}: "jsonl" - chain.verify(lessons.jsonl) (как прежде),
+    "sqlite" - цепочка таблицы lesson_rows (broken - битые строки очереди)."""
+    if _store(root) == "sqlite":
+        from tb.knowledge import memstore
+        return memstore.verify_chain(root, "lesson_rows")
+    return chain.verify(lessons_path(root))
 
 
 def read_all(root=None):
