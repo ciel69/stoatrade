@@ -5,7 +5,8 @@ append_row       запись в таблицы цикла: privacy_scan, лим
 insert_rows      пачка строк insert-only таблиц (cluster_runs, rule_evals) и рабочих таблиц
 update_row       изменяемые колонки trials / lesson_candidates
 log_event        learn_events: результат шагов, ошибки, действия владельца; лимит events_per_day без ошибок -> одна строка EVENTS_THROTTLED
-blocklist_put/get  чёрный список условий (текущее состояние - последняя строка по cond_h, истёкшая не действует)
+blocklist_put/get  чёрный список условий (текущее состояние - последняя строка по ключу, истёкшая не действует; колонка cond_h хранит ключ записи:
+                   block_h семейства условия от tb.learnloop.rules или прежний точный cond_h)
 verify / stats   integrity_check, цепочки, индексы и триггеры, размеры; статус для ./tb status (status_check с кешем)
 make_backup      проверенная копия state/backups/knowledge-YYYYMMDDTHHMMSS-<reason>.sqlite без перезаписи, ротация по причинам, SRC_CORRUPT
 restore          протокол замены файла (маркер, подтверждения писателей, выбор копии, переименование с -wal/-shm, подстановка, meta.copy_ts/restore_ts)

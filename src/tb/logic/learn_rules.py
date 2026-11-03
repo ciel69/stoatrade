@@ -48,8 +48,29 @@ def _canon_json(x):
 
 
 def cond_h(cond, dir="lower"):
-    """Хеш условия и направления claim (ключ чёрного списка): sha256(canon(cond) + dir), 16 hex как у memory/chain.py (privacy_scan не считает утечкой)."""
+    """Хеш условия и направления claim (идентичность правила, DUP_ACTIVE): sha256(canon(cond) + dir), 16 hex как у memory/chain.py
+    (privacy_scan не считает утечкой). Ключ чёрного списка — block_h (семейство условия без порогов числовых признаков)."""
     return hashlib.sha256((_canon_json(canon_cond(cond)) + str(dir)).encode("utf-8")).hexdigest()[:16]
+
+
+def block_family(cond):
+    """Семейство условия (ключ чёрного списка, Requirement 7.14): элемент числового признака -> [feature, op] без порога (порог меню — квантиль
+    окна и сдвигается каждую неделю), категориального (CAT_VALUES) -> [feature, op, value] с каноническим значением (`in` — по порядку).
+    Элементы отсортированы."""
+    out = []
+    for c in canon_cond(cond or []):
+        f = c.get("feature")
+        if f in LC.CAT_VALUES or not LC.is_num(c.get("value")):
+            out.append([f, c.get("op"), c.get("value")])
+        else:
+            out.append([f, c.get("op")])
+    return sorted(out, key=_canon_json)
+
+
+def block_h(cond, dir="lower"):
+    """Ключ чёрного списка: sha256("block:" + canon(семейство) + dir), 16 hex. Сдвиг порога числового признака ключ не меняет;
+    другое значение категориального признака или другое направление claim — другой ключ."""
+    return hashlib.sha256(("block:" + _canon_json(block_family(cond)) + str(dir)).encode("utf-8")).hexdigest()[:16]
 
 
 def fail_code(rule_id):

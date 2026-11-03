@@ -71,6 +71,25 @@ class TestCondHash(unittest.TestCase):
         self.assertNotEqual(LR.cond_h(a, "lower"), LR.cond_h(a, "higher"))
         self.assertRegex(LR.cond_h(a), r"^[0-9a-f]{16}$")
 
+    def test_block_h_family(self):
+        """Ключ чёрного списка — семейство условия (Requirement 7.14): порог числового признака не входит, значение категориального входит."""
+        s1 = [{"feature": "spread_bps", "op": ">=", "value": 8.2792}]
+        s2 = [{"feature": "spread_bps", "op": ">=", "value": 8.20626}]
+        self.assertNotEqual(LR.cond_h(s1), LR.cond_h(s2))
+        self.assertEqual(LR.block_h(s1), LR.block_h(s2))
+        self.assertRegex(LR.block_h(s1), r"^[0-9a-f]{16}$")
+        self.assertNotEqual(LR.block_h(s1), LR.block_h([{"feature": "spread_bps", "op": "<=", "value": 8.2792}]))
+        self.assertNotEqual(LR.block_h(s1), LR.block_h([{"feature": "range_5m_pct", "op": ">=", "value": 8.2792}]))
+        self.assertNotEqual(LR.block_h(s1, "lower"), LR.block_h(s1, "higher"))
+        meme = [{"feature": "coin_class", "op": "=", "value": "meme"}]
+        self.assertNotEqual(LR.block_h(meme), LR.block_h([{"feature": "coin_class", "op": "=", "value": "major"}]))
+        a = [{"feature": "spread_bps", "op": ">=", "value": 5}, {"feature": "coin_class", "op": "in", "value": ["meme", "alt_small"]}]
+        b = [{"feature": "coin_class", "op": "in", "value": ["alt_small", "meme"]}, {"feature": "spread_bps", "op": ">=", "value": 7.5}]
+        self.assertEqual(LR.block_h(a), LR.block_h(b))                               # порядок элементов и `in`, порог — не важны
+        self.assertNotEqual(LR.block_h(a), LR.block_h([a[0], {"feature": "coin_class", "op": "in", "value": ["meme"]}]))
+        self.assertNotEqual(LR.block_h(meme), LR.cond_h(meme))                        # ключи разных пространств не совпадают
+        self.assertEqual(LR.block_family(b), [["coin_class", "in", ["alt_small", "meme"]], ["spread_bps", ">="]])
+
     def test_codes(self):
         self.assertEqual(LR.fail_code("RL0001"), "RULE_RL0001")
         self.assertEqual(LR.plan_code("RL0001"), "E_RULE_RL0001")

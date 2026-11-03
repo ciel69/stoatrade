@@ -409,7 +409,7 @@ def _reject_unreachable(conn, rule, days, now, cfg):
         store2.append_row(conn, "rule_rows", {"rule_id": rid, "rev": 1, "kind": rule["kind"], "status": "rejected", "wait": None, "wait_since_ts": None,
                                               "from_lesson": rule["from_lesson"], "env_norm": rule.get("env_norm") or "mainnet", "rulebook_ver_in": None,
                                               "rulebook_ver_out": None, "reason_code": "UNREACHABLE_N", "body": body, "ts": store2.iso(now)})
-        RL.block(conn, rule["cond_h"], "UNREACHABLE_N", now, cfg, backup=False)
+        RL.block(conn, rule["cond"], "UNREACHABLE_N", now, cfg, backup=False)
         _log(conn, "UNREACHABLE_N", rid, {"lesson": rule["from_lesson"], "reach_days": body["reach_days"]}, now)
     return rid
 
@@ -478,9 +478,8 @@ def register_pending(conn, root, cfg, now, policy=None, mcfg=None, live=None):
         elif not live(smp["policy"], smp["policy_ver"]):
             code = "NO_VERDICT"
         if code:
-            ch = LR.cond_h(l["cond"], SIDE)
             with LST.tx(conn):
-                RL.block(conn, ch, code, now, cfg, backup=False)
+                RL.block(conn, l["cond"], code, now, cfg, backup=False, dir=SIDE)
                 _log(conn, code, l["lesson_id"], {"stage": "register"}, now, error=code == "SAMPLE_CHANGED")
             if _reject_lesson(root, l, code, now, mcfg):
                 rep["rejected"].append((l["lesson_id"], code))

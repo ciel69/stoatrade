@@ -205,7 +205,7 @@ class TestRegister(Base):
         rep = self.register()
         self.assertEqual(rep["rejected"], [(l["lesson_id"], "SAMPLE_CHANGED")])
         self.assertEqual(LS.read_all(self.root)[l["lesson_id"]]["status"], "rejected")
-        self.assertIsNotNone(RL.blocked(self.c, LR.cond_h(SPREAD, "lower"), NOW))
+        self.assertIsNotNone(RL.blocked(self.c, LR.block_h(SPREAD, "lower"), NOW))
         self.assertEqual(self.q("SELECT COUNT(*) FROM trials")[0][0], 0)
         self.assertTrue(self.q("SELECT 1 FROM learn_events WHERE step='trial' AND code='SAMPLE_CHANGED'"))
 
@@ -216,14 +216,14 @@ class TestRegister(Base):
         self.c.execute("INSERT OR REPLACE INTO meta(k, v) VALUES('restore_ts', ?)", (str(hc + 10),))
         rep = self.register()
         self.assertEqual(rep["rejected"], [(l["lesson_id"], "RESTORED")])
-        self.assertIsNone(RL.blocked(self.c, LR.cond_h(RANGE, "lower"), NOW))
+        self.assertIsNone(RL.blocked(self.c, LR.block_h(RANGE, "lower"), NOW))
 
     def test_ctx_changed_before_register(self):
         l = self.lesson()
         self.put([self.row(HOLD_B + 3 * H, ctx="c2")])
         rep = self.register()
         self.assertEqual(rep["rejected"], [(l["lesson_id"], "CTX_CHANGED")])
-        self.assertIsNone(RL.blocked(self.c, LR.cond_h(SPREAD, "lower"), NOW))
+        self.assertIsNone(RL.blocked(self.c, LR.block_h(SPREAD, "lower"), NOW))
 
     def test_policy_version_off_at_register(self):
         l = self.lesson()
@@ -241,7 +241,7 @@ class TestReachAndBudget(Base):
         self.assertEqual(self.q("SELECT COUNT(*) FROM trials")[0][0], 0)
         rows = self.q("SELECT status, reason_code, from_lesson FROM rule_rows")
         self.assertEqual(rows, [("rejected", "UNREACHABLE_N", l["lesson_id"])])
-        b = RL.blocked(self.c, LR.cond_h(SPREAD, "lower"), NOW)
+        b = RL.blocked(self.c, LR.block_h(SPREAD, "lower"), NOW)
         self.assertEqual((b["code"], b["until_ts"]), ("UNREACHABLE_N", NOW + 14 * D))
         self.assertEqual(LS.read_all(self.root)[l["lesson_id"]]["status"], "rejected")
         self.register(NOW + H)
@@ -274,7 +274,7 @@ class TestReachAndBudget(Base):
         rep = self.register(NOW - 12 * H + 7 * D + 1, cfg=cfg)               # 7 суток + 1 с с создания урока
         self.assertEqual(rep["rejected"], [(l2["lesson_id"], "BUDGET")])
         self.assertEqual(LS.read_all(self.root)[l2["lesson_id"]]["history"][-1]["reason_code"], "BUDGET")
-        self.assertIsNone(RL.blocked(self.c, LR.cond_h(RANGE, "lower"), NOW + 7 * D))
+        self.assertIsNone(RL.blocked(self.c, LR.block_h(RANGE, "lower"), NOW + 7 * D))
 
     def test_slot_freed_by_verdict(self):
         """Свойство 26: испытание после вердикта не занимает место; ждущий урок регистрируется."""
@@ -386,7 +386,7 @@ class TestVerdict(Base):
         self.assertEqual([(r["verdict"], r["code"]) for r in res], [("reject", "TRIAL_REJECT")])
         r = V.rule(self.c, t["rule_id"])
         self.assertEqual((r["status"], r["reason_code"]), ("rejected", "TRIAL_REJECT"))
-        self.assertEqual(RL.blocked(self.c, LR.cond_h(SPREAD, "lower"), NOW)["code"], "TRIAL_REJECT")
+        self.assertEqual(RL.blocked(self.c, LR.block_h(SPREAD, "lower"), NOW)["code"], "TRIAL_REJECT")
 
     def test_reject_by_absolute_threshold(self):
         """(а): значимая разность, но среднее предельных хитов выше -min_effect_r (база положительна) -> reject."""
@@ -439,7 +439,7 @@ class TestVerdict(Base):
         self.assertEqual([(r["verdict"], r["code"]) for r in res], [("inconclusive", "CTX_CHANGED")])
         r = V.rule(self.c, t["rule_id"])
         self.assertEqual((r["status"], r["reason_code"]), ("rejected", "CTX_CHANGED"))
-        self.assertIsNone(RL.blocked(self.c, LR.cond_h(SPREAD, "lower"), NOW + D))
+        self.assertIsNone(RL.blocked(self.c, LR.block_h(SPREAD, "lower"), NOW + D))
 
     def test_deadline_inconclusive_with_late_cluster(self):
         """Свойство 29: без n_target в [start_ts, deadline_ts) — inconclusive не раньше cut_ts(deadline_ts); поздно закрытый кластер у deadline_ts
@@ -456,7 +456,7 @@ class TestVerdict(Base):
         self.assertEqual([(r["verdict"], r["code"], r["reason"]) for r in res], [("inconclusive", "NO_VERDICT", "DEADLINE")])
         t2 = TR.get(self.c, t["trial_id"])
         self.assertEqual((t2["cut_ts"], t2["numbers"]["n_tc"], t2["numbers"]["b"]), (cut(dl, self.cfg), 121, dl))
-        self.assertEqual(RL.blocked(self.c, LR.cond_h(SPREAD, "lower"), NOW + 31 * D)["code"], "NO_VERDICT")
+        self.assertEqual(RL.blocked(self.c, LR.block_h(SPREAD, "lower"), NOW + 31 * D)["code"], "NO_VERDICT")
 
     def test_restored_window(self):
         t = self.start()
@@ -466,7 +466,7 @@ class TestVerdict(Base):
         self.c.execute("INSERT OR REPLACE INTO meta(k, v) VALUES('restore_ts', ?)", (str(c150 + 100),))
         res = self.verdicts(c150 + 200)
         self.assertEqual([(r["verdict"], r["code"]) for r in res], [("inconclusive", "RESTORED")])
-        self.assertIsNone(RL.blocked(self.c, LR.cond_h(SPREAD, "lower"), NOW + D))
+        self.assertIsNone(RL.blocked(self.c, LR.block_h(SPREAD, "lower"), NOW + D))
 
 
 class TestMarginal(Base):
@@ -530,7 +530,7 @@ class TestOverlap(Base):
         self.assertEqual(t2["numbers"]["overlap_rule"], a["rule_id"])
         r = V.rule(self.c, t["rule_id"])
         self.assertEqual((r["status"], r["reason_code"]), ("rejected", "NO_VERDICT"))
-        self.assertIsNone(RL.blocked(self.c, LR.cond_h(SPREAD, "lower"), NOW + 3 * D))
+        self.assertIsNone(RL.blocked(self.c, LR.block_h(SPREAD, "lower"), NOW + 3 * D))
         self.assertEqual(TR.open_count(self.c), 0)
 
 

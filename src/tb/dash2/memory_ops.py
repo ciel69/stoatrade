@@ -34,6 +34,7 @@ import time
 from tb import paths
 from tb.knowledge import rulebook_view as RV
 from tb.labels import store as LST
+from tb.logic import learn_rules as LR
 
 SMALL_N = 30
 WINDOW_S = 7 * 86400                     # окно долей rule_evals (как NO_EVENT_WINDOW_S цикла)
@@ -231,6 +232,13 @@ def _trial_brief(t):
                                    "closed_ts": _int(t.get("closed_ts"))}
 
 
+def _block_key(b):
+    """Ключ снятия запрета `./tb rulebook unblock` — block_h семейства условия правила (Requirement 7.14); поле ответа прежнее (cond_h),
+    сменилось только значение. Тело без cond — прежний cond_h."""
+    c = b.get("cond")
+    return LR.block_h(c, "lower") if isinstance(c, list) and c else b.get("cond_h")
+
+
 def _rule_brief(r, cur_ids=()):
     if r is None:
         return None
@@ -238,7 +246,7 @@ def _rule_brief(r, cur_ids=()):
     return {"rule_id": _s(r.get("rule_id"), 16), "rev": _int(r.get("rev")), "kind": _s(r.get("kind"), 24), "status": _s(r.get("status"), 12),
             "wait": _s(r.get("wait"), 12), "reason_code": _s(r.get("reason_code"), 24), "from_lesson": _s(r.get("from_lesson"), 16),
             "ver_in": _s(r.get("rulebook_ver_in"), 12), "ver_out": _s(r.get("rulebook_ver_out"), 12), "cond_txt": _cond_txt(b.get("cond")),
-            "cond_h": _s(b.get("cond_h"), 32), "env_norm": _s(r.get("env_norm"), 16), "ts": _s(r.get("ts"), 32), "in_version": r.get("rule_id") in cur_ids}
+            "cond_h": _s(_block_key(b), 32), "env_norm": _s(r.get("env_norm"), 16), "ts": _s(r.get("ts"), 32), "in_version": r.get("rule_id") in cur_ids}
 
 
 def memory_lessons(root=None, now=None):

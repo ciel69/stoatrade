@@ -101,7 +101,7 @@ USAGE = """использование: ./tb <группа> <команда> [а�
   memory <similar|stats|add|show|sync|migrate|coverage|verify|review-queue|review|lesson|backtest|compare> ...   память случаев: похожие ситуации, уроки-гипотезы, ретро-проверка, доля пустых признаков (WP15a, WP15b, R1)
   labels <status|stats [--by policy|type]|coverage|show KEY|backfill --since D|rerun --policy ID --since D|backup|verify> [--text]   фабрика меток и теневые политики (R1): backfill и rerun только ставят сигналы в очередь, размечает сервис labels
   knowledge <verify [--quick]|backup|restore [--from FILE]|stats|disable-v2|migrate-v2a> [--text]   база знаний v2 (R2): цепочки и целостность, проверенные копии, восстановление по протоколу (docs/RUNBOOK.md)
-  rulebook <list|show [R-NNNN|RL0001]|verify|disable RULE|disable-all|apply on|off|unblock COND_H> [--text]   rulebook цикла обучения (R2): версии, правила, режим применения, проверка цепочки; аварийные действия владельца (необязательные)
+  rulebook <list|show [R-NNNN|RL0001]|verify|disable RULE|disable-all|apply on|off|unblock BLOCK_H> [--text]   rulebook цикла обучения (R2): версии, правила, режим применения, проверка цепочки; аварийные действия владельца (необязательные)
   learn promotion [auto|off] [--text]   цикл обучения (R2): режим автопродвижения; off — аварийная остановка продвижения
   day <status|list|report [ID]|checklist|preflight> [--json]   жизненный цикл дня: состояние, итоги, сухой прогон чек-листа закрытия, preflight (WP14; только чтение)
   notify <status|on|off|set КАТЕГОРИЯ on|off|set quiet HH:MM-HH:MM|set quiet off|test>   уведомления ОС: мастер, категории, тихие часы (docs/NOTIFICATIONS.md)

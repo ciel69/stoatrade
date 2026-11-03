@@ -3,7 +3,7 @@
 Суточные шаги цикла (их вызывает задача 10):
   run_menu        раз в menu_every_days: окно поиска [b − discovery_days, b) текущего ctx_ver (b — последняя граница часа с cut_ts ≤ now),
                   меню (menu.build_menu, чёрный список), скрининг, запись прошедших в lesson_candidates (status=new, источник code, окно,
-                  cut_ts, хеш); прежние непринятые new -> dropped BUDGET; повтор cond_h живого объекта -> dropped DUP_ACTIVE.
+                  cut_ts, хеш); прежние непринятые new -> dropped BUDGET; повтор cond_h или семейства block_h живого объекта -> dropped DUP_ACTIVE.
                   Коды прохода: NOT_DUE, NO_DATA, NO_MENU, MENU.
   accept          до labels_max_new_per_day кандидатов в сутки по возрастанию p: status=holdout, holdout [floor_hour(now), + holdout_days).
   check_holdouts  CTX_CHANGED сразу при смене ctx_ver; в cut_ts окна holdout: RESTORED / SAMPLE_CHANGED по окну поиска, один тест holdout,
@@ -19,6 +19,7 @@ from tb.knowledge import store2
 from tb.labels import store as LST
 from tb.learnloop import clusters as CL
 from tb.learnloop import menu as MN
+from tb.learnloop import rules as RL
 from tb.learnloop import verify as VF
 from tb.logic import learn_rules as LR
 from tb.memory import lessons as LS
@@ -70,39 +71,65 @@ def _menu_id(env, b):
 
 
 def _blocked(conn, now):
+    """Ключ (block_h или прежний cond_h) -> в чёрном списке ли (menu.build_menu проверяет оба ключа условия)."""
     return lambda h: store2.blocklist_get(conn, h, now) is not None
 
 
 # ---------------------------------------------------------------- живые объекты (DUP_ACTIVE)
 
 def _rule_hashes(conn):
-    """cond_h правил trial/active по последней ревизии (rulebook_view.rules_latest задачи 11; cond_h из тела правила, иначе по cond)."""
+    """Ключи DUP_ACTIVE правил trial/active по последней ревизии (rulebook_view.rules_latest задачи 11): cond_h из тела правила (иначе по cond)
+    и семейство block_h по cond."""
     out = set()
     for row in RV.rules_latest(conn).values():
         if row.get("status") not in ("trial", "active"):
             continue
         r = RV.row_rule(row)
+        cond = r.get("cond") if isinstance(r.get("cond"), list) and r.get("cond") else None
         if isinstance(r.get("cond_h"), str) and r["cond_h"]:
             out.add(r["cond_h"])
-        elif isinstance(r.get("cond"), list) and r["cond"]:
-            out.add(LR.cond_h(r["cond"], SIDE))
+        elif cond:
+            out.add(LR.cond_h(cond, SIDE))
+        if cond:
+            out.add(LR.block_h(cond, SIDE))
     return out
 
 
+def _dir(c):
+    return (c.get("claim") or {}).get("dir") or SIDE
+
+
 def cand_h(c):
-    """cond_h кандидата (learn_rules.cond_h: тот же ключ, что у правил, версий и чёрного списка)."""
-    return LR.cond_h(c["cond"], (c.get("claim") or {}).get("dir") or SIDE)
+    """cond_h кандидата (learn_rules.cond_h: тот же ключ, что у правил и версий). Чёрный список и DUP_ACTIVE — и по семейству (cand_keys)."""
+    return LR.cond_h(c["cond"], _dir(c))
+
+
+def cand_keys(c):
+    """Ключи DUP_ACTIVE кандидата: точный cond_h и семейство block_h (дубль — совпадение любого с ключами живых объектов, active_hashes)."""
+    return (cand_h(c), LR.block_h(c["cond"], _dir(c)))
+
+
+def is_dup(c, live):
+    return any(k in live for k in cand_keys(c))
+
+
+def cand_blocked(conn, c, now):
+    """Действующая запись чёрного списка кандидата: семейство block_h или прежняя по точному cond_h (rules.blocked) -> {"code", ...} | None."""
+    return RL.blocked(conn, c["cond"], now, _dir(c))
 
 
 def active_hashes(conn, root, exclude_cand=None):
-    """cond_h живых объектов: активные уроки (hyp, confirmed) обеих групп, кандидаты в holdout, правила trial/active."""
+    """Ключи DUP_ACTIVE живых объектов: точный cond_h активных уроков (hyp, confirmed) обеих групп; семейство block_h активных уроков меток,
+    кандидатов в holdout и правил trial/active (сдвиг квантиля меню не даёт повторно испытывать то же семейство); cond_h кандидатов и правил."""
     out = set()
     for l in LS.read_all(root).values():
         if l.get("status") in LS.ACTIVE and isinstance(l.get("cond"), list) and l["cond"]:
             out.add(cand_h(l))
+            if LS.is_labels(l):
+                out.add(LR.block_h(l["cond"], _dir(l)))
     for c in candidates(conn, status=("holdout",)):
-        if c["id"] != exclude_cand and isinstance(c["cond"], list):
-            out.add(cand_h(c))
+        if c["id"] != exclude_cand and isinstance(c["cond"], list) and c["cond"]:
+            out.update(cand_keys(c))
     return out | _rule_hashes(conn)
 
 
@@ -165,7 +192,7 @@ def run_menu(conn, root, now, cfg, policy=None, env="mainnet", force=False):
         rep["screen"].append({"cond": it["cond"], "n": sc["n"], "diff": sc["diff"], "p": sc["p"], "code": sc["code"]})
         if not sc["ok"]:
             continue
-        dup = it["cond_h"] in live
+        dup = it["cond_h"] in live or it["block_h"] in live
         ev = {"disc": smp, "screen": {"n": sc["n"], "diff": sc["diff"], "se": sc["se"], "p": sc["p"], "thr": round(sc["thr"], 8), "k": sc["k"],
                                       "halves": sc["halves"], "share": it["share"]}, "excl_share": win["excl_share"]}
         rows.append({"menu_id": mid, "src": SRC, "cond": it["cond"], "claim": it["claim"], "env_norm": env, "ctx_ver": win["ctx_ver"], "k_space": menu["k"],
@@ -210,11 +237,10 @@ def accept(conn, root, now, cfg, policy=None, env="mainnet"):
         for c in new:
             if slots <= 0:
                 break
-            h = cand_h(c)
-            blk = store2.blocklist_get(conn, h, now)
+            blk = cand_blocked(conn, c, now)
             if ctx is not None and ctx != c["ctx_ver"]:
                 code = "CTX_CHANGED"
-            elif h in live:
+            elif is_dup(c, live):
                 code = "DUP_ACTIVE"
             elif blk is not None:
                 code = blk["code"]
@@ -225,7 +251,7 @@ def accept(conn, root, now, cfg, policy=None, env="mainnet"):
                 out.append((c["id"], "dropped", code))
                 continue
             store2.update_row(conn, "lesson_candidates", c["id"], {"status": "holdout", "holdout_start": hs, "holdout_end": he})
-            live.add(h)
+            live.update(cand_keys(c))
             slots -= 1
             out.append((c["id"], "holdout", None))
     return out
@@ -237,8 +263,7 @@ def _drop(conn, c, code, ev, now, cfg, block):
     with LST.tx(conn):
         store2.update_row(conn, "lesson_candidates", c["id"], {"status": "dropped", "code": code, "evidence": ev})
         if block:
-            h = cand_h(c)
-            store2.blocklist_put(conn, h, code, now + int(cfg["blocklist"]["cooldown_days"]) * CL.DAY, "code", now)
+            store2.blocklist_put(conn, LR.block_h(c["cond"], _dir(c)), code, now + int(cfg["blocklist"]["cooldown_days"]) * CL.DAY, "code", now)
         if code == "SAMPLE_CHANGED":
             store2.log_event(conn, "holdout", "SAMPLE_CHANGED", "code", ref="cand:%d" % c["id"], body={"disc": (ev or {}).get("disc")}, error=True, now=now)
     return (c["id"], "dropped", code)
@@ -290,14 +315,13 @@ def check_holdouts(conn, root, now, cfg, policy=None, mcfg=None, env="mainnet"):
         if st != "hyp":
             out.append(_drop(conn, c, code, ev, now, cfg, code in BLOCK_CODES))
             continue
-        h = cand_h(c)
-        blk = store2.blocklist_get(conn, h, now)
+        blk = cand_blocked(conn, c, now)
         if blk is not None:
             out.append(_drop(conn, c, blk["code"], ev, now, cfg, False))
             continue
         l = _existing_lesson(root, c["id"])          # повтор после падения между записью урока и строки кандидата
         if l is None:
-            if h in active_hashes(conn, root, exclude_cand=c["id"]):
+            if is_dup(c, active_hashes(conn, root, exclude_cand=c["id"])):
                 out.append(_drop(conn, c, "DUP_ACTIVE", ev, now, cfg, False))
                 continue
             try:

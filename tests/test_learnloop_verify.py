@@ -534,6 +534,38 @@ class TestFlow(unittest.TestCase):
                                            "env_norm": "mainnet", "reason_code": "TRIAL_REJECT", "body": {"cond": cond, "dir": "lower"}, "ts": store2.iso(NOW_M)})
         self.assertNotIn(LR.cond_h(cond), CA.active_hashes(c, root))
 
+    def test_dup_active_by_family_of_active_rule(self):
+        """DUP_ACTIVE по семейству (2026-11-03, Requirement 4.5): активное правило `f >= X` — меню с порогом X' != X даёт DUP_ACTIVE, а не новый
+        кандидат (иначе слот испытания тратится до OVERLAP); противоположный оператор того же признака — не дубль; то же при приёме."""
+        rep0 = self.menu()
+        cond = self.eff_cond(rep0)
+
+        def with_rule(rule_cond):
+            root = tempfile.mkdtemp(prefix="tbll_dupf_")
+            self.addCleanup(shutil.rmtree, root, True)
+            shutil.copytree(os.path.join(self.tmpl, "state"), os.path.join(root, "state"))
+            c = store.open_rw(root)
+            self.addCleanup(c.close)
+            store2.append_row(c, "rule_rows", {"rule_id": "RU-0001", "rev": 1, "kind": "skip_when", "status": "active", "from_lesson": "L-0001",
+                                               "env_norm": "mainnet", "reason_code": "PROMOTE", "body": {"cond": rule_cond, "cond_h": LR.cond_h(rule_cond)},
+                                               "ts": store2.iso(NOW_M)})
+            return c, root, CA.run_menu(c, root, NOW_M, CFG, policy=POLICY)
+
+        _c, _r, rep = with_rule([dict(cond[0], op="<=")])                              # противоположный оператор того же признака — не дубль
+        self.assertIn(cond, rep["added"])
+        rule_cond = [dict(cond[0], value=round(cond[0]["value"] * 1.031 + 0.0007, 6))]
+        self.assertNotEqual(LR.cond_h(rule_cond), LR.cond_h(cond))
+        c, root, rep = with_rule(rule_cond)
+        self.assertIn(LR.block_h(cond), CA.active_hashes(c, root))
+        self.assertIn(cond, rep["dup"])
+        self.assertNotIn(cond, rep["added"])
+        self.assertEqual([(x["status"], x["code"]) for x in CA.candidates(c) if x["cond"] == cond], [("dropped", "DUP_ACTIVE")])
+        store2.insert_rows(c, "lesson_candidates", [{"menu_id": "M-mainnet-x", "src": "code", "cond": cond, "claim": {"metric": "mean_r", "dir": "lower",
+                           "vs": "base", "effect": 0.1}, "env_norm": "mainnet", "ctx_ver": CA.candidates(self.c)[0]["ctx_ver"], "k_space": 5, "p_screen": 0.0001,
+                           "status": "new", "evidence": {}, "ts": NOW_M}])
+        acc = CA.accept(c, root, NOW_M, CFG, policy=POLICY)
+        self.assertIn("DUP_ACTIVE", [a[2] for a in acc if [x for x in CA.candidates(c) if x["id"] == a[0]][0]["cond"] == cond])
+
     def test_blocklisted_not_in_menu(self):
         rep0 = self.menu()
         cond = self.eff_cond(rep0)
@@ -547,6 +579,35 @@ class TestFlow(unittest.TestCase):
         self.assertEqual(rep["k"], rep0["k"] - 1)
         self.assertNotIn(cond, rep["added"] + rep["dup"])
         self.assertIn("BLOCKED", [d["code"] for d in rep["dropped"] if d.get("cond") == cond])
+
+    def test_rejected_family_not_back_with_shifted_threshold(self):
+        """Регрессия (сквозной тест задачи 22, Requirement 7.14): после TRIAL_REJECT условия `f >= X` меню с порогом X' != X (квантиль окна
+        сдвинулся) не берёт условие — BLOCKED по семейству block_h; через 14 суток запрет истекает."""
+        rep0 = self.menu()
+        cond = self.eff_cond(rep0)
+        old = [dict(cond[0], value=round(cond[0]["value"] * 1.0127 + 0.0003, 6))]          # прежний порог того же семейства
+        self.assertNotEqual(LR.cond_h(old), LR.cond_h(cond))
+        root = tempfile.mkdtemp(prefix="tbll_fam_")
+        self.addCleanup(shutil.rmtree, root, True)
+        shutil.copytree(os.path.join(self.tmpl, "state"), os.path.join(root, "state"))
+        c = store.open_rw(root)
+        self.addCleanup(c.close)
+        self.assertIsNotNone(RU.block(c, old, "TRIAL_REJECT", NOW_M - 3 * D, CFG))
+        self.assertEqual(c.execute("SELECT cond_h FROM blocklist_rows").fetchall(), [(LR.block_h(old),)])
+        rep = CA.run_menu(c, root, NOW_M, CFG, policy=POLICY)
+        self.assertEqual(rep["k"], rep0["k"] - 1)
+        self.assertNotIn(cond, rep["added"] + rep["dup"])
+        self.assertIn("BLOCKED", [d["code"] for d in rep["dropped"] if d.get("cond") == cond])
+        other = [x for x in rep0["added"] + rep0["dup"] if x[0]["feature"] == "range_5m_pct" and x[0]["op"] == "<="]
+        for x in other:                                                               # другой оператор того же признака — другое семейство
+            self.assertIn(x, rep["added"] + rep["dup"])
+        store2.insert_rows(c, "lesson_candidates", [{"menu_id": "M-mainnet-x", "src": "code", "cond": cond, "claim": {"metric": "mean_r", "dir": "lower",
+                           "vs": "base", "effect": 0.1}, "env_norm": "mainnet", "ctx_ver": CA.candidates(self.c)[0]["ctx_ver"], "k_space": 5, "p_screen": 0.0001,
+                           "status": "new", "evidence": {}, "ts": NOW_M}])
+        acc = dict((a[0], a) for a in CA.accept(c, root, NOW_M, CFG, policy=POLICY))
+        self.assertIn("TRIAL_REJECT", [a[2] for a in acc.values()])                   # приём тоже проверяет семейство
+        self.assertIsNotNone(RU.blocked(c, cond, NOW_M - 3 * D + 14 * D - 1))
+        self.assertIsNone(RU.blocked(c, cond, NOW_M - 3 * D + 14 * D))                # фиксированный cooldown: потом семейство может вернуться
 
     def test_rule_cond_h_matches_and_rule_block_cuts_menu(self):
         rep0 = self.menu()
@@ -587,7 +648,7 @@ class TestFlow(unittest.TestCase):
         out = self.hold()
         self.assertEqual({o[2] for o in out}, {"SAMPLE_CHANGED"})
         for x in cands:
-            b = store2.blocklist_get(self.c, LR.cond_h(x["cond"]), NOW_H)
+            b = store2.blocklist_get(self.c, LR.block_h(x["cond"]), NOW_H)
             self.assertEqual(b, {"code": "SAMPLE_CHANGED", "until_ts": NOW_H + 14 * D})
         self.assertEqual(self.c.execute("SELECT COUNT(*) FROM learn_events WHERE code='SAMPLE_CHANGED'").fetchone()[0], len(cands))
         self.assertEqual(LS.read_all(self.root), {})
@@ -601,12 +662,13 @@ class TestFlow(unittest.TestCase):
         self.c.execute("UPDATE lesson_candidates SET cond=? WHERE id=?", (json.dumps(bad), cid))
         out = dict((o[0], o) for o in self.hold())
         self.assertEqual(out[cid][1:], ("dropped", "N_TOO_SMALL"))
-        self.assertEqual(store2.blocklist_get(self.c, LR.cond_h(bad), NOW_H)["code"], "N_TOO_SMALL")
+        self.assertEqual(store2.blocklist_get(self.c, LR.block_h(bad), NOW_H)["code"], "N_TOO_SMALL")
 
     def test_accept_limit_per_day(self):
         rows = []
+        fams = [("spread_bps", ">="), ("spread_bps", "<="), ("range_5m_pct", ">="), ("range_5m_pct", "<="), ("funding_pct", ">=")]   # разные семейства
         for i in range(5):
-            rows.append({"menu_id": "M-mainnet-test", "src": "code", "cond": [{"feature": "spread_bps", "op": ">=", "value": 10.0 + i}],
+            rows.append({"menu_id": "M-mainnet-test", "src": "code", "cond": [{"feature": fams[i][0], "op": fams[i][1], "value": 10.0 + i}],
                          "claim": {"metric": "mean_r", "dir": "lower", "vs": "base", "effect": 0.1}, "env_norm": "mainnet", "ctx_ver": "c1",
                          "k_space": 5, "p_screen": 0.001 * (5 - i), "status": "new", "evidence": {}, "ts": NOW_M})
         store2.insert_rows(self.c, "lesson_candidates", rows)

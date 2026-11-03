@@ -278,7 +278,7 @@ class TestVersions(Base):
         self.assertTrue(rep["backup"].endswith("-rollback.sqlite"))
         r = V.rule(self.c, "RL0001")
         self.assertEqual((r["status"], r["reason_code"], r["rulebook_ver_out"]), ("disabled", "ROLLBACK", "R-0003"))
-        bl = RL.blocked(self.c, r["body"]["cond_h"], NOW + 2 * DAY)
+        bl = RL.blocked(self.c, r["body"]["cond"], NOW + 2 * DAY)
         self.assertEqual((bl["code"], bl["until_ts"]), ("ROLLBACK", NOW + 16 * DAY))
         self.assertEqual(store2.verify_chain(self.c)["ok"], True)
         self.assertEqual(fhash(mem), h0)               # rules_ver (config/memory.json) не меняется
@@ -290,7 +290,7 @@ class TestVersions(Base):
         V.promote(self.c, "RL0001", NOW, cfg=self.cfg, root=None)
         rep = V.disable(self.c, ["RL0001"], "OWNER_DISABLE", NOW, self.cfg, root=self.root)
         self.assertTrue(rep["backup"].endswith("-owner.sqlite"))
-        bl = RL.blocked(self.c, LR.cond_h(SPREAD), NOW + 400 * DAY)
+        bl = RL.blocked(self.c, LR.block_h(SPREAD), NOW + 400 * DAY)
         self.assertEqual((bl["code"], bl["until_ts"]), ("OWNER_DISABLE", None))
         self.assertEqual(self.c.execute("SELECT actor FROM blocklist_rows ORDER BY seq DESC LIMIT 1").fetchone()[0], "OWNER")
 
@@ -328,7 +328,7 @@ class TestVersions(Base):
         r = V.rule(self.c, "RL0001")
         self.assertEqual((r["status"], r["reason_code"]), ("disabled", "BOUNDS_BLOCKED"))
         self.assertEqual(self.c.execute("SELECT reason_code FROM rulebook_versions WHERE ver='R-0003'").fetchone()[0], "BOUNDS_BLOCKED")
-        self.assertEqual(RL.blocked(self.c, r["body"]["cond_h"], NOW + 60)["code"], "BOUNDS_BLOCKED")
+        self.assertEqual(RL.blocked(self.c, r["body"]["cond"], NOW + 60)["code"], "BOUNDS_BLOCKED")
 
     def test_reject_and_wait(self):
         self.make()

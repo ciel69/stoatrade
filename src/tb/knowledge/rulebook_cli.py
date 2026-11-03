@@ -15,7 +15,9 @@ disable-all       СНАЧАЛА runtime/rules_switch.json apply=false (дейс
                   trial — в чёрный список бессрочно, копия owner. База недоступна — сообщение «выключатель записан, запись версии не сделана,
                   повторите после восстановления базы», код 1; отложенных файлов нет. Применение остаётся выключенным до `apply on`.
 apply on|off      только выключатель применения (без изменения версий); запись OWNER в learn_events — если база доступна
-unblock COND_H    снятие записи чёрного списка (строка UNBLOCK владельца), копия owner; условие не в списке — ничего не пишется
+unblock BLOCK_H   снятие записи чёрного списка (строка UNBLOCK владельца), копия owner; условие не в списке — ничего не пишется.
+                  Ключ чёрного списка — block_h семейства условия (tb.logic.learn_rules.block_h: числовые признаки без порога, категориальные
+                  со значением); list/show показывают block_h правила и действующий запрет; прежние записи по точному cond_h снимаются по их ключу
 Отклонение урока меток владельцем (reject_lesson; вызывается `./tb memory lesson reject` и дашбордом, Requirement 5.12): урок -> rejected (OWNER),
 открытое испытание его правила -> inconclusive (OWNER), не активное правило -> rejected (OWNER), активное правило не трогается (Requirement 6.4),
 условие -> чёрный список бессрочно OWNER_REJECT, копия owner. Повтор безопасен (идемпотентен).
@@ -35,6 +37,7 @@ from tb.knowledge import rulebook_view as RV
 from tb.knowledge import schema2 as S2
 from tb.knowledge import store2
 from tb.labels import store as LST
+from tb.logic import learn_rules as LR
 
 OWNER = S2.OWNER
 FOREVER_CODES = ("OWNER_DISABLE", "OWNER_REJECT")
@@ -73,11 +76,35 @@ def _open(root):
     return conn
 
 
-def _rule_brief(r):
+def _rule_block_h(b):
+    """Ключ чёрного списка правила (семейство условия, Requirement 7.14) — его принимает `./tb rulebook unblock`; тело без cond — прежний cond_h."""
+    c = b.get("cond")
+    return LR.block_h(c, "lower") if isinstance(c, list) and c else b.get("cond_h")
+
+
+def _block_state(conn, b, now):
+    """Действующая запись чёрного списка семейства (или прежняя по точному cond_h) -> {"code", "until_ts", "key"} | None."""
+    for k in (_rule_block_h(b), b.get("cond_h")):
+        if k:
+            cur = store2.blocklist_get(conn, k, now=now)
+            if cur is not None:
+                return dict(cur, key=k)
+    return None
+
+
+def _rule_brief(r, conn=None, now=None):
     b = r.get("body") or {}
-    return {"rule_id": r["rule_id"], "rev": r["rev"], "kind": r["kind"], "status": r["status"], "wait": r.get("wait"), "from_lesson": r["from_lesson"],
-            "env_norm": r["env_norm"], "reason_code": r.get("reason_code"), "ver_in": r.get("rulebook_ver_in"), "ver_out": r.get("rulebook_ver_out"),
-            "cond": b.get("cond"), "cond_h": b.get("cond_h"), "ts": r.get("ts")}
+    out = {"rule_id": r["rule_id"], "rev": r["rev"], "kind": r["kind"], "status": r["status"], "wait": r.get("wait"), "from_lesson": r["from_lesson"],
+           "env_norm": r["env_norm"], "reason_code": r.get("reason_code"), "ver_in": r.get("rulebook_ver_in"), "ver_out": r.get("rulebook_ver_out"),
+           "cond": b.get("cond"), "cond_h": b.get("cond_h"), "block_h": _rule_block_h(b), "ts": r.get("ts")}
+    if conn is not None:
+        out["blocked"] = _block_state(conn, b, time.time() if now is None else now)
+    return out
+
+
+def _blk_txt(r):
+    blk = r.get("blocked")
+    return (" [запрет %s, снять: ./tb rulebook unblock %s]" % (blk["code"], blk["key"])) if blk else ""
 
 
 def _ver_brief(v):
@@ -96,13 +123,14 @@ def cmd_list(a, root):
         return 1
     try:
         vers = [_ver_brief(v) for v in RV.read_versions(conn)]
-        rules = [_rule_brief(r) for r in RV.rules_latest(conn).values()]
+        rules = [_rule_brief(r, conn) for r in RV.rules_latest(conn).values()]
     finally:
         conn.close()
     rep = {"ok": True, "apply": view["apply"], "why": view["why"], "ver": view["ver"], "versions": vers, "rules": rules}
     _out(rep, a.text, ["rulebook: версия %s, применение %s (%s)" % (view["ver"] or "-", "да" if view["apply"] else "нет", view["why"])]
          + ["  %s %s %s [%s]" % (v["ver"], v["ts"], v["reason_code"], ",".join(v["rule_ids"]) or "-") for v in vers]
-         + ["  %s %s%s %s: %s" % (r["rule_id"], r["status"], ("/" + r["wait"]) if r["wait"] else "", r["from_lesson"], _cond_txt(r["cond"])) for r in rules])
+         + ["  %s %s%s %s: %s (block_h %s)%s" % (r["rule_id"], r["status"], ("/" + r["wait"]) if r["wait"] else "", r["from_lesson"], _cond_txt(r["cond"]),
+                                                r["block_h"] or "-", _blk_txt(r)) for r in rules])
     return 0
 
 
@@ -113,25 +141,28 @@ def cmd_show(a, root):
     try:
         target = a.target
         if target and target.startswith("RL"):
-            revs = [_rule_brief(r) for r in RV.rule_revs(conn, target)]
+            raw = RV.rule_revs(conn, target)
+            revs = [_rule_brief(r) for r in raw]
             if not revs:
                 _err("нет правила %s" % target)
                 return 1
-            _out({"ok": True, "rule_id": target, "revs": revs}, a.text,
-                 ["правило %s" % target] + ["  rev %d %s %s %s" % (r["rev"], r["ts"], r["status"], r["reason_code"] or "-") for r in revs])
+            blk = _block_state(conn, raw[-1].get("body") or {}, time.time())
+            _out({"ok": True, "rule_id": target, "block_h": revs[-1]["block_h"], "blocked": blk, "revs": revs}, a.text,
+                 ["правило %s, block_h %s%s" % (target, revs[-1]["block_h"] or "-", _blk_txt({"blocked": blk}))]
+                 + ["  rev %d %s %s %s" % (r["rev"], r["ts"], r["status"], r["reason_code"] or "-") for r in revs])
             return 0
         v = RV.get_version(conn, target) if target else RV.last_version(conn)
         if v is None:
             _err("нет версии %s" % (target or "(rulebook пуст)"))
             return 1
         latest = RV.rules_latest(conn)
-        rules = [_rule_brief(latest[r]) for r in v["rule_ids"] if r in latest]
+        rules = [_rule_brief(latest[r], conn) for r in v["rule_ids"] if r in latest]
     finally:
         conn.close()
     vb = _ver_brief(v)
     _out({"ok": True, "version": vb, "rules": rules}, a.text,
          ["версия %s (%s, %s, родитель %s)" % (vb["ver"], vb["reason_code"], vb["ts"], vb["parent"] or "-")]
-         + ["  %s %s: %s" % (r["rule_id"], r["status"], _cond_txt(r["cond"])) for r in rules])
+         + ["  %s %s: %s (block_h %s)%s" % (r["rule_id"], r["status"], _cond_txt(r["cond"]), r["block_h"] or "-", _blk_txt(r)) for r in rules])
     return 0
 
 
@@ -218,16 +249,24 @@ def _backup(root, now, rep):
         rep["backup_error"] = "%s: %s" % (type(e).__name__, e)
 
 
-def _block_forever(conn, cond_h, code, now, cfg):
-    """Бессрочная запись владельца, если действующей бессрочной записи нет. -> True, если записана."""
+def _block_forever(conn, cond, code, now, cfg, dir="lower"):
+    """Бессрочная запись владельца по семейству условия (ключ block_h), если действующей бессрочной записи семейства нет. cond — условие
+    (список); строка — готовый ключ (тело правила без cond). -> True, если записана."""
     RL = _deps()[1]
-    if not cond_h:
+    if not cond:
         return False
-    cur = RL.blocked(conn, cond_h, now)
+    key = RL.block_key(cond, dir)
+    cur = RL.blocked(conn, key, now)
     if cur is not None and cur.get("code") in FOREVER_CODES and cur.get("until_ts") is None:
         return False
-    RL.block(conn, cond_h, code, now, cfg, actor=OWNER, backup=False)
+    RL.block(conn, key, code, now, cfg, actor=OWNER, backup=False)
     return True
+
+
+def _rule_cond(row):
+    """Условие правила для записи чёрного списка: body.cond, иначе прежний ключ body.cond_h."""
+    b = (row or {}).get("body") or {}
+    return b.get("cond") if isinstance(b.get("cond"), list) and b.get("cond") else b.get("cond_h")
 
 
 def _close_trial_rule(conn, rid, now, cfg, reason):
@@ -257,7 +296,7 @@ def disable_rule(root, rule_id, now=None):
         row = V.rule(conn, rule_id)
         if row is None:
             raise ValueError("нет правила %s" % rule_id)
-        ch = (row.get("body") or {}).get("cond_h")
+        ch = _rule_cond(row)
         ids = (V.current(conn) or {}).get("rule_ids") or []
         if row["status"] == "trial":
             rep["done"] = _close_trial_rule(conn, rule_id, now, cfg, "OWNER_DISABLE")
@@ -306,7 +345,7 @@ def disable_all(root, now=None):
         ids = list(cur.get("rule_ids") or [])
         act = [r for r in ids if (latest.get(r) or {}).get("status") == "active"]
         for rid in sorted(set(act) | set(rep["rejected"])):
-            hs.append((latest.get(rid) or {}).get("body", {}).get("cond_h"))
+            hs.append(_rule_cond(latest.get(rid)))
         if ids:
             res = V.write_version(conn, "OWNER_DISABLE", [], now, numbers={"by": OWNER, "all": True}, changes=[(r, "disabled", "OWNER_DISABLE") for r in act],
                                   cfg=cfg, root=root, backup=False)
@@ -347,10 +386,11 @@ def set_apply(root, on, now=None):
 
 
 def unblock(root, cond_h, now=None):
-    """`./tb rulebook unblock COND_H` (Requirement 7.14, 11.10)."""
+    """`./tb rulebook unblock BLOCK_H` (Requirement 7.14, 11.10): ключ записи — block_h семейства условия (показывают `list`/`show`, вкладка
+    «Память»); прежняя запись по точному cond_h снимается тем же способом по её ключу. Поле отчёта cond_h сохранено (значение — снятый ключ)."""
     now = int(time.time() if now is None else now)
     conn = open_owner(root)
-    rep = {"ok": True, "action": "unblock", "cond_h": cond_h, "changed": False, "was": None, "backup": None}
+    rep = {"ok": True, "action": "unblock", "cond_h": cond_h, "block_h": cond_h, "changed": False, "was": None, "backup": None}
     try:
         cur = store2.blocklist_get(conn, cond_h, now=now)
         rep["was"] = cur
@@ -389,17 +429,20 @@ def reject_lesson(root, lesson_id, now=None, mcfg=None):
     conn = open_owner(root)
     try:
         claim = l.get("claim") or {}
-        hs = [LR.cond_h(l.get("cond") or [], claim.get("dir") or "lower")]
+        ldir = claim.get("dir") or "lower"
+        hs = {}                                          # ключ block_h -> условие (или прежний ключ) с направлением; дубли семейства — одна запись
+        if l.get("cond"):
+            hs[LR.block_h(l["cond"], ldir)] = (l["cond"], ldir)
         for rid, r in sorted(RV.rules_latest(conn).items()):
             if r.get("from_lesson") != lesson_id:
                 continue
-            h = (r.get("body") or {}).get("cond_h")
-            if h and h not in hs:
-                hs.append(h)
+            c = _rule_cond(r)
+            if c:
+                hs.setdefault(c if isinstance(c, str) else LR.block_h(c, "lower"), (c, "lower"))
             done = _close_trial_rule(conn, rid, now, cfg, "OWNER_REJECT") if r["status"] == "trial" else None
             rep["rules"].append({"rule_id": rid, "status": (V.rule(conn, rid) or {}).get("status"), "done": done})
         with V._tx(conn):
-            rep["blocked"] = any([_block_forever(conn, h, "OWNER_REJECT", now, cfg) for h in hs])
+            rep["blocked"] = any([_block_forever(conn, c, "OWNER_REJECT", now, cfg, d) for c, d in hs.values()])
             log_owner(conn, "lesson", "OWNER_REJECT", lesson_id, {"action": "lesson_reject", "rules": rep["rules"]}, now)
     finally:
         conn.close()
@@ -476,8 +519,8 @@ def build_parser():
     ap = sub.add_parser("apply", help="выключатель применения правил")
     ap.add_argument("state", choices=("on", "off"))
     ap.add_argument("--text", action="store_true")
-    ub = sub.add_parser("unblock", help="снять запись чёрного списка условия")
-    ub.add_argument("cond_h")
+    ub = sub.add_parser("unblock", help="снять запись чёрного списка условия (ключ block_h из list/show)")
+    ub.add_argument("cond_h", metavar="BLOCK_H")
     ub.add_argument("--text", action="store_true")
     return p
 

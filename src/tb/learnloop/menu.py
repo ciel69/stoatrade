@@ -2,7 +2,7 @@
 
 Условия длины 1: шесть числовых признаков MENU_NUM × (`>= q80`, `<= q20`) по квантилям заполненных прогонов окна (значение порога фиксируется в
 условии) и `coin_class = v` для словаря без `unknown`. Медиана, `side` и `utc_session` не строятся. Отсев: COVERAGE_LOW (признак заполнен меньше
-feat_cover_min), TOO_BROAD (условие охватывает больше max_trade_loss_share заполненных прогонов окна), BLOCKED (cond_h в чёрном списке),
+feat_cover_min), TOO_BROAD (условие охватывает больше max_trade_loss_share заполненных прогонов окна), BLOCKED (семейство block_h или cond_h в чёрном списке),
 BELOW_N (кластеров теста меньше min_n_menu). K — число оставшихся условий (≤ 17). Claim — {"metric": "mean_r", "dir": "lower", "vs": "base",
 "effect": E}, E — модуль средней разности по кластерам теста окна (verify.effect).
 """
@@ -56,8 +56,9 @@ def conditions(p, cfg):
 
 
 def build_menu(win, cfg, blocked=None, side="lower"):
-    """Меню по выборке окна поиска ({"rows", "a", "b"}). blocked — множество cond_h или функция cond_h -> bool (чёрный список).
-    -> {"items": [{"cond", "claim", "cond_h", "n", "share", "tc"}], "k", "dropped": [{"cond", "code", ...}], "n_rows"}; K = len(items)."""
+    """Меню по выборке окна поиска ({"rows", "a", "b"}). blocked — множество ключей или функция ключ -> bool (чёрный список); условие отсекается
+    (BLOCKED), если в списке его семейство block_h (порог числового признака не важен: квантиль окна сдвигается) или точный cond_h (прежние записи).
+    -> {"items": [{"cond", "claim", "cond_h", "block_h", "n", "share", "tc"}], "k", "dropped": [{"cond", "code", ...}], "n_rows"}; K = len(items)."""
     p = VF.prepared(win)
     n_rows = len(p["m"])
     broad = float(cfg["trial"]["max_trade_loss_share"])
@@ -68,13 +69,14 @@ def build_menu(win, cfg, blocked=None, side="lower"):
     for c in conds:
         cond = c["cond"]
         h = LR.cond_h(cond, side)
+        bh = LR.block_h(cond, side)
         hits = VF.hit_vector(p, cond)
         share = sum(hits) / float(n_rows) if n_rows else 0.0
-        base = {"cond": cond, "cond_h": h, "share": round(share, 4)}
+        base = {"cond": cond, "cond_h": h, "block_h": bh, "share": round(share, 4)}
         if share > broad:
             dropped.append(dict(base, code="TOO_BROAD"))
             continue
-        if is_blocked(h):
+        if is_blocked(bh) or is_blocked(h):
             dropped.append(dict(base, code="BLOCKED"))
             continue
         tc = VF.tc_from_hits(p, hits)

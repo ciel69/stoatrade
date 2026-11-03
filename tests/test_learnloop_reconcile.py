@@ -274,10 +274,15 @@ class TestOwnerReject(Base):
         self.assertEqual((t["state"], t["verdict"], t["numbers"]["reason"]), ("closed", "inconclusive", "OWNER_REJECT"))
         r = V.rule(self.c, rid)
         self.assertEqual((r["status"], r["reason_code"]), ("rejected", "OWNER"))
-        ch = RL.LR.cond_h(SPREAD, "lower")
+        ch = RL.LR.block_h(SPREAD, "lower")
         row = self.c.execute("SELECT code, until_ts, actor FROM blocklist_rows WHERE cond_h=? ORDER BY seq DESC LIMIT 1", (ch,)).fetchone()
         self.assertEqual(row, ("OWNER_REJECT", None, "OWNER"))
         self.assertIsNotNone(RL.blocked(self.c, ch, NOW + 400 * D))                    # бессрочно: условие не возвращается через меню
+        shifted = [dict(SPREAD[0], value=round(SPREAD[0]["value"] * 0.97 + 0.01, 6))]   # меню через неделю: другой квантиль окна, то же семейство
+        self.assertNotEqual(RL.LR.cond_h(shifted, "lower"), RL.LR.cond_h(SPREAD, "lower"))
+        self.assertEqual(RL.blocked(self.c, shifted, NOW + 400 * D)["code"], "OWNER_REJECT")
+        self.assertEqual(RL.derive_reason({"status": "hyp", "cond": shifted, "claim": {"metric": "mean_r", "dir": "lower", "vs": "base"},
+                                           "evidence": {"src": "labels"}}, self.c, NOW + 400 * D), "BLOCKED")
         self.assertIn("owner", [b["reason"] for b in store2.list_backups(self.root)])
         self.assertEqual(self.owner_events(), [("lesson", "OWNER_REJECT", l["lesson_id"])])
         self.assertEqual(self.rec(NOW + 2 * H), [])                                    # сверка согласна с базой
@@ -298,7 +303,7 @@ class TestOwnerReject(Base):
         self.assertEqual(self.st(l["lesson_id"]), ("rejected", "OWNER"))
         self.assertEqual(V.rule(self.c, rid)["status"], "active")
         self.assertEqual((RV.last_version(self.c)["ver"], RV.last_version(self.c)["rule_ids"]), (ver, [rid]))
-        self.assertEqual(RL.blocked(self.c, RL.LR.cond_h(SPREAD, "lower"), NOW + 2 * H)["code"], "OWNER_REJECT")
+        self.assertEqual(RL.blocked(self.c, RL.LR.block_h(SPREAD, "lower"), NOW + 2 * H)["code"], "OWNER_REJECT")
         self.assertEqual(self.rec(NOW + 2 * H), [])
 
     def test_waiting_rule_rejected(self):
@@ -345,7 +350,7 @@ class TestOwnerReject(Base):
         self.assertEqual([(a["action"], a["code"]) for a in acts], [("mismatch", "OWNER")])
         self.assertEqual(V.rule(self.c, rid)["reason_code"], "OWNER")
         self.reject(l["lesson_id"], NOW + 3 * H)                                       # повтор дописывает чёрный список
-        self.assertEqual(RL.blocked(self.c, RL.LR.cond_h(SPREAD, "lower"), NOW + 4 * H)["code"], "OWNER_REJECT")
+        self.assertEqual(RL.blocked(self.c, RL.LR.block_h(SPREAD, "lower"), NOW + 4 * H)["code"], "OWNER_REJECT")
 
 
 # ---------------------------------------------------------------- шаг цикла

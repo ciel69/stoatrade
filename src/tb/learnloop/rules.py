@@ -5,7 +5,9 @@ derive(lesson, policy, ...)    skip_when только из урока меток
 estimate_reach(rows, ...)      дней до n_target по скорости кластеров теста (предельные хиты и база испытания) в переданной выборке окна
 overlap_rows(win, a, b)        доля прогонов-хитов правила a в выборке окна, которые отсекает правило b (Requirement 9.9; lessons.overlap не используется)
 block / block_policy           чёрный список только через knowledge.store2.blocklist_put/get: коды кода — фиксированные cooldown_days,
-                               OWNER_DISABLE и OWNER_REJECT — бессрочно с копией базы после записи; коды без записи по таблице design.md
+                               OWNER_DISABLE и OWNER_REJECT — бессрочно с копией базы после записи; коды без записи по таблице design.md.
+                               Ключ записи — learn_rules.block_h (семейство условия: числовые признаки без порога, категориальные со
+                               значением); проверка — block_h и прежние записи по точному cond_h
 
 Выборку окна (строки cluster_runs с t0 в [a, b) и closed_ts <= cut_ts) строит learnloop.clusters.window (задача 7); здесь — чистые функции над
 переданными строками. Признаки строки — JSON feats (девять RULE_FEATURES), вид сигнала — колонка type, сторона относительно сигнала — feats.side_rel,
@@ -59,25 +61,45 @@ def block_until(code, now, cfg, reason=None):
     return True, int(now) + cooldown_s(cfg)
 
 
-def block(conn, cond_h, code, now, cfg, actor=None, reason=None, root=None, backup=True):
+def block_key(cond_or_h, dir="lower"):
+    """Ключ записи чёрного списка: условие (список) -> learn_rules.block_h (семейство: числовые признаки без порога); строка — готовый ключ."""
+    if isinstance(cond_or_h, str):
+        return cond_or_h
+    return LR.block_h(cond_or_h, dir)
+
+
+def block_keys(cond_or_h, dir="lower"):
+    """Ключи проверки: условие -> (block_h, cond_h) — семейство и, для совместимости, прежняя запись по точному cond_h; строка -> (она,)."""
+    if isinstance(cond_or_h, str):
+        return (cond_or_h,)
+    return (LR.block_h(cond_or_h, dir), LR.cond_h(cond_or_h, dir))
+
+
+def block(conn, cond, code, now, cfg, actor=None, reason=None, root=None, backup=True, dir="lower"):
     """Запись чёрного списка по коду (через store2.blocklist_put; внутри транзакции вызывающего или в своей). -> строка или None (код не пишется).
-    Запись владельца (OWNER_*) — бессрочно, actor=OWNER и копия базы `owner` после фиксации (если вызвано вне транзакции и задан root;
-    внутри чужой транзакции копию делает вызывающий после COMMIT)."""
+    cond — условие (ключ записи — block_h семейства) или готовый ключ-строка. Запись владельца (OWNER_*) — бессрочно, actor=OWNER и копия базы
+    `owner` после фиксации (если вызвано вне транзакции и задан root; внутри чужой транзакции копию делает вызывающий после COMMIT)."""
     write, until = block_until(code, now, cfg, reason)
     if not write:
         return None
     owner = code in BLOCK_FOREVER
     actor = actor or ("OWNER" if owner else "code")
     in_tx = conn.in_transaction
-    row = store2.blocklist_put(conn, cond_h, code, until, actor, now=now)
+    row = store2.blocklist_put(conn, block_key(cond, dir), code, until, actor, now=now)
     if owner and backup and root is not None and not in_tx:
         row = dict(row, backup=store2.make_backup(root, "owner", now=now))
     return row
 
 
-def blocked(conn, cond_h, now):
-    """Действующая запись чёрного списка условия или None (истекла, снята владельцем, нет)."""
-    return store2.blocklist_get(conn, cond_h, now=now)
+def blocked(conn, cond, now, dir="lower"):
+    """Действующая запись чёрного списка условия или None (истекла, снята владельцем, нет). cond — условие: проверяются block_h семейства и
+    прежняя запись по точному cond_h (совместимость: запреты, записанные до ключа семейства, продолжают действовать); строка — один этот ключ.
+    -> {"code", "until_ts", "key"} первой действующей записи."""
+    for k in block_keys(cond, dir):
+        row = store2.blocklist_get(conn, k, now=now)
+        if row is not None:
+            return dict(row, key=k)
+    return None
 
 
 # ---------------------------------------------------------------- правило из урока
@@ -89,7 +111,7 @@ def _claim(lesson):
 
 def derive_reason(lesson, conn=None, now=None):
     """Почему урок не даёт правила -> None (даёт) | NOT_LABELS | NOT_HYP | NOT_SKIP (claim не (mean_r, lower, base): dir=higher правил не порождает) |
-    BAD_COND (условие вне RULE_FEATURES и словаря) | BLOCKED (cond_h в чёрном списке; проверяется, если передан conn)."""
+    BAD_COND (условие вне RULE_FEATURES и словаря) | BLOCKED (семейство block_h или точный cond_h в чёрном списке; проверяется, если передан conn)."""
     if not isinstance(lesson, dict) or (lesson.get("evidence") or {}).get("src") != "labels":
         return "NOT_LABELS"
     if lesson.get("status") != "hyp":
@@ -98,7 +120,7 @@ def derive_reason(lesson, conn=None, now=None):
         return "NOT_SKIP"
     if LC.validate_cond(lesson.get("cond")):
         return "BAD_COND"
-    if conn is not None and blocked(conn, LR.cond_h(lesson["cond"], "lower"), now) is not None:
+    if conn is not None and blocked(conn, lesson["cond"], now) is not None:
         return "BLOCKED"
     return None
 

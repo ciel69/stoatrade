@@ -136,7 +136,7 @@ def create_with_trial(conn, rule_draft, trial, now, cfg=None):
 
     rule_draft — learnloop.rules.derive (cond, scope, env_norm, cond_h, from_lesson, policy_ver); trial — колонки trials без trial_id/rule_id/lesson_id
     (criterion, criterion_h, policy_id, policy_ver, ctx_ver, start_ts, deadline_ts, env_norm; state по умолчанию open). В транзакции: не-терминальное
-    правило урока уже есть -> RuleRefused(DUP_RULE); cond_h в чёрном списке -> BLOCKED; правило не годно -> BAD_RULE. -> {"rule_id", "trial_id"}."""
+    правило урока уже есть -> RuleRefused(DUP_RULE); семейство block_h (или прежний cond_h) в чёрном списке -> BLOCKED; правило не годно -> BAD_RULE. -> {"rule_id", "trial_id"}."""
     lesson_id = rule_draft.get("from_lesson")
     if not lesson_id:
         raise RuleRefused("BAD_RULE", "нет from_lesson")
@@ -145,8 +145,9 @@ def create_with_trial(conn, rule_draft, trial, now, cfg=None):
         if dup:
             raise RuleRefused("DUP_RULE", "у урока %s уже есть правило %s" % (lesson_id, ",".join(dup)))
         ch = rule_draft.get("cond_h") or LR.cond_h(rule_draft["cond"], "lower")
-        if RL.blocked(conn, ch, now) is not None:
-            raise RuleRefused("BLOCKED", "условие %s в чёрном списке" % ch)
+        blk = RL.blocked(conn, rule_draft["cond"], now)
+        if blk is not None:
+            raise RuleRefused("BLOCKED", "условие %s в чёрном списке (%s)" % (blk["key"], blk["code"]))
         rid = next_rule_id(conn)
         cand = dict(rule_draft, rule_id=rid, status="trial")
         errs = LR.validate_rule(cand, bool((cfg or {}).get("allow_size_rules")))
@@ -183,9 +184,11 @@ def set_wait(conn, rule_id, wait, now):
 
 
 def _block_rule(conn, prev, code, now, cfg, reason=None):
-    ch = (prev.get("body") or {}).get("cond_h")
-    if ch and cfg is not None:
-        return RL.block(conn, ch, code, now, cfg, reason=reason, backup=False)
+    """Запись чёрного списка по семейству условия правила (block_h из body.cond; тела без cond — прежний ключ body.cond_h)."""
+    b = prev.get("body") or {}
+    key = b.get("cond") if isinstance(b.get("cond"), list) and b.get("cond") else b.get("cond_h")
+    if key and cfg is not None:
+        return RL.block(conn, key, code, now, cfg, reason=reason, backup=False)
     return None
 
 

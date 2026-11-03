@@ -210,7 +210,7 @@ class TestRollback(Base):
         self.assertEqual((evs[0]["pri"], evs[0]["d"]["ver"], evs[0]["d"]["rule"], evs[0]["d"]["code"]), ("info", "R-0003", self.rid, "ROLLBACK"))
         self.assertEqual(self.c.execute("SELECT code FROM learn_events WHERE step='watch'").fetchall(), [("ROLLBACK",)])
         self.assertEqual(RV.read_lease(self.root), {"ts": at(50), "rulebook_ver": "R-0003"})
-        ch = LR.cond_h(SPREAD, "lower")
+        ch = LR.block_h(SPREAD, "lower")
         b = RL.blocked(self.c, ch, at(50))
         self.assertEqual((b["code"], b["until_ts"]), ("ROLLBACK", at(50) + 14 * D))
         self.assertIsNone(RL.derive({"lesson_id": "L-0009", "status": "hyp", "cond": SPREAD, "claim": dict(CLAIM), "evidence": {"src": "labels"}},
@@ -294,7 +294,7 @@ class TestStarvation(Base):
         r = V.rule(self.c, b)
         self.assertEqual((r["status"], r["reason_code"]), ("disabled", "TRADE_STARVATION"))
         self.assertEqual(self.vers()[-1][1], "TRADE_STARVATION")
-        self.assertEqual(RL.blocked(self.c, LR.cond_h(SPREAD, "lower"), NOW)["until_ts"], NOW + 14 * D)
+        self.assertEqual(RL.blocked(self.c, LR.block_h(SPREAD, "lower"), NOW)["until_ts"], NOW + 14 * D)
         self.assertEqual([e[1]["code"] for e in self.events], ["TRADE_STARVATION"])
         evs = [e for e in bus.read(root=self.root) if e["type"] == "rulebook_rollback"]
         self.assertEqual([(e["pri"], e["d"]["code"], e["d"]["rule"]) for e in evs], [("info", "TRADE_STARVATION", b)])

@@ -4,7 +4,8 @@
 группы, разность diff = in_r − out_r. n — число кластеров теста. Порядок — (t0 часа, ключ кластера). Тест только парный (stat.paired).
 Скрининг: n ≥ min_n_menu, средняя разность в направлении claim в обеих половинах окна, одностороннее p < alpha / K.
 Holdout: n ≥ min_n_hyp (иначе N_TOO_SMALL), тот же знак (иначе NO_OOS_SIGN), p < alpha / K_h, K_h = labels_max_new_per_day (иначе NOT_SIGNIFICANT).
-Ключ чёрного списка и DUP_ACTIVE — tb.logic.learn_rules.cond_h (16 hex, canon_cond), общий с правилами и версиями.
+Ключ DUP_ACTIVE — tb.logic.learn_rules.cond_h (16 hex, canon_cond), общий с правилами и версиями; ключ чёрного списка — learn_rules.block_h
+(семейство условия: числовые признаки без порога, категориальные со значением).
 
 Подготовка `prepared(win)` (строки метрик, индексы кластеров, столбцы признаков) кешируется в словаре окна под ключом "_prep": меню из 17 условий
 и симуляции считают попадания столбцами, с той же семантикой, что learn_cond.cmp_val / matches_features.

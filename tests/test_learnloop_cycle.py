@@ -4,7 +4,9 @@
 STEP_ERROR без остановки, IntegrityError — не повреждение, простой платформы (прогрев не сбрасывается, WATCH_STALE нет), WATCH_STALE при
 непрерывной работе без сторожа, две копии сервиса, promotion_ready по каждому условию (в том числе mode=auto без сторожа), протокол
 восстановления: сигнал сервиса меток -> восстановление за один проход observe, повреждённый файл, таймаут подтверждений, оставшийся маркер;
-enabled=false — ничего не мигрирует и не пишет. Временные корни со своим конфигом, фейковые часы, без сна и сети."""
+enabled=false — ничего не мигрирует и не пишет. Временные корни со своим конфигом, фейковые часы, без сна и сети.
+Часть 2 (задача 22, свойства 15 и 28): проход с настоящими шагами пишет только в state/ и runtime/, config/ (в том числе копии risk_profile,
+risk_levels, exec_limits) не меняется, config/local не создаётся, торговые слои в процесс сервиса не загружаются, записей OWNER нет."""
 import copy
 import json
 import os
@@ -693,6 +695,88 @@ class TestRecovery(Base):
         s.tick()
         self.assertEqual(s.state, "ok")
         self.assertFalse(KM.has_ack(self.root))
+
+
+# ---------------------------------------------------------------- часть 2 (задача 22): границы полномочий цикла (свойства 15 и 28)
+
+GUARDED = ("risk_profile.json", "risk_levels.json", "exec_limits.json")
+TRADING = ("tb.brain", "tb.gateway", "tb.mcp", "tb.venues", "tb.executor", "tb.control", "tb.launcher", "tb.core.secretfile", "tb.llm.keys",
+           "tb.llm.providers", "tb.knowledge.learn_cli", "tb.knowledge.rulebook_cli")
+
+
+def _tree(top):
+    import hashlib
+    out = {}
+    for dp, _dn, fn in os.walk(top):
+        for n in fn:
+            p = os.path.join(dp, n)
+            with open(p, "rb") as f:
+                out[os.path.relpath(p, top)] = hashlib.sha256(f.read()).hexdigest()
+    return out
+
+
+class TestBoundaries(Base):
+    """Свойство 15: проход цикла с настоящими шагами не меняет config/ (risk_profile, risk_levels, exec_limits, learnloop.json), не создаёт
+    config/local и пишет только в state/ и runtime/ корня; торговые слои не загружаются. Свойство 28 (частично; полный путь — test_learnloop_e2e):
+    действия цикла записаны actor=code, OWNER нет."""
+
+    def setUp(self):
+        Base.setUp(self)
+        cdir = os.path.join(self.root, "config")
+        os.makedirs(cdir)
+        for n in GUARDED + ("shadow_policies.json", "memory.json"):
+            shutil.copyfile(os.path.join(_bootstrap.ROOT, "config", n), os.path.join(cdir, n))
+        write_cfg(self.root, CFG)
+        c = store.open_rw(self.root)
+        try:
+            store2.migrate_v2a(c, self.root, explicit=True, backup=False, now=T0)
+            store2.insert_rows(c, "cluster_runs", cr_rows(T0, T0 + 12 * D))
+        finally:
+            c.close()
+
+    def test_cycle_writes_only_state_and_runtime(self):
+        before = _tree(self.root)
+        cfg_before = _tree(os.path.join(self.root, "config"))
+        s, clock = self.svc(t=T0 + 10 * D + 600)                # настоящие шаги default_steps: меню, holdout, испытания, сторож, справка
+        self.run_for(s, clock, 2 * D, step=H)
+        self.assertEqual(s.cycle.stubs(), [])
+        self.assertEqual(s.state, "ok")
+        self.assertTrue(self.q("SELECT 1 FROM learn_events WHERE step='menu' AND code IN ('MENU', 'NO_MENU')"))    # настоящий шаг меню по окну
+        after = _tree(self.root)
+        changed = sorted(p for p in set(before) | set(after) if before.get(p) != after.get(p))
+        self.assertTrue(changed)
+        self.assertEqual([p for p in changed if p.split(os.sep)[0] not in ("state", "runtime")], [])
+        self.assertEqual(_tree(os.path.join(self.root, "config")), cfg_before)
+        self.assertFalse(os.path.exists(os.path.join(self.root, "config", "local")))
+        self.assertEqual(set(r[0] for r in self.q("SELECT DISTINCT actor FROM learn_events")), {"code"})
+        self.assertEqual(set(r[0] for r in self.q("SELECT DISTINCT actor FROM blocklist_rows")) - {"code"}, set())
+
+    def test_trading_layers_not_loaded(self):
+        """Requirement 8.7: процесс сервиса с настоящими шагами не загружает торговые слои, ключи и CLI владельца (отдельный процесс)."""
+        import subprocess
+        import sys
+        code = ("import json, sys\n"
+                "sys.path.insert(0, %r)\n"
+                "from tb.learnloop import service as SV\n"
+                "class C(object):\n"
+                "    t = %d\n"
+                "    def __call__(self):\n        return self.t\n"
+                "    def sleep(self, s):\n        self.t += s\n"
+                "c = C()\n"
+                "s = SV.Service(%r, clock=c, sleep=c.sleep, log=lambda m: None)\n"
+                "for _ in range(30):\n    s.tick()\n    c.t += 900\n"
+                "s.close()\n"
+                "print(json.dumps({'state': s.state, 'ran': sorted((s.cycle.last_report or {}).get('ran') or {}), "
+                "'mods': sorted(m for m in sys.modules if m.startswith('tb.'))}))\n") % (_bootstrap.SRC, T0 + 8 * D + 600, self.root)
+        env = dict(os.environ, TB_ROOT=self.root)
+        out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, timeout=120)
+        self.assertEqual(out.returncode, 0, out.stderr[-2000:])
+        rep = json.loads(out.stdout.strip().splitlines()[-1])
+        self.assertEqual(rep["state"], "ok")
+        self.assertIn("tb.learnloop.watch", rep["mods"])
+        self.assertIn("tb.learnloop.trial", rep["mods"])
+        self.assertEqual([m for m in rep["mods"] if any(m == p or m.startswith(p + ".") for p in TRADING)], [])
+        self.assertEqual(set(r[0] for r in self.q("SELECT DISTINCT actor FROM learn_events")), {"code"})
 
 
 if __name__ == "__main__":

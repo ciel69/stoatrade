@@ -104,7 +104,7 @@ class TestDisable(Base):
         self.assertEqual(self.vers()[-1], ("R-0003", "OWNER_DISABLE"))
         r = V.rule(self.c, rid)
         self.assertEqual((r["status"], r["reason_code"]), ("disabled", "OWNER_DISABLE"))
-        ch = LR.cond_h(SPREAD, "lower")
+        ch = LR.block_h(SPREAD, "lower")
         self.assertEqual(self.c.execute("SELECT code, until_ts, actor FROM blocklist_rows WHERE cond_h=?", (ch,)).fetchall(), [("OWNER_DISABLE", None, "OWNER")])
         self.assertIsNone(RL.derive({"lesson_id": "L-0009", "status": "hyp", "cond": SPREAD, "claim": dict(CLAIM), "evidence": {"src": "labels"}},
                                     P2, self.c, NOW + 365 * D))                       # отключённое условие не возвращается через меню
@@ -121,7 +121,7 @@ class TestDisable(Base):
         self.assertEqual((code, rep["done"], rep["blocked"], rep["ver"]), (0, "closed", True, None))
         self.assertEqual((TR.get(self.c, tid)["state"], TR.get(self.c, tid)["numbers"]["reason"]), ("closed", "OWNER_DISABLE"))
         self.assertEqual((V.rule(self.c, rid)["status"], V.rule(self.c, rid)["reason_code"]), ("rejected", "OWNER"))
-        self.assertEqual(RL.blocked(self.c, LR.cond_h(SPREAD, "lower"), NOW + 400 * D)["code"], "OWNER_DISABLE")
+        self.assertEqual(RL.blocked(self.c, LR.block_h(SPREAD, "lower"), NOW + 400 * D)["code"], "OWNER_DISABLE")
         self.assertEqual(self.vers(), [("R-0001", "INIT")])
 
     def test_unknown_rule(self):
@@ -142,7 +142,7 @@ class TestDisableAll(Base):
         self.assertEqual(V.rule(self.c, a)["status"], "disabled")
         self.assertEqual(V.rule(self.c, t)["status"], "rejected")
         for cond in (SPREAD, RANGE):
-            b = RL.blocked(self.c, LR.cond_h(cond, "lower"), NOW + 400 * D)
+            b = RL.blocked(self.c, LR.block_h(cond, "lower"), NOW + 400 * D)
             self.assertEqual((b["code"], b["until_ts"]), ("OWNER_DISABLE", None))
         self.assertEqual(self.owner(), [("rulebook", "DISABLE_ALL", None)])
         view = RV.active(self.root, NOW)
@@ -199,7 +199,7 @@ class TestApplyUnblock(Base):
     def test_unblock(self):
         rid = self.active_rule(SPREAD, "L-0001")
         self.rb("disable", rid)
-        ch = LR.cond_h(SPREAD, "lower")
+        ch = LR.block_h(SPREAD, "lower")
         code, rep, _ = self.rb("unblock", ch)
         self.assertEqual((code, rep["changed"], rep["was"]["code"]), (0, True, "OWNER_DISABLE"))
         self.assertIsNone(RL.blocked(self.c, ch, NOW))
@@ -208,6 +208,58 @@ class TestApplyUnblock(Base):
         code, rep, _ = self.rb("unblock", ch)
         self.assertEqual((code, rep["changed"]), (0, False))
         self.assertEqual(self.c.execute("SELECT COUNT(*) FROM blocklist_rows").fetchone()[0], n)
+
+
+class TestBlockFamily(Base):
+    """Requirement 7.14 (ревизия 2026-11-03, сквозной тест задачи 22): ключ чёрного списка — семейство условия block_h; сдвиг порога числового
+    признака (квантиль меню) не возвращает запрещённое условие, другое значение категориального — другое семейство; прежние записи по точному
+    cond_h продолжают действовать; unblock снимает запрет по block_h, его показывает list."""
+
+    def lesson(self, cond, lid="L-0009"):
+        return {"lesson_id": lid, "status": "hyp", "cond": cond, "claim": dict(CLAIM), "evidence": {"src": "labels"}}
+
+    def test_owner_disable_blocks_family_forever(self):
+        rid = self.active_rule(SPREAD, "L-0001")
+        self.assertEqual(self.rb("disable", rid)[0], 0)
+        shifted = [{"feature": "spread_bps", "op": ">=", "value": 4.79134}]
+        self.assertNotEqual(LR.cond_h(shifted), LR.cond_h(SPREAD))
+        self.assertEqual(LR.block_h(shifted), LR.block_h(SPREAD))
+        b = RL.blocked(self.c, shifted, NOW + 400 * D)
+        self.assertEqual((b["code"], b["until_ts"], b["key"]), ("OWNER_DISABLE", None, LR.block_h(SPREAD)))
+        self.assertEqual(RL.derive_reason(self.lesson(shifted), self.c, NOW + 400 * D), "BLOCKED")
+        with self.assertRaises(V.RuleRefused) as e:                                     # и регистрация испытания отказывает
+            V.create_with_trial(self.c, dict(RL.derive(self.lesson(SPREAD), P2), cond=shifted, cond_h=LR.cond_h(shifted), from_lesson="L-0009"),
+                                {"criterion": {}, "criterion_h": "0" * 16, "policy_id": "P2", "policy_ver": 1, "ctx_ver": "c1", "start_ts": NOW,
+                                 "deadline_ts": NOW + 30 * D, "env_norm": "mainnet"}, NOW + 400 * D, self.cfg)
+        self.assertEqual(e.exception.code, "BLOCKED")
+        self.assertIsNone(RL.blocked(self.c, [{"feature": "spread_bps", "op": "<=", "value": 5.0}], NOW))   # другой оператор — другое семейство
+        code, rep, _ = self.rb("list")
+        r = [x for x in rep["rules"] if x["rule_id"] == rid][0]
+        self.assertEqual((r["block_h"], r["blocked"]["code"], r["blocked"]["key"]), (LR.block_h(SPREAD), "OWNER_DISABLE", LR.block_h(SPREAD)))
+        code, rep, _ = self.rb("show", rid)
+        self.assertEqual((rep["block_h"], rep["blocked"]["code"]), (LR.block_h(SPREAD), "OWNER_DISABLE"))
+        code, rep, _ = self.rb("unblock", LR.block_h(SPREAD))
+        self.assertEqual((code, rep["changed"]), (0, True))
+        self.assertIsNone(RL.blocked(self.c, shifted, NOW))
+        self.assertIsNone(RL.derive_reason(self.lesson(shifted), self.c, NOW))
+
+    def test_categorical_value_is_own_family(self):
+        meme = [{"feature": "coin_class", "op": "=", "value": "meme"}]
+        major = [{"feature": "coin_class", "op": "=", "value": "major"}]
+        rid = self.active_rule(meme, "L-0001")
+        self.rb("disable", rid)
+        self.assertEqual(RL.blocked(self.c, meme, NOW + 400 * D)["code"], "OWNER_DISABLE")
+        self.assertIsNone(RL.blocked(self.c, major, NOW + 400 * D))
+        self.assertIsNone(RL.derive_reason(self.lesson(major), self.c, NOW + 400 * D))
+
+    def test_legacy_exact_cond_h_row_still_blocks(self):
+        store2.blocklist_put(self.c, LR.cond_h(SPREAD), "OWNER_DISABLE", None, "OWNER", now=NOW)   # запись до ключа семейства
+        b = RL.blocked(self.c, SPREAD, NOW + 400 * D)
+        self.assertEqual((b["code"], b["key"]), ("OWNER_DISABLE", LR.cond_h(SPREAD)))
+        self.assertEqual(RL.derive_reason(self.lesson(SPREAD), self.c, NOW + 400 * D), "BLOCKED")
+        code, rep, _ = self.rb("unblock", LR.cond_h(SPREAD))                            # прежняя запись снимается по своему ключу
+        self.assertEqual((code, rep["changed"]), (0, True))
+        self.assertIsNone(RL.blocked(self.c, SPREAD, NOW))
 
 
 class TestPromotion(Base):

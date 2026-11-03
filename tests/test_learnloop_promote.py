@@ -290,7 +290,7 @@ class TestLimits(Base):
         self.assertEqual(rep["waiting"], [(rid, "LOSS_CAP")])
         r = V.rule(self.c, rid)
         self.assertEqual((r["wait"], r["wait_since_ts"]), ("LOSS_CAP", NOW))
-        self.assertIsNone(RL.blocked(self.c, LR.cond_h(SPREAD, "lower"), NOW))
+        self.assertIsNone(RL.blocked(self.c, LR.block_h(SPREAD, "lower"), NOW))
         self.prun(NOW + 5 * D)
         self.assertEqual(V.rule(self.c, rid)["wait_since_ts"], NOW)                       # непрерывное ожидание: начало не сдвигается
         V.disable(self.c, [a], "OWNER_DISABLE", NOW + 5 * D + 1, self.cfg)
@@ -313,7 +313,7 @@ class TestLimits(Base):
         rep = self.prun(NOW + 14 * D + H)
         self.assertEqual(rep["rejected"], [(rid, "LOSS_CAP", None)])
         self.assertEqual(self.status(rid), ("rejected", None, "LOSS_CAP"))
-        self.assertIsNone(RL.blocked(self.c, LR.cond_h(SPREAD, "lower"), NOW + 14 * D + 2 * H))
+        self.assertIsNone(RL.blocked(self.c, LR.block_h(SPREAD, "lower"), NOW + 14 * D + 2 * H))
         self.assertEqual(self.vers(), [("R-0001", "INIT")])
 
     def test_ready_interrupt_restarts_loss_cap_clock(self):
@@ -342,7 +342,7 @@ class TestOverlap(Base):
         self.assertEqual([p["rule_id"] for p in rep["promoted"]], [b])
         self.assertEqual(rep["rejected"], [(a, "NO_VERDICT", "OVERLAP")])
         self.assertEqual(self.status(a), ("rejected", None, "NO_VERDICT"))
-        self.assertIsNone(RL.blocked(self.c, LR.cond_h(SPREAD, "lower"), NOW))
+        self.assertIsNone(RL.blocked(self.c, LR.block_h(SPREAD, "lower"), NOW))
         self.assertEqual(self.vers(), [("R-0001", "INIT"), ("R-0002", "PROMOTE")])
 
     def test_disjoint_pending_both_promoted(self):
