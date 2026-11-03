@@ -9,6 +9,7 @@ import re
 
 from tb.brain import validate
 from tb.brain.validate import day_frame_breaks
+from tb.core import hyps
 from tb.logic.geometry import MAX_HOLD_MIN  # noqa: F401  (срок удержания по горизонту живёт в logic.geometry; имя прежнее)
 
 ES_TTL = {"scalp": 30, "intraday": 60, "swing": 240, "position": 240}          # ttl_min развёрнутого объекта по горизонту кандидата
@@ -65,7 +66,9 @@ def expand(name, a, cands, sym, event_seq):
     if setup not in validate.SETUPS or setup == "none":
         return None, ["SETUP_REQUIRED"], c
     hz = c.get("horizon")
-    hyp = re.sub(r"[^a-z0-9._-]+", "-", str(a.get("hypothesis") or setup).lower()).strip("-")[:40] or setup
+    hyp = re.sub(r"[^a-z0-9._-]+", "-", str(a.get("hypothesis") or "").lower()).strip("-")[:40]
+    if len(hyp) < 2:                                                             # по умолчанию семейство сетапа (R2, Requirement 19.2); тег модели нормализует шлюз
+        hyp = hyps.family(setup)[0] or hyps.OTHER
     thesis = validate.redact(str(a.get("thesis") or "").strip(), 280)
     if len(thesis) < 10:
         thesis = "%s %s от %s, стоп %s, цель %s" % (setup, c["side"], c["level"], c["stop"], c["tp"][0])

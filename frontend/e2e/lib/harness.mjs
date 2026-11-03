@@ -34,7 +34,7 @@ const slug = (s) => s.replace(/[^\p{L}\p{N}]+/gu, '_').slice(0, 60)
 /**
  * Определить сценарий.
  * @param {string} name название (по-русски, из него видно, что проверяется)
- * @param {object} opts viewport, colorScheme, heartbeatMs, hello (hello.ctl), topics (поправки к данным: функция от темы), allowConsole (регулярки допустимых ошибок консоли), timeout (мс)
+ * @param {object} opts viewport, colorScheme, heartbeatMs, hello (hello.ctl), memory (hello.memory), topics (поправки к данным: функция от темы), allowConsole (регулярки допустимых ошибок консоли), timeout (мс)
  * @param {(ctx: Ctx) => Promise<void>} fn
  */
 export function scenario(name, opts, fn) {
@@ -43,7 +43,7 @@ export function scenario(name, opts, fn) {
   test(name, { timeout: opts.timeout ?? 90_000, todo: opts.todo }, async () => {
     const topics = await defaultTopics()
     if (opts.topics) opts.topics(topics)
-    const dash = await new FakeDash({ topics, hello: opts.hello ?? HELLO_FULL, heartbeatMs: opts.heartbeatMs ?? 0 }).start()
+    const dash = await new FakeDash({ topics, hello: opts.hello ?? HELLO_FULL, memory: opts.memory, heartbeatMs: opts.heartbeatMs ?? 0 }).start()
     // разовые ответы по запросу (чтение): подробности плана, разрезы экспериментов, итог дня
     dash.replies.plan = async (m) => ({ topic: 'plan_detail', data: await planDetail(m.id, dash.state.get('plans')) })
     dash.replies.exp = async (m) => ({ topic: 'exp_detail', data: await expDetail(m.by, m.mode) })

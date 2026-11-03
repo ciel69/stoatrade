@@ -33,8 +33,9 @@ describe('nav', () => {
   })
   it('полоса вкладок: для пункта с вкладками найдена, для обзора нет', () => {
     expect(sectionOf('/trading/plans')?.label).toBe('Торговля')
-    expect(sectionOf('/brain/brief')?.tabs?.map((t) => t.label)).toEqual(['Решения', 'Досье', 'Учится ли мозг'])
+    expect(sectionOf('/brain/brief')?.tabs?.map((t) => t.label)).toEqual(['Решения', 'Досье', 'Учится ли мозг', 'Память'])
     expect(sectionOf('/brain/learning')?.label).toBe('Мозг')
+    expect(sectionOf('/brain/memory')?.label).toBe('Мозг')
     expect(sectionOf('/system/control')?.label).toBe('Система')
     expect(sectionOf('/system/notify')?.tabs?.map((t) => t.label)).toEqual(['Управление', 'Настройки', 'Уведомления'])
     expect(sectionOf('/trading/day')?.tabs?.map((t) => t.label)).toEqual(['Сделки', 'Планы', 'Идеи', 'День', 'Эксперименты'])

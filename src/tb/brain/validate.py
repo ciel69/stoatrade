@@ -105,9 +105,10 @@ def _s(n, lo=0):
     return {"type": "string", "minLength": lo, "maxLength": n}
 
 
-PM = {"type": "object", "required": ["schema", "event_seq", "plan", "rev", "decision", "args", "why", "conf", "next"], "properties": {
+# rev плана модель не задаёт (решение владельца 2026-11-03): поле необязательно и игнорируется, ревизию и проверки по текущему плану делают шлюз и исполнитель
+PM = {"type": "object", "required": ["schema", "event_seq", "plan", "decision", "args", "why", "conf", "next"], "properties": {
     "schema": {"const": "tb.pm/1"}, "event_seq": {"type": "integer", "minimum": 0}, "plan": {"type": "string", "pattern": RE_PLAN_ID},
-    "rev": {"type": "integer", "minimum": 1}, "decision": {"enum": list(PM_DECISIONS)},
+    "rev": {}, "decision": {"enum": list(PM_DECISIONS)},      # rev: старые ответы с полем принимаются, значение не используется
     "args": {"type": "object", "properties": {
         "to": {"anyOf": [{"type": "number", "minimum": 0}, {"const": "be"}]}, "frac": {"type": "number", "minimum": 0.05, "maximum": 1},
         "patch": {"type": "object", "additionalProperties": _FREE}, "reason_code": {"enum": list(ESCALATE_CODES)}}},
@@ -583,6 +584,8 @@ def _pm(o, ctx):
         errs.append("HOLD_SMALL_LOSS")               # жёсткое правило 3 промпта кодом: убыток меньше 0.5R не повод закрывать (разбор POWR 2026-11-02: закрыто при -0.2R по шуму)
     if hp is True and d == "cancel":
         errs.append("CANCEL_IN_POSITION")
+    if hp is True and d == "hold_plan":
+        errs.append("HOLD_IN_POSITION")              # 2026-11-03: план в позиции на паузу не ставится (защита работает всегда); «ничего не делать» = hold
     if d == "move_stop" and hp is False and a.get("to") == "be":
         errs.append("NO_POSITION")
     to, side, px, sl, avg = a.get("to"), ctx.get("side"), ctx.get("px"), ctx.get("sl"), ctx.get("avg")
@@ -608,6 +611,18 @@ def chase_errors(o, ctx, sign):
     if o.get("confirm") != "none":
         errs.append("CHASE_CONFIRM")                         # догоняют по рынку сейчас, свечу не ждут
     return errs
+
+
+def rule_fail(cands, side):
+    """Код отказа правила rulebook (RULE_<id>) у кандидата стороны side в разметке кода (ctx.cands из досье) или None. Правило зависит от
+    монеты, стороны и события, а не от уровня, поэтому запрет стороны действует на любой вход этой стороны, в том числе с числами модели."""
+    for c in cands if isinstance(cands, list) else []:
+        if not isinstance(c, dict) or c.get("side") != side:
+            continue
+        f = c.get("fail")
+        if isinstance(f, str) and f.startswith("RULE_"):
+            return f
+    return None
 
 
 def _entry(o, ctx):
@@ -649,6 +664,9 @@ def _entry(o, ctx):
         errs.append("NO_SLOTS")
     if ctx.get("room_allowed") is False:
         errs.append("ROOM_CLOSED")
+    rf = rule_fail(ctx.get("cands"), side)
+    if rf:
+        errs.append(rf)                                      # R2: сторона отсечена правилом rulebook (разметка кода в brief.cands): модель снять запрет не может
     if data_stale(ctx):
         errs.append("STALE_DATA")                            # цена сканера/фида по монете старше порога: план по устаревшим данным не подаём
     sign = 1 if side == "long" else -1

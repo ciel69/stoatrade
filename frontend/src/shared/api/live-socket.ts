@@ -12,7 +12,8 @@ export interface LiveMessage {
 }
 
 /** Разовые сообщения (ответ на команду, пульс связи): повторять новому подписчику их нельзя. */
-const EPHEMERAL = new Set(['pong', 'link', 'plan_detail', 'usage_detail', 'day_report_detail', 'exp_detail', 'learning_detail', 'ctl_result', 'ctl_final'])
+const EPHEMERAL = new Set(['pong', 'link', 'plan_detail', 'usage_detail', 'day_report_detail', 'exp_detail', 'learning_detail', 'ctl_result', 'ctl_final',
+  'memory_cases_detail', 'memory_lessons_detail', 'memory_rules_detail', 'memory_path_detail', 'memory_action_result'])
 
 type MessageHandler = (m: LiveMessage) => void
 type StateHandler = (s: LinkState) => void

@@ -27,7 +27,7 @@ class HappyPath(BrainBase):
         c = self.gw.tool_calls("stop_plan")
         self.assertEqual(len(c), 1)
         self.assertEqual(c[0]["args"]["to"], "be")
-        self.assertEqual(c[0]["args"]["rev"], 3)
+        self.assertNotIn("rev", c[0]["args"])                       # ревизию мозг не передаёт: шлюз и исполнитель судят по текущему плану (2026-11-03)
         self.assertEqual(c[0]["args"]["id"], PLAN)
         self.assertEqual(c[0]["args"]["event_seq"], s)
         self.assertEqual(c[0]["agent"], "api")
@@ -70,7 +70,7 @@ class HappyPath(BrainBase):
 
     def test_close_partial_cancel_amend_hold_release_map_to_tools(self):
         cases = [(pm("close"), "close_plan", {}), (pm("partial_close", {"frac": 0.5}), "close_plan", {"frac": 0.5}), (pm("cancel"), "cancel_plan", {}),
-                 (pm("amend", {"patch": {"targets": {"t1": {"price": 148.4}}}}), "amend_plan", {"rev": 3}), (pm("hold_plan"), "hold_plan", {}),
+                 (pm("amend", {"patch": {"targets": {"t1": {"price": 148.4}}}}), "amend_plan", {"patch": {"targets": {"t1": {"price": 148.4}}}}), (pm("hold_plan"), "hold_plan", {}),
                  (pm("release_plan"), "release_plan", {})]
         for i, (obj, tool, extra) in enumerate(cases):
             self.gw.calls[:] = []
@@ -147,7 +147,8 @@ class ToolFirst(BrainBase):
         self.assertEqual((j["status"], j["result"]["outcome"]), ("done", "decision"))
         c = self.gw.tool_calls("stop_plan")
         self.assertEqual(len(c), 1)
-        self.assertEqual((c[0]["args"]["to"], c[0]["args"]["rev"], c[0]["args"]["id"], c[0]["args"]["event_seq"]), ("be", 3, PLAN, s))    # plan и rev платформа подставила сама
+        self.assertEqual((c[0]["args"]["to"], c[0]["args"]["id"], c[0]["args"]["event_seq"]), ("be", PLAN, s))    # plan платформа подставила сама
+        self.assertNotIn("rev", c[0]["args"])                                     # ревизии от мозга нет (2026-11-03)
         why = [x for x in self.decisions() if x["what"] == "brain_why"]
         self.assertEqual(len(why), 1)
         self.assertIn("+1R", why[0]["why"])
@@ -321,19 +322,22 @@ class FormatHandling(BrainBase):
         r.step()
         self.assertIn("PLAN_MISMATCH", self.factory.clients["ds-pro"].format_errors[0])
 
-    def test_stale_rev_redoes_dossier_once(self):
-        r = self.runner({"ds-pro": [pm("close", rev=2), pm("close", rev=3)]})
-        self.job("J-1")
-        r.step()
-        self.assertEqual(len(self.gw.tool_calls("get_brief")), 2)
-        self.assertEqual(len(self.gw.tool_calls("close_plan")), 1)
-
-    def test_stale_twice_no_action(self):
-        r = self.runner({"ds-pro": [pm("close", rev=2)]})
-        self.job("J-1")
-        r.step()
-        self.assertEqual(self.gw.tool_calls("close_plan"), [])
-        self.assertEqual([x["res"]["code"] for x in self.decisions()], ["STALE"])
+    def test_model_rev_is_ignored(self):
+        """2026-11-03 (ETH-02: три E_REV_STALE): ревизию плана модель не задаёт. Любой rev в ответе (устаревший, float, нет поля) не меняет исполнение
+        и не уходит в шлюз; повторного досье по «устаревшей ревизии» больше нет."""
+        for i, rev in enumerate((2, 2.0, None)):
+            self.gw.calls[:] = []
+            self.factory = None
+            obj = pm("move_stop", {"to": "be"}, rev=rev if rev is not None else 3)
+            if rev is None:
+                obj.pop("rev")
+            r = self.runner({"ds-pro": [obj]})
+            self.job("J-r%d" % i, key="plan:R%d" % i)
+            r.step()
+            self.assertEqual(len(self.gw.tool_calls("get_brief")), 1, rev)
+            c = self.gw.tool_calls("stop_plan")
+            self.assertEqual(len(c), 1, rev)
+            self.assertNotIn("rev", c[0]["args"])
 
     def test_gateway_reject_recorded_not_retried(self):
         self.gw.responses["stop_plan"] = {"ok": False, "status": "rejected", "errors": [{"code": "E_STOP_WIDEN", "msg": "x"}]}

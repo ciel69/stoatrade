@@ -176,6 +176,7 @@ def check_text(text, schema, max_bytes=MAX_JSON_BYTES, repair=None):
 HINT_TEXT = {      # постоянные пояснения к кодам смысловой проверки (не цитаты ответа): слабой модели одного кода мало, чтобы исправить ответ
     "HOLD_SMALL_LOSS": "the loss is smaller than 0.5R: do not close (hard rule 3); the exchange stop and the plan's invalidation protect the position. Use pm_hold, "
                        "or pm_partial_close / pm_move_stop (not closer than ATR(5m)) if structure and flow really turned",
+    "HOLD_IN_POSITION": "a plan in a position cannot be paused: the stop, breakeven and rules always work. To do nothing use pm_hold",
     "STOP_WRONG_SIDE": "the stop must be on the losing side of the current price px (long: stop below px, short: stop above px)",
     "SIDE_PRICES": "long: stop < level < tp1 < tp2; short: stop > level > tp1 > tp2",
     "NO_CONFIRM_SIZE": "an entry without candle confirmation needs size_mult <= 0.5 (or the lower cap from brief.limits)",

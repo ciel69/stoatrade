@@ -6,6 +6,8 @@
   exp compare EXP A B [--mode ..] [--k N] [--min-n 30] [--json]   разность средних R (Уэлч) с доверительным интервалом
 
 Вывод для владельца, без вердиктов: `*` = n < min-n (p-значения нет); K = число сравнений в запросе, порог Бонферрони alpha/K;
+для --by hyp K = число семейств с paper n >= 30 (expstats.hyp_k). Рядом с числами сделок `stats --by hyp` и `show` печатают справку меток
+(runtime/learn/hyp_ref.json, шаг цикла hypref) для семейств из config/hypotheses.json: policy_map — ориентир, статус гипотезы не меняет.
 режимы (paper/live/testnet) в одной строке не смешиваются. Ничего не меняет и не пишет. Код 0 при успехе, 2 при ошибке использования.
 Модуль не импортирует биржевой код (слои, tests/test_layering.py).
 """
@@ -13,10 +15,60 @@ import argparse
 import json
 import sys
 
+from tb import paths
 from tb.core import expstats as X
+from tb.core import hyps
 
 EXIT_OK = 0
 EXIT_USAGE = 2
+HYP_REF_ENVS = ("mainnet", "testnet")
+
+
+def _fnum(v):
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v == v and v not in (float("inf"), float("-inf")) else None
+
+
+def hyp_ref(root=None, env="mainnet"):
+    """Справка меток (runtime/learn/hyp_ref.json, пишет шаг цикла learnloop.hypref; здесь только чтение) ->
+    {семейство: {"policy", "policy_ver", "kinds", "env", "n", "mean", "lo", "hi", "window_days", "ts"}}.
+    Только семейства с записью config/hypotheses.json: policy_map и n > 0; нет файла или мусор -> {} (блоки работают без справки)."""
+    env = env if env in HYP_REF_ENVS else "mainnet"
+    try:
+        with open(paths.runtime("learn", "hyp_ref.json", root=root), encoding="utf-8") as f:
+            doc = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    fams = doc.get("families") if isinstance(doc, dict) else None
+    if not isinstance(fams, dict):
+        return {}
+    pmap = hyps.policy_map()
+    out = {}
+    for fam, d in fams.items():
+        if fam not in pmap or not isinstance(d, dict) or not isinstance(d.get("env"), dict):
+            continue
+        e = d["env"].get(env)
+        n = e.get("n") if isinstance(e, dict) else None
+        if not isinstance(n, int) or isinstance(n, bool) or n <= 0:
+            continue
+        out[fam] = {"policy": d.get("policy") if isinstance(d.get("policy"), str) else None, "policy_ver": d.get("policy_ver"),
+                    "kinds": [k for k in (d.get("kinds") or []) if isinstance(k, str)], "env": env, "n": n,
+                    "mean": _fnum(e.get("mean")), "lo": _fnum(e.get("lo")), "hi": _fnum(e.get("hi")),
+                    "window_days": doc.get("window_days"), "ts": doc.get("ts")}
+    return out
+
+
+def render_ref(ref, fams=None):
+    """Строки справки меток для семейств fams (None — все из справки)."""
+    keys = [f for f in (sorted(ref) if fams is None else fams) if f in ref]
+    if not keys:
+        return []
+    L = []
+    for f in keys:
+        r = ref[f]
+        ci = "[%s; %s]" % (_f(r["lo"], "%+.2f"), _f(r["hi"], "%+.2f")) if r["lo"] is not None else "без интервала"
+        L.append("  %s: политика %s по %s, %s сут, %s: n=%d кластеров, средний R %s, 95%% ДИ %s" % (
+            f, r["policy"] or "-", ",".join(r["kinds"]) or "-", r["window_days"] or "-", r["env"], r["n"], _f(r["mean"], "%+.2f"), ci))
+    return ["Справка меток (теневая политика по меткам, ориентир; статус гипотезы не меняет):"] + L
 
 
 def _f(v, fmt="%.2f", none="-"):
@@ -140,8 +192,19 @@ def main(argv=None, root=None):
     elif a.cmd == "stats":
         sel = [t for t in trades if not a.exp or t["exp"] == a.exp]
         rows = X.group_stats(sel, a.by, a.min_n)
-        print(json.dumps({"ok": True, "by": a.by, "mode": a.mode, "min_n": a.min_n, "k": len(rows), "alpha_adj": X.bonferroni(len(rows)),
-                          "groups": rows}, ensure_ascii=False) if a.json else render_stats(rows, a.by, a.min_n))
+        k = rows[0]["k"] if rows else 1                      # k и alpha_adj из group_stats: для by=hyp — hyp_k по семействам (Requirement 19.4)
+        ref = hyp_ref(root) if a.by == "hyp" else {}
+        if a.json:
+            out = {"ok": True, "by": a.by, "mode": a.mode, "min_n": a.min_n, "k": k, "alpha_adj": rows[0]["alpha_adj"] if rows else X.bonferroni(k),
+                   "groups": rows}
+            if a.by == "hyp":
+                out["hyp_ref"] = ref
+            print(json.dumps(out, ensure_ascii=False))
+        else:
+            L = [render_stats(rows, a.by, a.min_n)]
+            if rows:
+                L.extend(render_ref(ref, sorted(set(r["key"] for r in rows))))
+            print("\n".join(L))
     elif a.cmd == "show":
         sel = [t for t in trades if t["exp"] == a.exp]
         rows = X.group_stats(sel, "variant", a.min_n)
@@ -149,14 +212,18 @@ def main(argv=None, root=None):
         pairs = [(x, y) for i, x in enumerate(vs) for y in vs[i + 1:]]
         cmps = [X.compare(sel, a.exp, x, y, a.min_n, k=max(1, len(pairs))) for x, y in pairs]
         m = meta.get(a.exp) or {}
+        fams = sorted(set(t["hyp"] for t in sel if t.get("hyp")))           # семейства гипотез сделок эксперимента (уже нормализованы при чтении)
+        ref = hyp_ref(root)
         if a.json:
-            print(json.dumps({"ok": True, "exp": a.exp, "meta": m, "variants": rows, "comparisons": cmps}, ensure_ascii=False))
+            print(json.dumps({"ok": True, "exp": a.exp, "meta": m, "variants": rows, "comparisons": cmps,
+                              "hyps": fams, "hyp_ref": dict((f, ref[f]) for f in fams if f in ref)}, ensure_ascii=False))
         else:
             L = ["Эксперимент %s" % a.exp]
             for k in ("hypothesis", "prereg", "started", "min_n"):
                 if m.get(k) is not None:
                     L.append("  %s: %s" % (k, m[k]))
             L.append(render_stats(rows, "variant", a.min_n))
+            L.extend(render_ref(ref, fams))
             L.extend(render_compare(c) for c in cmps)
             print("\n".join(L))
     else:

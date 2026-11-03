@@ -299,7 +299,8 @@ class TestManage(_gw.GwBase):
         r = self.call("chat", "amend_plan", dict(base, patch={"stop": {"price": 142.9}}))
         self.assertIsNone(r["ok"], r)
         cmd = self.inbox()[0]
-        self.assertEqual((cmd["op"], cmd["actor"], cmd["rev_expected"]), ("amend", "brain:chat", 1))
+        self.assertEqual((cmd["op"], cmd["actor"]), ("amend", "brain:chat"))
+        self.assertNotIn("rev_expected", cmd)            # мозг ревизию не присылает: исполнитель проверяет amend по текущему плану (2026-11-03)
 
     def test_amend_cannot_change_symbol_or_exec_fields(self):
         base = {"id": PID, "rev": 1, "reason": "r", "wait_s": 0}
@@ -308,9 +309,14 @@ class TestManage(_gw.GwBase):
         r = self.call("chat", "amend_plan", dict(base, patch={"rev": 9, "id": "PL-0101-XXX-01"}))
         self.assertEqual(self.code(r), "E_SCHEMA")
 
-    def test_stale_rev_and_scope(self):
-        r = self.call("chat", "amend_plan", {"id": PID, "rev": 5, "patch": {"risk": {"score": 0.4}}, "reason": "r"})
-        self.assertEqual(self.code(r), "E_REV_STALE")
+    def test_model_rev_ignored_and_scope(self):
+        # 2026-11-03: ревизию модель не задаёт; присланный rev (устаревший) шлюз отбрасывает как лишнее поле, команда без rev_expected
+        r = self.call("chat", "amend_plan", {"id": PID, "rev": 5, "patch": {"thesis": "Новое обоснование позиции после пересмотра"}, "reason": "r", "wait_s": 0})
+        self.assertIsNone(r["ok"], r)
+        self.assertNotIn("rev_expected", self.inbox()[-1])
+        r = self.call("chat", "stop_plan", {"id": PID, "rev": 5, "to": "142.5", "reason": "r", "wait_s": 0})
+        self.assertIsNone(r["ok"], r)
+        self.assertNotIn("rev_expected", self.inbox()[-1])
         self.make_plan("PL-1028-BTC-01", sym="BTC")
         self.assertEqual(self.code(self.call("bot", "close_plan", {"id": "PL-1028-BTC-01", "reason": "x"})), "E_SYMBOL_FORBIDDEN")
         self.make_plan("PL-1028-ETH-01", sym="ETH", mode="live")
@@ -347,8 +353,12 @@ class TestManage(_gw.GwBase):
             self.assertEqual(self.code(self.call("chat", tool, {"id": PID, "reason": "\u200b \n"})), "E_REASON", tool)
         self.assertEqual(self.code(self.call("chat", "close_plan", {"id": PID, "reason": "r", "frac": 1.5})), "E_ARGS")
         self.assertEqual(self.code(self.call("chat", "close_plan", {"id": PID, "reason": "r", "frac": 0})), "E_ARGS")
-        for tool in ("close_plan", "cancel_plan", "hold_plan", "release_plan"):
+        for tool in ("close_plan", "cancel_plan", "release_plan"):
             self.assertIsNone(self.call("chat", tool, {"id": PID, "reason": "по тезису", "wait_s": 0})["ok"], tool)
+        # 2026-11-03: план в позиции (managing) на паузу не ставится
+        self.assertEqual(self.code(self.call("chat", "hold_plan", {"id": PID, "reason": "по тезису", "wait_s": 0})), "E_STATUS_FORBIDS")
+        self.make_plan("PL-1028-SOL-03", status="armed")
+        self.assertIsNone(self.call("chat", "hold_plan", {"id": "PL-1028-SOL-03", "reason": "до входа", "wait_s": 0})["ok"])
         ops = sorted(c["op"] for c in self.inbox())
         self.assertEqual(ops, ["cancel", "close", "hold", "release"])
         self.assertTrue(all(c["actor"] == "brain:chat" for c in self.inbox()))

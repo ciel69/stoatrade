@@ -22,7 +22,7 @@ from tb.logic.candles import tf_min
 ACTION_TYPES = ("fire_entry", "cancel_entry", "transition", "move_stop", "partial_close", "close", "move_target", "add", "notify")
 MOVE_STOP_MODES = ("breakeven", "price", "lock_r", "trail")
 ENTRY_BLOCKS = ("CHASE", "SPREAD", "STALE", "GUARD", "COOLDOWN", "MIN_SIZE", "HOLD")   # HOLD добавлен WP3 (hold плана запрещает вход)
-SKIP_CODES = ("NOT_TIGHTER", "TOO_CLOSE", "WRONG_SIDE", "ADD_DISABLED", "MAX_ADDS", "TARGET_FARTHER_NOT_RISKFREE", "NO_DATA")
+SKIP_CODES = ("NOT_TIGHTER", "TOO_CLOSE", "WRONG_SIDE", "ADD_DISABLED", "MAX_ADDS", "TARGET_FARTHER_NOT_RISKFREE", "NO_DATA", "HOLD")   # HOLD: добор при hold плана
 DEFAULT_BE_ROUND_TRIP_BPS = 18.0     # 2 x taker 0.09%, если фактических комиссий нет
 BE_EXTRA_BPS = 2.0
 TRAIL_CANDLE_MODES = ("candle_extreme", "atr")
@@ -466,8 +466,9 @@ def evaluate_manage(plan, rt, view, now, limits):
     условие `when` (без памяти), затем действие. Несколько move_stop за один вызов схлопываются в самый жёсткий (остальные правила
     считаются сработавшими, на бирже они ничего не меняют): набор действий не зависит от порядка правил, кроме порядка в списке.
     Стоп применяется только строго жёстче текущего (иначе NOT_TIGHTER, действие не создаётся), не ближе `min_gap_bps_from_price` к цене
-    (trail прижимается к границе зазора, остальные правила ждут: TOO_CLOSE) и не по ту сторону цены. При hold и устаревшей цене
-    стоп не двигается (hold: add тоже запрещён). `events`: веха r_plus_1 (и r_minus_0_5 из events.wake_r) один раз, near_target один раз на цель.
+    (trail прижимается к границе зазора, остальные правила ждут: TOO_CLOSE) и не по ту сторону цены. При устаревшей цене стоп не двигается
+    (NO_DATA). hold плана на открытой позиции защиту не блокирует (SPEC_V2 I8, решение владельца 2026-11-03): move_stop/trail (в том числе auto_be,
+    auto_lock), partial_close и close работают всегда; при любом hold запрещён только добор add (HOLD). `events`: веха r_plus_1 (и r_minus_0_5 из events.wake_r) один раз, near_target один раз на цель.
 
     >>> from tb.logic.candles import MarketView
     >>> v = MarketView("SOL", 102.0, 101.9, 102.1, 102.0, 5.0, None, 5.0)
@@ -529,7 +530,7 @@ def evaluate_manage(plan, rt, view, now, limits):
         done_state = "done" if (mt is not None and fired + 1 >= mt) else "waiting"
 
         if act in ("move_stop", "trail"):
-            if hold or not fresh or last is None or cur_stop is None:
+            if not fresh or last is None or cur_stop is None:          # hold плана защитный перенос стопа не блокирует (I8)
                 skip(rid, "NO_DATA")
                 continue
             if act == "move_stop":
@@ -599,7 +600,10 @@ def evaluate_manage(plan, rt, view, now, limits):
             if not (limits or {}).get("pyramid", {}).get("enabled"):
                 skip(rid, "ADD_DISABLED")
                 continue
-            if hold or rf is None or not 0 < rf <= 1:
+            if hold:
+                skip(rid, "HOLD")
+                continue
+            if rf is None or not 0 < rf <= 1:
                 skip(rid, "NO_DATA")
                 continue
             if int(((rt or {}).get("adds") or {}).get("n", 0)) >= int(_lim(limits, "pyramid", "max_adds", 1)):

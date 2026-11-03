@@ -15,7 +15,7 @@ from tb.memory import cases as memcases
 
 NOW = H.BASE + 12 * 3600                       # 2026-11-02 12:00 UTC, понедельник
 FIX = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures_learning")
-SCENARIOS = ("empty", "few", "nodiff", "confirmed", "down", "mode_unknown", "no_labels", "computing", "full")
+SCENARIOS = ("empty", "few", "nodiff", "confirmed", "down", "mode_unknown", "no_labels", "computing", "full", "r2")
 FILES = {"full": "payload_full.json", "few": "payload_few.json"}
 COLS = "key, policy_id, policy_ver, geometry_ver, ctx_ver, t0, sym, type, side, plan, code, filled, exit_reason, r_gross, r_net, fees_r, mfe_r, mae_r, hold_min, flags"
 
@@ -118,6 +118,76 @@ def put_policies(root, rng, since_end=NOW):
         conn.close()
 
 
+R2_HYPS = ("range-fade", "range_fade", "Range-Fade-lower-edge", "range-fade", "level_reclaim", "reclaim-level", "liq-cascade-reclaim", "breakout_retest",
+           "momentum_chase", None)          # варианты написания сводятся к семействам при чтении (Requirement 19.3); None — сделка без гипотезы
+
+
+def _iso(t):
+    return H.iso(t)
+
+
+def put_r2(root, rng, mode="paper"):
+    """Сценарий r2 (R2.6, задача 20): таблицы цикла в базе знаний, уроки, версии rulebook, смена модели, справка меток и бумажные сделки с гипотезами.
+    240 сделок: первые 20 без версии rulebook («до R2»), 100 под R-0001, 120 под R-0002; смена модели после 80-й сделки."""
+    from tb.knowledge import store2
+    from tb.memory import lessons as LS
+    rs = gauss_rs(rng, [(120, 0.12, 0.8), (120, 0.22, 0.8)])
+    ts = times(len(rs), 2 * 3600)
+    recs = trade_recs(rs, ts, mode)
+    for k, r in enumerate(recs):
+        hyp = R2_HYPS[(k // 2) % len(R2_HYPS)]
+        if r["ev"] == "open" and hyp:
+            r["hyp"] = hyp
+    _jsonl(root, "trades.jsonl", recs)
+    cs = case_recs(rng, rs, ts, mode)
+    for i, c in enumerate(cs):
+        c["refs"]["journal_id"] = "T%03d-%s" % (i, mode)
+        if i >= 20:
+            c["src"]["rulebook_ver"] = "R-0001" if i < 120 else "R-0002"
+    put_cases(root, cs)
+    conn = store.open_rw(root)
+    try:
+        store2.migrate_v2a(conn, root, explicit=True, backup=False, now=NOW - 30 * 86400)
+        for ver, t, why, rules in (("R-0000", ts[0] - 3600, "INIT", []), ("R-0001", ts[20] - 600, "PROMOTE", ["RL-0001"]), ("R-0002", ts[120] - 600, "PROMOTE", ["RL-0001", "RL-0002"])):
+            store2.append_row(conn, "rulebook_versions", {"ver": ver, "parent": None, "reason_code": why, "trial_id": None, "rule_ids": rules, "numbers": None, "ts": _iso(t)})
+        for i in range(1, 7):
+            store2.insert_rows(conn, "lesson_candidates", [{"id": i, "menu_id": "M-%d" % i, "src": "labels", "cond": [{"feature": "coin_class", "op": "=", "value": "meme"}],
+                                                            "claim": {"metric": "mean_r", "dir": "lower", "vs": "base", "effect": 0.2}, "env_norm": "mainnet", "ctx_ver": "c1",
+                                                            "k_space": 4, "status": "hyp" if i <= 3 else "new", "ts": NOW - i * 86400,
+                                                            "lesson_id": "L-%04d" % i if i <= 3 else None, "evidence": {"x": i}}])
+        for tid, rid, st, v in (("TR-0001", "RL-0001", "closed", "promote"), ("TR-0002", "RL-0002", "open", None)):
+            store2.insert_rows(conn, "trials", [{"trial_id": tid, "rule_id": rid, "lesson_id": "L-0001", "env_norm": "mainnet", "criterion": {"k": 1}, "criterion_h": "0" * 16,
+                                                 "policy_id": "P2", "policy_ver": 1, "ctx_ver": "c1", "start_ts": NOW - 20 * 86400, "deadline_ts": NOW + 86400, "state": st, "verdict": v}])
+        store2.append_row(conn, "rule_rows", {"rule_id": "RL-0001", "rev": 1, "kind": "skip_when", "status": "active", "from_lesson": "L-0001", "env_norm": "mainnet",
+                                              "body": {"cond": []}, "ts": _iso(NOW - 10 * 86400)})
+        conn.commit()
+    finally:
+        conn.close()
+    day = 86400
+    for lid, st, src, n, eff, diff, se, created, hist, txt in (
+            ("L-0001", "confirmed", "labels", 120, 0.22, -0.22, 0.06, NOW - 26 * day, ((NOW - 9 * day, "confirmed"),), "Входы на мем-монетах в азиатскую сессию в среднем хуже"),
+            ("L-0002", "hyp", "labels", 48, 0.35, -0.35, 0.12, NOW - 12 * day, (), "Входы против часового тренда при широком спреде хуже обычного"),
+            ("L-0003", "hyp", "brain", 12, 0.6, 0.6, 0.3, NOW - 5 * day, (), "После двух стопов подряд лучше пропустить следующий сигнал"),
+            ("L-0004", "rejected", "labels", 40, 0.1, -0.1, 0.09, NOW - 20 * day, ((NOW - 4 * day, "rejected"),), "Входы в пятницу вечером хуже обычного"),
+            ("L-0005", "expired", "brain", 6, 0.4, 0.4, 0.4, NOW - 40 * day, (), "Ждать закрытия свечи у уровня")):
+        ev = {"n_closed": n, "diff": diff, "se": se}
+        if src == "labels":
+            ev.update(src="labels", sample={"env_norm": "mainnet"})
+        LS._write(root, {"schema": LS.SCHEMA, "lesson_id": lid, "rev": 1, "ts": _iso(created), "created_ts": created, "kind": "new", "status": st, "txt": txt,
+                         "cond": [{"feature": "coin_class", "op": "=", "value": "meme"}], "claim": {"metric": "mean_r", "dir": "lower" if diff < 0 else "higher", "vs": "base", "effect": eff},
+                         "created_by": "code" if src == "labels" else "brain", "contradicts": [], "merged_into": None, "evidence": ev, "conf": 0.2, "expires_ts": None,
+                         "history": [{"ts": _iso(created), "status": "hyp", "reason_code": "NEW"}] + [{"ts": _iso(t), "status": s, "reason_code": "X"} for t, s in hist]})
+    os.makedirs(os.path.join(root, "state", "brain"), exist_ok=True)
+    with open(os.path.join(root, "state", "brain", "swaps.jsonl"), "w", encoding="utf-8") as f:
+        f.write(json.dumps({"seq": 1, "kind": "use", "ts": ts[80] - 900, "result": "ok", "tier": 0, "by": "owner-cli", "from": "model-a", "to": "model-b",
+                            "target": ["entry_scout"]}) + "\n")
+    os.makedirs(os.path.join(root, "runtime", "learn"), exist_ok=True)
+    with open(os.path.join(root, "runtime", "learn", "hyp_ref.json"), "w", encoding="utf-8") as f:
+        json.dump({"schema": "tb.hyp_ref/1", "ts": NOW - 1800, "window_days": 14, "a": NOW - 14 * day, "b": NOW, "families": {
+            "liq-cascade-reclaim": {"policy": "P4", "policy_ver": 1, "kinds": ["liq_cascade"], "env": {"mainnet": {"n": 42, "n_runs": 61, "mean": 0.12, "lo": -0.03, "hi": 0.27}}},
+            "oi-build-squeeze": {"policy": "P2", "policy_ver": 1, "kinds": ["oi_spike"], "env": {"mainnet": {"n": 9, "n_runs": 9, "mean": -0.1, "lo": -0.6, "hi": 0.4}}}}}, f)
+
+
 def setup_scenario(name, root):
     """Наполняет корень данными сценария. -> (mode, now). Сценарии фиксированы seed."""
     rng = random.Random(1 if name == "nodiff" else 20261102)
@@ -157,6 +227,8 @@ def setup_scenario(name, root):
         ts = times(35)
         _jsonl(root, "trades.jsonl", trade_recs(rs, ts, mode))
         put_cases(root, case_recs(rng, rs, ts, mode))
+    elif name == "r2":
+        put_r2(root, rng, mode)
     elif name == "computing":
         rs = gauss_rs(rng, [(36, 0.2, 1.0)])
         ts = times(36)

@@ -1,5 +1,5 @@
 import type {
-  DisciplineBlock, EconomicsBlock, Est, ExitsBlock, LearningBlock, LearningDetail, LearningMode, LearningVerdict, MemoryBlock, ResultBlock, SeriesPoint, SkipsBlock, VsPolicyBlock, WindowStat,
+  DisciplineBlock, EconomicsBlock, Est, ExitsBlock, HypFamily, HypsBlock, LearningBlock, LearningDetail, LearningMode, LearningVerdict, MemoryBlock, ResultBlock, SeriesPoint, SkipsBlock, VsPolicyBlock, WindowStat,
 } from '../model/types'
 
 /**
@@ -107,9 +107,24 @@ export function mockLearning(kind: LearningMock, mode: LearningMode): LearningDe
 
   blocks.lessons = stage('lessons', 'Уроки')
   blocks.versions = stage('versions', 'Версии мозга до/после')
+  // гипотезы считаются по бумаге и от таблиц цикла не зависят: в образцах есть всегда (кроме пустого журнала)
+  const fam = (family: string, k: number, r: number, status: HypFamily['status'], ref: HypFamily['ref'] = null): HypFamily => ({
+    family, n: k, n_target: 30, small: k < 30, r: est(k ? r : null, k >= 2 ? 1.6 / Math.sqrt(k) : null, k), win: k ? 0.5 + r / 3 : null, p: k >= 30 ? (r > 0.3 ? 0.004 : 0.4) : null,
+    status, confirmable: family !== 'other', ref,
+  })
+  const liqRef = { policy: 'P4', policy_ver: 1, kinds: ['liq_cascade'], env_norm: 'mainnet', window_days: 14, n: 42, r: est(0.12, 0.15, 42) }
+  blocks.hyps = empty
+    ? noData('hyps', 'Гипотезы', 'no_trades')
+    : ({ id: 'hyps', title: 'Гипотезы', status: few ? 'few_data' : 'ok', note: '', reason: few ? 'n_lt_min' : null, mode: 'paper', env_norm: 'mainnet', min_n: 30, lvl: 0.95,
+        k: few ? 1 : 2, alpha_adj: few ? 0.05 : 0.025, n_trades: n, n_confirmed: kind === 'mock-confirmed' ? 1 : 0, ref_ts: ASOF - 1800,
+        families: few
+          ? [fam('range-fade', 7, 0.1, 'accumulating'), fam('liq-cascade-reclaim', 3, -0.2, 'accumulating', liqRef), fam('other', 2, 0.4, 'accumulating')]
+          : [fam('range-fade', Math.min(n, 52), kind === 'mock-confirmed' ? 0.42 : 0.08, kind === 'mock-confirmed' ? 'confirmed' : 'not_confirmed'),
+              fam('reclaim-level', 31, 0.05, 'not_confirmed'), fam('liq-cascade-reclaim', 18, 0.21, 'accumulating', liqRef), fam('other', 6, -0.3, 'accumulating'),
+              fam('oi-build-squeeze', 0, 0, 'accumulating', { ...liqRef, policy: 'P2', kinds: ['oi_spike'], n: 9, r: est(-0.1, 0.5, 9) })] } as HypsBlock)
 
   return {
-    schema: 'tb.learning/1', ok: true, mode, asof: ASOF, min_n: 30, alpha: 0.05, verdict, blocks, order: ['result', 'vs_policy', 'discipline', 'skips', 'exits', 'economics', 'memory', 'lessons', 'versions'],
+    schema: 'tb.learning/1', ok: true, mode, asof: ASOF, min_n: 30, alpha: 0.05, verdict, blocks, order: ['result', 'vs_policy', 'discipline', 'skips', 'exits', 'economics', 'memory', 'lessons', 'versions', 'hyps'],
     meta: { built_ms: 140, cached: false, excluded: { shadow: 0, manual: 2, no_plan: 0, no_r: 0 }, warnings: [], sources: { trades: n, cases: empty ? 0 : 120, labels_db: !empty } },
   }
 }

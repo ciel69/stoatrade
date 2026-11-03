@@ -208,6 +208,7 @@ FIELDS = {
     "thesis": _n("str", minlen=THESIS_LEN[0], maxlen=THESIS_LEN[1], req=True),
     "tags": _n("obj", default={}, fields={
         "experiment": _TAG, "variant": _VARIANT, "setup": _TAG, "hypothesis": _TAG,
+        "hyp_raw": _TAG,                                   # R2 (Requirement 19.2): исходный тег гипотезы, ставший `other` (ставит шлюз, для аудита)
         "extra": _n("arr", item=_TAG, max=5),
     }),
     "entry": _n("obj", req=True, fields={
@@ -312,10 +313,19 @@ def check_transition(cur, new, path="status"):
     return [issue("E_TRANSITION", "error", path, "переход %s -> %s запрещён (из терминалов выхода нет)" % (cur, new))]
 
 
+def _rev_int(v):
+    """Номер ревизии -> int: целое или целочисленный float (2.0); bool, строки, дробные и прочее -> None."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    if isinstance(v, float) and (v != v or v in (float("inf"), float("-inf")) or v != int(v)):
+        return None
+    return int(v)
+
+
 def check_rev(spec, rev_expected):
     """-> [Issue]: E_REV_STALE, если rev_expected не равен текущему rev плана (оптимистичная блокировка amend)."""
     cur = spec.get("rev") if isinstance(spec, dict) else None
-    if rev_expected is None or isinstance(rev_expected, bool) or rev_expected != cur:
+    if _rev_int(rev_expected) is None or _rev_int(rev_expected) != _rev_int(cur):        # 2 и 2.0 одна ревизия (JSON-путь мог дать float)
         return [issue("E_REV_STALE", "error", "rev", "ожидалась ревизия %r, у плана %r: обновите вид (plan show)" % (rev_expected, cur))]
     return []
 

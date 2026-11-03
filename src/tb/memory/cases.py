@@ -52,7 +52,7 @@ SITUATION = {
 NUM_FEATURES = tuple(k for k, v in SITUATION.items() if v[0] in (N, I) and k not in ("utc_hour", "dow"))
 DECISION = {"action": (E_, ACTIONS), "why": (S, 200), "conf": (N, 0, 1), "stop_dist_vs_range5": (N, 0, 1000), "skip_code": (E_, SKIP_CODES)}
 SRC = {"risk_level": (I, 0, 9), "actor": (E_, ACTORS), "agent_id": (S, 16), "model": (S, 40), "role": (E_, ROLES), "exp": (S, 40), "var": (S, 8),
-       "rules_ver": (S, 20), "mode": (E_, MODES), "mem": (E_, MEM)}
+       "rules_ver": (S, 20), "mode": (E_, MODES), "mem": (E_, MEM), "rulebook_ver": (S, 8)}      # rulebook_ver (R2): версия rulebook R-NNNN, необязательно
 RESULT = {"status": (E_, STATUSES), "r": (N, -100, 1000), "pnl_r_net": (N, -100, 1000), "mae_r": (N, -100, 1000), "mfe_r": (N, -100, 1000),
           "hold_min": (N, 0, 10 ** 7), "exit_reason": (E_, EXIT_REASONS), "fees_r": (N, -100, 1000)}
 WHATIF = {"h_min": (I, 1, 10 ** 5), "dir_pct": (N, -10 ** 4, 10 ** 4), "ret_pct": (N, -10 ** 4, 10 ** 4), "cost_pct": (N, 0, 100),

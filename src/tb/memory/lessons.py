@@ -6,19 +6,37 @@ hyp -> confirmed (n_closed>=30 и >=5 дней и >=2 режимов, либо >
 Подтверждённый урок остаётся подсказкой, в guard/TRADING НЕ превращается автоматически. conf затухает: conf_eff = conf * 0.5^(дни без подтверждений / half_life);
 ниже hide_below урок скрыт от brief. Противоречащие активные уроки получают contradicts и множитель conf. Случаи с mem=off, exclude_from_stats, inj_suspect и
 старой версией правил уроки не поднимают и не подтверждают.
+
+R2: уроки меток (evidence.src="labels", создаёт цикл learnloop через create(..., created_by="code", evidence_src="labels", evidence_extra)) живут отдельно:
+refresh их не видит, conf не затухает, expires_ts = null до confirmed, статусы меняет только transition; бюджет propose и лимит max_active считаются по группам.
 """
 import math
 import time
 
 from tb import paths
 from tb.core import expstats
+from tb.core.filelock import FileLock
+from tb.logic.learn_cond import cmp_val, matches_features  # noqa: F401  (реэкспорт: lessons.matches_features, lessons._cmp_val)
 from tb.memory import agg, cases, chain, privacy, similar
+from tb.memory import cfg as memcfg
 
 SCHEMA = "tb.lesson/1"
 OPS = ("=", ">=", "<=", "in")
 STATUSES = ("hyp", "confirmed", "rejected", "expired", "merged")
 ACTIVE = ("hyp", "confirmed")
-REASONS = ("NEW", "ENOUGH_N", "CONTRADICTED", "EXPIRED", "MERGED", "OWNER", "EVICTED", "REFRESH")
+BRAIN_REASONS = ("NEW", "ENOUGH_N", "CONTRADICTED", "EXPIRED", "MERGED", "OWNER", "EVICTED", "REFRESH")
+# уроки меток (R2, Requirement 6.7): статусы меняет только transition по результату испытания
+LABEL_REJECT_REASONS = ("TRIAL_REJECT", "NO_VERDICT", "UNREACHABLE_N", "LOSS_CAP", "SAMPLE_CHANGED", "CTX_CHANGED", "RESTORED", "BUDGET", "OWNER")
+LABEL_REASONS = ("NEW", "TRIAL_PROMOTE") + LABEL_REJECT_REASONS + ("EXPIRED",)
+REASONS = BRAIN_REASONS + tuple(r for r in LABEL_REASONS if r not in BRAIN_REASONS)
+SOURCES = ("brain", "labels")
+# допустимые переходы урока меток -> допустимые reason_code (confirmed -> rejected только OWNER)
+LABEL_TRANSITIONS = {("hyp", "confirmed"): ("TRIAL_PROMOTE",), ("hyp", "rejected"): LABEL_REJECT_REASONS, ("confirmed", "expired"): ("EXPIRED",),
+                     ("confirmed", "rejected"): ("OWNER",)}
+LINE_MAX = 4096                                      # лимит строки lessons.jsonl (chain.append max_bytes)
+LABELS_RESERVE = 256                                 # запас строки урока меток при создании на будущие переходы (history, expires_ts, conf)
+LABELS_IDS_MAX = 5                                   # до 5 идентификаторов кластеров в evidence урока меток
+LABELS_ID_KEYS = ("clusters", "cases")
 METRICS = ("mean_r", "win_rate", "stop_hit_share", "err_share")
 DIRS = ("lower", "higher")
 VS = ("base", "zero")
@@ -137,25 +155,11 @@ def validate_claim(cl):
     return errs
 
 
-def _cmp_val(op, v, x):
-    if x is None:
-        return False
-    if op == "=":
-        return x == v
-    if op == "in":
-        return x in v
-    if isinstance(x, bool) or not isinstance(x, (int, float)):
-        return False
-    return x >= v if op == ">=" else x <= v
+_cmp_val = cmp_val                                   # прежнее имя (сравнение перенесено в tb.logic.learn_cond)
 
 
 def matches(cond, case):
-    vec = similar.vector(case)
-    return all(_cmp_val(c["op"], c["value"], vec.get(c["feature"])) for c in cond)
-
-
-def matches_features(cond, feats):
-    return all(_cmp_val(c["op"], c["value"], feats.get(c["feature"])) for c in cond)
+    return matches_features(cond, similar.vector(case))
 
 
 def _domain(c):
@@ -283,7 +287,26 @@ def conf_for(lesson, st, cfg):
     return round(min(c, cap), 3)
 
 
+def is_labels(lesson):
+    """Урок меток (R2): evidence.src == "labels". Уроки без src и с src="brain" — уроки мозга."""
+    return ((lesson or {}).get("evidence") or {}).get("src") == "labels"
+
+
+def _num(x):
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+
+
+def conf_from_numbers(n, diff, se, cap):
+    """Та же формула, что conf_for: n_eff = n * |d| / (|d| + se) (без se — n / 2), conf = 1 - exp(-n_eff / 10), не выше cap."""
+    if not n or diff is None:
+        return 0.05
+    n_eff = n * (abs(diff) / (abs(diff) + se) if se else 0.5)
+    return round(min(1.0 - math.exp(-n_eff / 10.0), cap), 3)
+
+
 def conf_eff(lesson, now, cfg):
+    if is_labels(lesson):                                     # уроки меток не затухают: conf фиксирован при создании и переходе (Requirement 6.6)
+        return round(lesson.get("conf", 0.0), 3)
     lc = cfg.get("lessons") or {}
     last = similar.ts_epoch((lesson.get("evidence") or {}).get("last_ts")) or similar.ts_epoch(lesson.get("created_ts")) or now
     age = max(0.0, now - last) / DAY
@@ -305,9 +328,9 @@ def read_all(root=None):
     return out
 
 
-def _next_id(root):
+def _id_after(ls):
     n = 0
-    for k in read_all(root):
+    for k in ls:
         try:
             n = max(n, int(k.split("-")[1]))
         except (IndexError, ValueError):
@@ -315,12 +338,17 @@ def _next_id(root):
     return "L-%04d" % (n + 1)
 
 
+def _next_id(root):
+    """Следующий идентификатор; уникален только под lessons.lock в одном захвате с _write (create так и делает)."""
+    return _id_after(read_all(root))
+
+
 def _write(root, rec):
     rec["txt"] = render_txt(rec)
     errs = privacy.privacy_scan(rec)
     if errs:
         raise ValueError("; ".join(errs))
-    return chain.append(lessons_path(root), lessons_lock(root), rec, max_bytes=4096)
+    return chain.append(lessons_path(root), lessons_lock(root), rec, max_bytes=LINE_MAX)
 
 
 def _hist(l, now, status, reason):
@@ -329,24 +357,108 @@ def _hist(l, now, status, reason):
     return h[-8:]
 
 
-def create(root, cond, claim, created_by, all_cases, cfg, now, evidence_ids=None, status="hyp"):
-    """Создаёт урок-гипотезу (evidence считается кодом по случаям). ValueError при неверном cond/claim."""
+class LessonRefused(ValueError):
+    """Отказ с кодом причины (таблица reason_code в design.md): BUDGET, EVIDENCE_TOO_BIG, BAD_SRC. Подкласс ValueError — прежние обработчики его ловят."""
+
+    def __init__(self, code, msg):
+        ValueError.__init__(self, "%s: %s" % (code, msg))
+        self.code = code
+
+
+def _line_bytes(root, rec):
+    """Точный размер строки rec в lessons.jsonl (с txt, seq, prev, h); вызывать под lessons.lock, иначе seq может устареть."""
+    seq, last_h, _nl = chain.tail(lessons_path(root))
+    out = dict(rec, txt=render_txt(rec), seq=seq + 1, prev=last_h, h="0" * 16)
+    return len(chain.canon(out).encode("utf-8"))
+
+
+def _fit_labels(root, l):
+    """Строка урока меток в LINE_MAX - LABELS_RESERVE: сначала списки идентификаторов до LABELS_IDS_MAX, затем усечение с конца; иначе EVIDENCE_TOO_BIG."""
+    limit = LINE_MAX - LABELS_RESERVE
+    ev = l["evidence"]
+    for k in LABELS_ID_KEYS:
+        if isinstance(ev.get(k), list):
+            ev[k] = ev[k][:LABELS_IDS_MAX]
+    while _line_bytes(root, l) > limit:
+        lists = [k for k in LABELS_ID_KEYS if isinstance(ev.get(k), list) and ev[k]]
+        if not lists:
+            raise LessonRefused("EVIDENCE_TOO_BIG", "строка урока %d байт > %d" % (_line_bytes(root, l), limit))
+        k = max(lists, key=lambda x: (len(ev[x]), x))
+        ev[k] = ev[k][:-1]
+
+
+def _labels_evidence(evidence_extra, lc):
+    """-> (evidence, conf) урока меток из готового evidence_extra (числа holdout: n_closed, diff, se)."""
+    if not isinstance(evidence_extra, dict):
+        raise ValueError("evidence_extra: нужен словарь evidence для evidence_src=labels")
+    ev = _json_copy(evidence_extra)
+    ev["src"] = "labels"
+    n, d, se = ev.get("n_closed"), ev.get("diff"), ev.get("se")
+    errs = []
+    if isinstance(n, bool) or not isinstance(n, int) or n < 0:
+        errs.append("evidence_extra.n_closed: целое >= 0")
+    if not _num(d):
+        errs.append("evidence_extra.diff: число")
+    if se is not None and (not _num(se) or se < 0):
+        errs.append("evidence_extra.se: число >= 0 или null")
+    if errs:
+        raise ValueError("; ".join(errs))
+    return ev, conf_from_numbers(n, d, se, min(lc.get("conf_cap_hyp", 0.9), lc.get("conf_cap_reviewer", 0.3)))
+
+
+def _json_copy(x):
+    """Глубокая копия JSON-значения (evidence_extra вызывающего не меняется при усечении)."""
+    if isinstance(x, dict):
+        return dict((k, _json_copy(v)) for k, v in x.items())
+    if isinstance(x, list):
+        return [_json_copy(v) for v in x]
+    return x
+
+
+def create(root, cond, claim, created_by, all_cases, cfg, now, evidence_ids=None, status="hyp", evidence_src="brain", evidence_extra=None):
+    """Создаёт урок-гипотезу. ValueError при неверном cond/claim.
+
+    evidence_src="brain" (по умолчанию): evidence считается кодом по случаям мозга (stats), как прежде.
+    evidence_src="labels" (R2, Requirement 5.6): только created_by="code" и status="hyp"; stats() не вызывается, evidence = evidence_extra + src="labels",
+    conf по числам меток (не выше conf_cap_reviewer), expires_ts = None (срок появится при confirmed); лимит max_active считается по группе labels (BUDGET);
+    размер строки проверяется до записи (усечение списков идентификаторов, иначе EVIDENCE_TOO_BIG).
+    lesson_id выдаётся под lessons.lock в одном захвате с записью (Requirement 5.7)."""
     errs = validate_cond(cond) + validate_claim(claim)
     if created_by not in CREATORS:
         errs.append("created_by не из %s" % list(CREATORS))
+    if evidence_src not in SOURCES:
+        errs.append("evidence_src не из %s" % list(SOURCES))
+    labels = evidence_src == "labels"
+    if labels and created_by != "code":
+        errs.append("урок меток создаёт только код (created_by=code)")
+    if labels and status != "hyp":
+        errs.append("урок меток создаётся только со статусом hyp")
     if errs:
         raise ValueError("; ".join(errs))
     lc = cfg.get("lessons") or {}
-    l = {"schema": SCHEMA, "lesson_id": _next_id(root), "rev": 1, "ts": cases.iso(now), "created_ts": now, "kind": "new", "status": status, "cond": cond, "claim": claim,
+    l = {"schema": SCHEMA, "lesson_id": None, "rev": 1, "ts": cases.iso(now), "created_ts": now, "kind": "new", "status": status, "cond": cond, "claim": claim,
          "created_by": created_by, "contradicts": [], "merged_into": None, "rules_ver": cfg.get("rules_ver")}
-    st = stats(l, all_cases, cfg, created_ts=now)
-    l["evidence"] = _public_ev(st)
-    if evidence_ids:
-        l["evidence"]["cases"] = [i for i in evidence_ids][:20]
-    l["conf"] = conf_for(l, st, cfg)
-    l["expires_ts"] = now + (lc.get("ttl_confirmed_days", 90) if status == "confirmed" else lc.get("ttl_hyp_days", 30)) * DAY
+    if labels:
+        l["evidence"], l["conf"] = _labels_evidence(evidence_extra, lc)
+        l["expires_ts"] = None
+    else:
+        st = stats(l, all_cases, cfg, created_ts=now)
+        l["evidence"] = _public_ev(st)
+        if evidence_ids:
+            l["evidence"]["cases"] = [i for i in evidence_ids][:20]
+        l["conf"] = conf_for(l, st, cfg)
+        l["expires_ts"] = now + (lc.get("ttl_confirmed_days", 90) if status == "confirmed" else lc.get("ttl_hyp_days", 30)) * DAY
     l["history"] = [{"ts": l["ts"], "status": status, "reason_code": "NEW"}]
-    return _write(root, l)
+    with FileLock(lessons_lock(root), wait=chain.LOCK_WAIT_S):       # реентерабельна: chain.append берёт её повторно без ожидания
+        ls = read_all(root)
+        if labels:
+            cap = lc.get("max_active", 200)
+            if sum(1 for x in ls.values() if x["status"] in ACTIVE and is_labels(x)) >= cap:
+                raise LessonRefused("BUDGET", "лимит активных уроков меток %d" % cap)
+        l["lesson_id"] = _id_after(ls)
+        if labels:
+            _fit_labels(root, l)
+        return _write(root, l)
 
 
 def _update(root, l, now, status=None, reason="REFRESH", **kw):
@@ -364,12 +476,55 @@ def _same(a, b):
     return all(a.get(k) == b.get(k) for k in keys)
 
 
+def transition(root, lesson_id, status, reason_code, now, cfg=None, nums=None):
+    """Смена статуса урока меток (R2, Requirement 6.1): под lessons.lock перечитывает последнее состояние, проверяет переход и пишет через _update.
+
+    Переходы: hyp -> confirmed (TRIAL_PROMOTE), hyp -> rejected (TRIAL_REJECT | NO_VERDICT | UNREACHABLE_N | LOSS_CAP | SAMPLE_CHANGED | CTX_CHANGED | RESTORED |
+    BUDGET | OWNER), confirmed -> expired (EXPIRED), confirmed -> rejected (только OWNER). Недопустимый переход или урок мозга -> ValueError
+    (урок мозга: LessonRefused BAD_SRC). Повтор с тем же целевым статусом ничего не пишет и возвращает None.
+    confirmed: expires_ts = now + ttl_confirmed_days; nums={n_closed, diff, se} (числа испытания) пересчитывают conf той же формулой, не выше 0.95,
+    без nums conf прежний. cfg по умолчанию — config/memory.json."""
+    if status not in STATUSES:
+        raise ValueError("status не из %s" % list(STATUSES))
+    if cfg is None:
+        cfg = memcfg.load(root)
+    lc = cfg.get("lessons") or {}
+    with FileLock(lessons_lock(root), wait=chain.LOCK_WAIT_S):
+        l = read_all(root).get(lesson_id)
+        if l is None:
+            raise ValueError("нет урока %s" % lesson_id)
+        if not is_labels(l):
+            raise LessonRefused("BAD_SRC", "transition только для уроков меток (%s — урок мозга)" % lesson_id)
+        if l["status"] == status:
+            return None
+        allowed = LABEL_TRANSITIONS.get((l["status"], status))
+        if allowed is None:
+            raise ValueError("недопустимый переход урока меток %s: %s -> %s" % (lesson_id, l["status"], status))
+        if reason_code not in allowed:
+            raise ValueError("переход %s -> %s: reason_code %r не из %s" % (l["status"], status, reason_code, list(allowed)))
+        kw = {}
+        if status == "confirmed":
+            kw["expires_ts"] = now + lc.get("ttl_confirmed_days", 90) * DAY
+            if nums is not None:
+                if not isinstance(nums, dict) or not _num(nums.get("diff")) or isinstance(nums.get("n_closed"), bool) or not isinstance(nums.get("n_closed"), int):
+                    raise ValueError("nums: {n_closed: int, diff: число, se: число|null}")
+                kw["conf"] = conf_from_numbers(nums["n_closed"], nums["diff"], nums.get("se"), 0.95)
+        return _update(root, l, now, status, reason_code, **kw)
+
+
 def owner_set(root, lesson_id, action, cfg, now, into=None):
-    """Решение владельца: confirm | reject | expire | merge (into=L-id). -> новое состояние."""
+    """Решение владельца: confirm | reject | expire | merge (into=L-id). -> новое состояние.
+
+    Уроки меток (R2, Requirement 5.12): допустим только reject (через transition, код OWNER; закрытие испытания и чёрный список — задача 16),
+    остальное и merge в урок меток -> LessonRefused BAD_SRC."""
     ls = read_all(root)
     l = ls.get(lesson_id)
     if l is None:
         raise ValueError("нет урока %s" % lesson_id)
+    if is_labels(l) or (action == "merge" and is_labels(ls.get(into))):
+        if action != "reject" or not is_labels(l):
+            raise LessonRefused("BAD_SRC", "команда %s неприменима к уроку меток (допустим только reject)" % action)
+        return transition(root, lesson_id, "rejected", "OWNER", now, cfg=cfg) or read_all(root)[lesson_id]
     lc = cfg.get("lessons") or {}
     if action == "confirm":
         if l["status"] not in ACTIVE:
@@ -387,10 +542,12 @@ def owner_set(root, lesson_id, action, cfg, now, into=None):
 
 
 def refresh(root, all_cases, cfg, now, dry_run=False):
-    """Пересчёт активных уроков по случаям: evidence, conf, статус, срок, противоречия, слияние, вытеснение. -> список изменений [{lesson_id, change, reason}]."""
+    """Пересчёт активных уроков по случаям: evidence, conf, статус, срок, противоречия, слияние, вытеснение. -> список изменений [{lesson_id, change, reason}].
+    Уроки меток (evidence.src="labels") не видны целиком: ни пересчёта, ни k_active, ни противоречий, слияния и вытеснения (Requirement 6.2);
+    лимит max_active здесь — лимит группы уроков мозга."""
     lc = cfg.get("lessons") or {}
     ls = read_all(root)
-    act = [l for l in ls.values() if l["status"] in ACTIVE]
+    act = [l for l in ls.values() if l["status"] in ACTIVE and not is_labels(l)]
     changes = []
     k_active = max(1, len(act))
     allowed = similar.allowed_rules(cfg)
@@ -487,7 +644,7 @@ def propose(root, all_cases, cfg, now):
     existing = read_all(root)
     have = [_cond_set(l["cond"]) for l in existing.values() if l["status"] in ACTIVE]
     day0 = now - (now % DAY)
-    made = sum(1 for l in existing.values() if l["created_by"] == "code" and l.get("rev") == 1 and (l.get("created_ts") or 0) >= day0)
+    made = sum(1 for l in existing.values() if l["created_by"] == "code" and not is_labels(l) and l.get("rev") == 1 and (l.get("created_ts") or 0) >= day0)
     budget = max(0, lc.get("max_new_per_day", 3) - made)
     singles = _singles(cfg, pl)
     sing_cases = dict((i, [c for c in pl if matches([s], c)]) for i, s in enumerate(singles))
@@ -540,7 +697,8 @@ def from_hint(hint, root, all_cases, cfg, now):
 
 def applicable(lessons, feats, now, cfg, limit=None):
     """Активные уроки, условия которых выполнены признаками запроса, по убыванию conf_eff (скрытые ниже hide_below не берутся).
-    -> [{id, st, n, conf, txt, contradicts}] для brief и инструмента шлюза."""
+    -> [{id, st, n, conf, txt, contradicts}] для brief и инструмента шлюза; у уроков меток дополнительно src="labels" (обе группы в одном списке).
+    expires_ts здесь не читается (null = «без срока»): сроки исполняют refresh (мозг) и сверка статусов (метки)."""
     lc = cfg.get("lessons") or {}
     out = []
     for l in lessons:
@@ -549,7 +707,10 @@ def applicable(lessons, feats, now, cfg, limit=None):
         ce = conf_eff(l, now, cfg)
         if ce < lc.get("hide_below", 0.15):
             continue
-        out.append({"id": l["lesson_id"], "st": l["status"], "n": (l.get("evidence") or {}).get("n_closed", 0), "conf": ce, "txt": l.get("txt"),
-                    "contradicts": list(l.get("contradicts") or [])})
+        row = {"id": l["lesson_id"], "st": l["status"], "n": (l.get("evidence") or {}).get("n_closed", 0), "conf": ce, "txt": l.get("txt"),
+               "contradicts": list(l.get("contradicts") or [])}
+        if is_labels(l):
+            row["src"] = "labels"
+        out.append(row)
     out.sort(key=lambda x: (-x["conf"], x["id"]))
     return out[:limit or lc.get("brief_max", 3)]

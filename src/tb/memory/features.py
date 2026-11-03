@@ -4,6 +4,7 @@
 помечается в situation.retro и не принимается валидатором ревью «known_at_decision». Текст заметок/тезисов НЕ парсится для числовых признаков:
 берутся только числовые поля записи, ctx, теги. why = собственный текст системы, очищенный и обрезанный до 200.
 """
+import json
 import re
 import time
 
@@ -227,6 +228,100 @@ def apply_plan(sit, spec, fired=()):
         return sit
     sit = dict(sit, confirmed=conf, confirm_kind="candle_close" if conf else "none")
     return finalize({k: v for k, v in sit.items() if k not in ("missing", "retro")}, sit.get("retro") or [])
+
+
+# ---------------------------------------------------------------- признаки правил R2 (Requirements 7.10, 7.13)
+RULE_EVENT_NUM = ("range_5m_pct", "ret_5m_pct", "turn_surge_5m", "chg_24h_pct", "spread_bps", "funding_pct")
+RULE_SCOPE_KEYS = ("ev_kind", "side_rel")       # не признаки условий: вид события и сторона относительно направления сигнала для scope
+_DIR_SIDE = {"up": "long", "long": "long", "down": "short", "short": "short"}
+
+
+def _num8(x):
+    """Число как его хранит шина (bus._num: не длиннее 8 значащих цифр), всегда float -> паритет меток и шины. Нечисло/bool -> None."""
+    if isinstance(x, bool):
+        return None
+    v = num(x)
+    return None if v is None else float("%.8g" % v)
+
+
+def rule_event(event):
+    """Событие сканера в одном виде -> {"sym", "ts", "kind", "dir", "f"} или None.
+
+    Принимает (а) конверт шины {"type": "scanner_signal", "ts": ISO, "sym", "d": {...}} — сторона мозга (событие из resolve_event);
+    (б) сигнал меток {"t0", "sym", "type", "side", "ev": dict|JSON} — строка `signals` при записи `cluster_runs`. Иное -> None."""
+    if not isinstance(event, dict):
+        return None
+    if isinstance(event.get("d"), dict):
+        if event.get("type") != "scanner_signal":
+            return None
+        d = event["d"]
+        return {"sym": event.get("sym"), "ts": cases.parse_ts(event.get("ts")), "kind": d.get("kind"), "dir": _DIR_SIDE.get(d.get("dir")), "f": d}
+    if "ev" in event:
+        ev = event.get("ev")
+        if isinstance(ev, str):
+            try:
+                ev = json.loads(ev)
+            except ValueError:
+                ev = None
+        t0 = num(event.get("t0"))
+        return {"sym": event.get("sym"), "ts": t0, "kind": event.get("type"), "dir": _DIR_SIDE.get(event.get("side")),
+                "f": ev if isinstance(ev, dict) else {}}
+    return None
+
+
+def _cand_side(cand):
+    s = cand.get("side") if isinstance(cand, dict) else cand
+    return s if s in ("long", "short") else None
+
+
+def rule_features(event, cand, cfg):
+    """Девять признаков правил (tb.logic.learn_cond.RULE_FEATURES) + RULE_SCOPE_KEYS -> {имя: значение|None}. Одна функция для меток и мозга.
+
+    event — см. rule_event (None/не scanner_signal -> все признаки события None); cand — кандидат, план или прогон ({"side"} или строка стороны);
+    cfg — config/memory.json. Числа только из полей события (spread_bps — только d.spread_bps, не struct.sp); coin_class = classify_coin(sym, cfg,
+    turn_24h_musd × 1e6), а монета вне справочника без оборота -> None (не unknown); utc_session по времени события; side_rel = with_dir|against_dir|None."""
+    side = _cand_side(cand)
+    out = {"coin_class": None, "utc_session": None, "side": side}
+    out.update((k, None) for k in RULE_EVENT_NUM)
+    out.update((k, None) for k in RULE_SCOPE_KEYS)
+    e = rule_event(event)
+    if e is None:
+        return out
+    f = e["f"]
+    for k in RULE_EVENT_NUM:
+        out[k] = _num8(f.get(k))
+    sym = e["sym"] if isinstance(e["sym"], str) and e["sym"] else None
+    if sym:
+        tm = _num8(f.get("turn_24h_musd"))
+        cc = classify_coin(sym, cfg if isinstance(cfg, dict) else {}, tm * 1e6 if tm is not None else None)
+        out["coin_class"] = None if cc == "unknown" else cc
+    if e["ts"] is not None:
+        out["utc_session"] = utc_session(time.gmtime(e["ts"]).tm_hour)
+    out["ev_kind"] = e["kind"] if isinstance(e["kind"], str) and e["kind"] else None
+    if side and e["dir"]:
+        out["side_rel"] = "with_dir" if side == e["dir"] else "against_dir"
+    return out
+
+
+def policy_scope(policy):
+    """Область применимости по записи политики проверки (config/shadow_policies.json, для P2: kinds, side=with_dir, entry) -> scope правила."""
+    p = policy if isinstance(policy, dict) else {}
+    return {"policy": p.get("id"), "kinds": list(p.get("kinds") or []), "side": p.get("side"), "entry": p.get("entry")}
+
+
+def in_scope(feats, scope):
+    """Решение в области применимости: вид события из scope.kinds ("*" — любой) и сторона относительно направления сигнала равна scope.side.
+    Нет события, вида или направления -> False (правило вне области не срабатывает)."""
+    if not isinstance(feats, dict) or not isinstance(scope, dict):
+        return False
+    kinds = scope.get("kinds") or []
+    kind = feats.get("ev_kind")
+    if kind is None or ("*" not in kinds and kind not in kinds):
+        return False
+    want = scope.get("side")
+    if want in (None, "any"):
+        return True
+    return feats.get("side_rel") == want
 
 
 def why_text(s):

@@ -24,9 +24,10 @@ from tb.learn.cache import REPORT
 SCHEMA = "tb.learning/1"
 MODES = load.MODES
 DEFAULT_MODE = "paper"
-ORDER = ("result", "vs_policy", "discipline", "skips", "exits", "economics", "memory", "lessons", "versions")
+ORDER = ("result", "vs_policy", "discipline", "skips", "exits", "economics", "memory", "lessons", "versions", "hyps")
 TITLES = {"result": "Результат", "vs_policy": "Мозг против теневой политики", "discipline": "Дисциплина", "skips": "Пропуски", "exits": "Выходы",
-          "economics": "Экономика", "memory": "Память против базы", "lessons": "Уроки", "versions": "Версии мозга до/после"}
+          "economics": "Экономика", "memory": "Память против базы", "lessons": "Уроки", "versions": "Версии мозга до/после",
+          "hyps": "Гипотезы"}
 STATUSES = ("ok", "few_data", "no_data", "stage", "computing", "error")
 ASOF_STEP = 30
 MAX_BYTES = 64 * 1024
@@ -139,7 +140,8 @@ def _blocks(ctx):
     """-> блоки по ORDER и предупреждения блоков."""
     fns = {"result": lambda: result.build(ctx), "vs_policy": lambda: vs_policy.build(ctx), "discipline": lambda: discipline.build(ctx),
            "skips": lambda: skips.build(ctx), "exits": lambda: exits.build(ctx), "economics": lambda: economics.build(ctx),
-           "memory": lambda: memory_vs_base.build(ctx), "lessons": lambda: stages.lessons(ctx), "versions": lambda: stages.versions(ctx)}
+           "memory": lambda: memory_vs_base.build(ctx), "lessons": lambda: stages.lessons(ctx), "versions": lambda: stages.versions(ctx),
+           "hyps": lambda: stages.hyps(ctx)}
     out, warns = {}, []
     for bid in ORDER:
         blk = _safe(bid, fns[bid])

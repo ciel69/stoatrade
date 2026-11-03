@@ -1,13 +1,14 @@
 """`./tb memory <команда>`: similar | stats | add | show | sync | migrate | coverage | verify | review-queue | review | lesson | backtest | compare. Вывод JSON одной строкой (--text: кратко для человека).
 
-Код возврата: 0 успех, 1 verify нашёл проблему, 2 ошибка использования/валидации. Сеть и биржа не используются; пишутся только state/cases.jsonl и state/lessons.jsonl.
+Код возврата: 0 успех, 1 verify нашёл проблему, 2 ошибка использования/валидации. Сеть и биржа не используются; пишутся только state/cases.jsonl и state/lessons.jsonl
+(`lesson diagnose` ничего не пишет в state/: текст или --json, отчёт по --out только в runtime/).
 """
 import argparse
 import json
 import sys
 import time
 
-from tb.memory import agg, backtest, cases, cfg as memcfg, features, lessons, migrate, privacy, query, review, similar
+from tb.memory import agg, backtest, cases, cfg as memcfg, diagnose, features, lessons, migrate, privacy, query, review, similar
 
 
 def _out(obj, text=False, lines=None):
@@ -180,6 +181,27 @@ def cmd_review(a, root, cfg):
     return 0
 
 
+def _bad_src(msg):
+    """Команда владельца неприменима к уроку меток (R2, Requirement 5.12): JSON с кодом BAD_SRC, код возврата 2."""
+    _out({"ok": False, "code": "BAD_SRC", "error": msg})
+    return 2
+
+
+def _reject_labels(root, lesson_id, cfg, now):
+    """Отклонение урока меток владельцем (R2, Requirement 5.12): урок rejected (OWNER), открытое испытание закрывается, не активное правило
+    rejected (OWNER), активное не трогается, условие в чёрный список бессрочно (OWNER_REJECT), копия базы, learn_events OWNER.
+    Логика — tb.knowledge.rulebook_cli.reject_lesson (вне пакета tb.learnloop; её же вызывает дашборд). База недоступна -> код 1."""
+    from tb.knowledge import rulebook_cli
+    try:
+        rep = rulebook_cli.reject_lesson(root, lesson_id, now, mcfg=cfg)
+    except rulebook_cli.Unavailable as e:
+        _out({"ok": False, "lesson_id": lesson_id, "status": "rejected", "error": "база знаний недоступна: %s" % e,
+              "retry": "урок отклонён; повторите команду после восстановления базы (испытание закроет и сверка статусов)"})
+        return 1
+    _out(rep)
+    return 0
+
+
 def cmd_lesson(a, root, cfg):
     now = time.time()
     act = a.action
@@ -198,13 +220,30 @@ def cmd_lesson(a, root, cfg):
         _out(l)
     elif act == "add":
         d = _read_json(a.file)
+        if not isinstance(d, dict):
+            raise ValueError("add: нужен объект {cond, claim, confirmed?}")
+        ev = d.get("evidence") if isinstance(d.get("evidence"), dict) else {}
+        if d.get("evidence_src") == "labels" or ev.get("src") == "labels":
+            return _bad_src("add: уроки меток создаёт только цикл обучения")
         l = lessons.create(root, d.get("cond"), d.get("claim"), "owner", cases.load(root), cfg, now, status="confirmed" if d.get("confirmed") is True else "hyp")
         _out({"ok": True, "lesson_id": l["lesson_id"], "status": l["status"]})
+    elif act == "reject" and lessons.is_labels(lessons.read_all(root).get(a.id)):
+        return _reject_labels(root, a.id, cfg, now)
     elif act in ("confirm", "reject", "expire", "merge"):
-        l = lessons.owner_set(root, a.id, act, cfg, now, into=a.into)
+        try:
+            l = lessons.owner_set(root, a.id, act, cfg, now, into=a.into)
+        except lessons.LessonRefused as e:
+            if e.code != "BAD_SRC":
+                raise
+            return _bad_src(str(e))
         _out({"ok": True, "lesson_id": l["lesson_id"], "status": l["status"]})
     elif act == "refresh":
         _out({"changes": lessons.refresh(root, cases.load(root), cfg, now, dry_run=a.dry_run)})
+    elif act == "diagnose":
+        rep = diagnose.diagnose(root, cfg, now)          # только чтение state/; запись лишь по --out в runtime/
+        if a.out:
+            rep["out"] = diagnose.write_out(rep, a.out, root)
+        _out(rep, not a.json, diagnose.render(rep) + (["отчёт: %s" % rep["out"]] if a.out else []))
     elif act == "propose":
         cands = lessons.propose(root, cases.load(root), cfg, now)
         made = []
@@ -270,7 +309,7 @@ def build_parser():
     rv.add_argument("case_id")
     rv.add_argument("--file", required=True)
     ls = sub.add_parser("lesson")
-    ls.add_argument("action", choices=("list", "show", "add", "confirm", "reject", "expire", "merge", "refresh", "propose"))
+    ls.add_argument("action", choices=("list", "show", "add", "confirm", "reject", "expire", "merge", "refresh", "propose", "diagnose"))
     ls.add_argument("id", nargs="?")
     ls.add_argument("--file")
     ls.add_argument("--into")
@@ -278,6 +317,8 @@ def build_parser():
     ls.add_argument("--dry-run", action="store_true")
     ls.add_argument("--write", action="store_true")
     ls.add_argument("--text", action="store_true")
+    ls.add_argument("--json", action="store_true", help="diagnose: JSON вместо текста")
+    ls.add_argument("--out", help="diagnose: записать отчёт JSON в файл внутри runtime/")
     return p
 
 

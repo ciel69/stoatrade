@@ -311,6 +311,26 @@ class EntryPlanBuild(unittest.TestCase):
         self.assertEqual(entryplan.build(propose(), {"session_type": "intraday", "px": 145.2, "mode": "live"})["mode"], "live")
         self.assertEqual(entryplan.build(propose(), {"session_type": "intraday", "px": 145.2, "mode": "observe"})["mode"], "paper")   # неторговый режим -> paper
 
+    def test_default_hypothesis_is_setup_family(self):
+        """R2 (Requirement 19.2): без тега модели гипотеза = семейство сетапа словаря (level_reclaim -> reclaim-level), а не имя сетапа с подчёркиванием;
+        тег модели проходит санитайзинг как прежде (семейство из него делает шлюз). Описание es_take перечисляет семейства."""
+        from tb.brain import runner
+        from tb.core import hyps
+        cand = dict(REPLY_CAND)
+        obj, errs, _c = entryplan.expand("es_take", {"candidate": 1, "setup": "level_reclaim", "why": "x"}, [cand], "SOL", 1)
+        self.assertEqual(errs, [])
+        self.assertEqual(obj["hypothesis"], "reclaim-level")
+        self.assertEqual(entryplan.build(obj, {"session_type": "intraday", "px": 145.2})["tags"]["hypothesis"], "reclaim-level")
+        mc = dict(cand, setup="momentum_chase")
+        self.assertEqual(entryplan.expand("es_take", {"candidate": 1, "setup": "momentum_chase", "why": "x"}, [mc], "SOL", 1)[0]["hypothesis"], "momentum-chase")
+        obj, _e, _c = entryplan.expand("es_take", {"candidate": 1, "setup": "level_reclaim", "why": "x", "hypothesis": "Reclaim Vol"}, [cand], "SOL", 1)
+        self.assertEqual(obj["hypothesis"], "reclaim-vol")
+        obj, _e, _c = entryplan.expand("es_take", {"candidate": 1, "setup": "level_reclaim", "why": "x", "hypothesis": "a"}, [cand], "SOL", 1)
+        self.assertEqual(obj["hypothesis"], "reclaim-level")
+        desc = next(s for s in runner.ES_TOOL_SPECS if s["name"] == "es_take")["schema"]["properties"]["hypothesis"]["description"]
+        for f in hyps.HYP_FAMILIES:
+            self.assertIn(f, desc)
+
     def test_no_confirm_plan_has_waiver_and_zone(self):
         o = propose(confirm="none", zone={"low": 144.9, "high": 145.1}, size_mult=0.5, tags=["no-confirm"])
         plan = entryplan.build(o, {"session_type": "scalp", "px": 145.2})

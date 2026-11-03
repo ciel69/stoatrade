@@ -18,9 +18,11 @@ import os
 
 from tb import paths
 from tb.core import expstats
+from tb.knowledge import markers as KM
+from tb.labels import store as labels_store
 from tb.learn.stats import iso_epoch
 from tb.llm import usage as llm_usage
-from tb.memory import backtest, cases as memcases, cfg as memcfg
+from tb.memory import backtest, cases as memcases, cfg as memcfg, lessons as memlessons
 
 MODES = ("paper", "testnet", "live")
 EXCLUDED_KEYS = ("shadow", "manual", "no_plan", "no_r")
@@ -162,6 +164,11 @@ def _stat(path):
 
 
 def source_signature(root):
-    """(размер, mtime_ns) для trades.jsonl, cases.jsonl, exclude_trades.json, llm_calls.jsonl, config/learning.json; нет файла = None."""
+    """(размер, mtime_ns) для trades.jsonl, cases.jsonl, exclude_trades.json, llm_calls.jsonl, config/learning.json и (R2.6, блоки «Уроки» и
+    «Версии») lessons.jsonl, brain/swaps.jsonl, knowledge.sqlite с -wal, маркера восстановления базы, (блок «Гипотезы») runtime/learn/hyp_ref.json;
+    нет файла = None."""
+    kdb = labels_store.db_path(root)
     return (_stat(paths.state("trades.jsonl", root=root)), _stat(memcases.cases_path(root)), _stat(paths.state("exclude_trades.json", root=root)),
-            _stat(llm_usage.calls_file(root)), _stat(paths.config("learning.json", root=root)))
+            _stat(llm_usage.calls_file(root)), _stat(paths.config("learning.json", root=root)),
+            _stat(memlessons.lessons_path(root)), _stat(paths.state("brain", "swaps.jsonl", root=root)), _stat(kdb), _stat(kdb + "-wal"),
+            _stat(KM.restoring_path(root)), _stat(paths.runtime("learn", "hyp_ref.json", root=root)))

@@ -1,4 +1,9 @@
-"""Хранилище меток: state/knowledge.sqlite (stdlib sqlite3, WAL). Писатель: open_rw + tx (BEGIN IMMEDIATE); читатели: open_ro (query_only)."""
+"""Хранилище меток: state/knowledge.sqlite (stdlib sqlite3, WAL). Писатель: open_rw + tx (BEGIN IMMEDIATE); читатели: open_ro (query_only).
+
+R2 (Requirement 2.4, 2.11): при маркере runtime/knowledge.restoring open_ro/open_rw не открывают соединение (KnowledgeRestoring); при маркере
+state/knowledge.v2 open_rw не переименовывает повреждённую базу и не создаёт пустую, а поднимает DbCorruptError (код DB_CORRUPT; распознаёт
+tb.knowledge.markers.is_corruption). Без маркеров поведение R1 прежнее (_is_corrupt и _quarantine не меняются).
+"""
 import contextlib
 import datetime
 import os
@@ -6,6 +11,7 @@ import sqlite3
 import time
 
 from tb import paths
+from tb.knowledge import markers as KM
 from tb.labels import schema
 
 JOURNAL_SIZE_LIMIT = 64 * 1024 * 1024
@@ -18,6 +24,22 @@ LAST_ERROR = None          # DB_CORRUPT после пересоздания по
 
 class SchemaMigrationError(Exception):
     code = schema.SCHEMA_MIGRATION
+
+
+class DbCorruptError(sqlite3.DatabaseError):
+    """R2: повреждение базы при маркере state/knowledge.v2 (в записях и статусах - код DB_CORRUPT). Восстанавливает только сервис цикла или владелец."""
+    code = schema.DB_CORRUPT
+
+
+class KnowledgeRestoring(sqlite3.OperationalError):
+    """R2: идёт протокол восстановления (runtime/knowledge.restoring), соединение не открыто. Подкласс OperationalError: читатели,
+    ловящие sqlite3.Error, обрабатывают его как временную недоступность базы."""
+    code = "KNOWLEDGE_RESTORING"
+
+
+def _check_restoring(root):
+    if KM.restoring(root):
+        raise KnowledgeRestoring("база знаний восстанавливается (runtime/knowledge.restoring): соединение не открыто")
 
 
 def db_path(root=None):
@@ -107,6 +129,9 @@ def _connect_rw(path):
 def open_rw(root=None):
     """Соединение писателя; создаёт файл и применяет миграции. Повреждённый файл переименовывается в knowledge.corrupt-<ts>.sqlite, создаётся новая база (LAST_ERROR=DB_CORRUPT)."""
     global LAST_ERROR
+    _check_restoring(root)
+    if KM.has_v2(root):
+        return _open_rw_v2(root)
     path = db_path(root)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     try:
@@ -121,8 +146,27 @@ def open_rw(root=None):
     return _connect_rw(path)
 
 
+def _open_rw_v2(root):
+    """Режим v2: нет файла или он пуст -> DbCorruptError (пустая база не создаётся); повреждение по is_corruption -> DbCorruptError; остальное как есть."""
+    path = db_path(root)
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        size = None
+    if not size:
+        raise DbCorruptError("DB_CORRUPT: %s при маркере state/knowledge.v2: пустая база не создаётся, нужен ./tb knowledge restore"
+                             % ("файл базы отсутствует" if size is None else "файл базы пуст"))
+    try:
+        return _connect_rw(path)
+    except (SchemaMigrationError, sqlite3.DatabaseError) as e:
+        if KM.is_corruption(e):
+            raise DbCorruptError("DB_CORRUPT: %s: %s" % (type(e).__name__, e)) from e
+        raise
+
+
 def open_ro(root=None):
-    """Соединение читателя (PRAGMA query_only=ON). Нет файла -> None."""
+    """Соединение читателя (PRAGMA query_only=ON). Нет файла -> None. Маркер восстановления -> KnowledgeRestoring."""
+    _check_restoring(root)
     path = db_path(root)
     if not os.path.exists(path):
         return None

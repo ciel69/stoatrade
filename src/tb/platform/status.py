@@ -69,7 +69,11 @@ def labels_reasons(hb, warn=None):
         cap = cap if isinstance(cap, (int, float)) and not isinstance(cap, bool) else 0
         if failed > w["failed_share"] * max(cap, 1):
             out.append("разметчик labels: не размечено за 24 ч %d из %d захваченных (порог %d%%)" % (failed, cap, round(w["failed_share"] * 100)))
-    if hb.get("last_error") == "DB_CORRUPT":
+    if hb.get("db_state") == "corrupt":
+        out.append("разметчик labels: база знаний повреждена (DB_CORRUPT), записи меток остановлены до восстановления (./tb knowledge verify)")
+    elif hb.get("db_state") == "restoring":
+        out.append("разметчик labels: идёт восстановление базы знаний, записи меток на паузе")
+    elif hb.get("last_error") == "DB_CORRUPT":
         out.append("разметчик labels: база знаний была повреждена и пересоздана (DB_CORRUPT), старая лежит как state/knowledge.corrupt-*.sqlite")
     for x in hb.get("warnings") or []:
         if x == "W_LABELS_SYNC_DIR":
@@ -84,6 +88,63 @@ def _labels_warn(root):
         return w if isinstance(w, dict) else None
     except Exception:  # noqa: BLE001 - статус не должен падать из-за конфига меток
         return None
+
+
+def knowledge_block(root, now):
+    """R2 (Requirement 2.3, 2.4, 2.10, 16.4): ./tb knowledge verify (quick_check, цепочки, маркеры) для статуса. Без маркеров v2 и восстановления -> None
+    (статус как в R1). -> {"color", "codes", "reasons"} или None."""
+    try:
+        from tb.knowledge import store2
+        rep = store2.status_check(root, now)
+    except Exception as e:  # noqa: BLE001 - статус не должен падать из-за проверки базы
+        return {"color": "yellow", "codes": ["VERIFY_ERROR"], "reasons": ["база знаний: проверка не выполнена (%s)" % type(e).__name__]}
+    if rep is None:
+        return None
+    return {"color": rep["color"], "codes": list(rep["codes"]), "reasons": list(rep["reasons"])}
+
+
+LEARN_YELLOW = ("RULES_NO_EVENT", "WARMUP_STUCK", "AUTO_RESTORED", "STALE")
+LEARN_RED = ("WATCH_STALE", "CHAIN_BROKEN", "DB_CORRUPT", "KNOWLEDGE_MIGRATION")
+
+
+def learnloop_block(hb, now, running=True):
+    """R2 (Requirement 15.5): состояние цикла обучения по heartbeat сервиса learnloop. Нет heartbeat -> None.
+    Выключен (learnloop.enabled=false) -> {"state": "off", "color": "off"} без влияния на цвет платформы. Иначе жёлтый: RULES_NO_EVENT, WARMUP_STUCK,
+    AUTO_RESTORED, нет успешного прохода дольше stale_min (STALE); красный: WATCH_STALE, CHAIN_BROKEN, DB_CORRUPT, KNOWLEDGE_MIGRATION."""
+    if not isinstance(hb, dict) or not hb:
+        return None
+    if not hb.get("enabled"):
+        errs = [e for e in hb.get("conf_errors") or [] if isinstance(e, str) and e != "E_CONF:nofile"]
+        items = [{"code": "CONF", "text": "цикл обучения выключен: config/learnloop.json не годен (%s)" % ",".join(errs[:3])}] if errs else []
+        return {"state": "off", "color": "yellow" if errs else "off", "codes": [it["code"] for it in items], "reasons": [it["text"] for it in items],
+                "items": items, "mode": hb.get("mode"), "conf_errors": errs}
+    items = [{"code": it.get("code") if isinstance(it.get("code"), str) else None, "text": it["text"]}
+             for it in hb.get("items") or [] if isinstance(it, dict) and isinstance(it.get("text"), str)]
+    ok_ts, sm = hb.get("last_ok_ts"), hb.get("stale_min")
+    start = hb.get("run_start")
+    if running and isinstance(sm, (int, float)) and not isinstance(sm, bool):
+        ref = ok_ts if isinstance(ok_ts, (int, float)) else start
+        if isinstance(ref, (int, float)) and now - ref > float(sm) * 60:
+            items.append({"code": "STALE", "text": "цикл обучения: нет успешного прохода %d мин (порог %d)" % ((now - ref) // 60, sm)})
+    codes = [it["code"] for it in items if it["code"]]
+    reasons = [it["text"] for it in items]
+    color = "red" if any(c in LEARN_RED for c in codes) else ("yellow" if items else "green")
+    rd = hb.get("ready") if isinstance(hb.get("ready"), dict) else None
+    return {"state": hb.get("state"), "color": color, "codes": codes, "reasons": reasons, "items": items, "mode": hb.get("mode"),
+            "ready": rd, "stubs": hb.get("stubs") or [], "day": hb.get("day"), "last_ok_ts": ok_ts}
+
+
+def learnloop_line(lb):
+    """Строка ./tb status про цикл обучения."""
+    if lb.get("state") == "off":
+        return "цикл обучения: выключен (learnloop.enabled=false)" + (", конфиг не годен" if lb.get("conf_errors") else "")
+    rd = lb.get("ready") or {}
+    day = lb.get("day") or {}
+    ready = "готов" if rd.get("ok") else ("прогрев: " + ",".join(rd.get("failed") or []) if rd else "прогрев: -")
+    return "цикл обучения: %s, %s, продвижение %s, %s; сутки %s: работа %s ч%s" % (
+        {"green": "в норме", "yellow": "ЖЁЛТЫЙ", "red": "КРАСНЫЙ"}.get(lb.get("color"), lb.get("color")), lb.get("state"), lb.get("mode"), ready,
+        day.get("day") or "-", day.get("work_h") if day.get("work_h") is not None else "-",
+        ("; заглушки: %s" % ",".join(lb["stubs"])) if lb.get("stubs") else "")
 
 
 def build_status(root=None, now=None):
@@ -161,6 +222,19 @@ def build_status(root=None, now=None):
             if lr:
                 color = worse("yellow")
                 reasons.extend(lr)
+    kb = knowledge_block(root, now)
+    if kb is not None and kb["codes"]:
+        if color != "off":
+            color = worse(kb["color"])
+        reasons.extend(kb["reasons"])
+    lb = None
+    if "learnloop" in svcs or (running and "learnloop" in (sup.get("services") or [])):
+        _a, llhb = S.read_hb("learnloop", root, now)
+        lb = learnloop_block(llhb, now, running=running and (svcs.get("learnloop") or {}).get("state") == "running")
+        if lb is not None and running and (svcs.get("learnloop") or {}).get("state") == "running" and lb["color"] in ("yellow", "red"):
+            color = worse(lb["color"])
+            seen = set((kb or {}).get("codes") or [])          # DB_CORRUPT, CHAIN_BROKEN, AUTO_RESTORED уже показал блок базы знаний
+            reasons.extend(it["text"] for it in lb["items"] if it["code"] is None or it["code"] not in seen)
     exec_expected = "exec" in svcs or (running and "exec" in (sup.get("services") or []))
     if exec_expected and not ex["alive"] and running:
         if (svcs.get("exec") or {}).get("state") == "running" and (svcs.get("exec") or {}).get("uptime_s", 0) < 60:
@@ -187,7 +261,8 @@ def build_status(root=None, now=None):
     return {"ts_epoch": round(now, 3), "color": color, "reasons": reasons, "running": running,
             "supervisor": {"pid": sup.get("pid") or None, "started": sup.get("started"), "uptime_s": round(now - sup["started"], 1) if running and isinstance(sup.get("started"), (int, float)) else None,
                            "profile": profile, "observe": sup.get("observe") if running else None, "services": sup.get("services") if running else None},
-            "services": svcs, "exec": ex, "kill": kill is not None, "kill_info": kill, "bus": bus_b, "scanner": scan_b,
+            "services": svcs, "exec": ex, "kill": kill is not None, "kill_info": kill, "bus": bus_b, "scanner": scan_b, **({"knowledge": kb} if kb is not None else {}),
+            **({"learnloop": lb} if lb is not None else {}),
             "unread": unread, "unread_total": total, "links": links}
 
 
@@ -221,6 +296,8 @@ def format_text(st):
     ex = st["exec"]
     out.append("исполнитель: %s, режим %s, позиций %s, hold %s, KILL %s" % ("жив" if ex["alive"] else "НЕ ЖИВ", ex.get("mode"), ex.get("positions"), ex.get("hold"), "да" if st["kill"] else "нет"))
     out.append("шина: последний seq %s, возраст %s с; сканер: hot.json %s с; непрочитано: %s" % (st["bus"]["last_seq"], st["bus"]["age_s"], st["scanner"]["age_s"], st["unread_total"]))
+    if st.get("learnloop"):
+        out.append(learnloop_line(st["learnloop"]))
     for n, u in st["links"].items():
         out.append("ссылка %s: %s" % (n, u))
     return "\n".join(out)

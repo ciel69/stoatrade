@@ -14,6 +14,31 @@ export interface ActionSpec {
   onFail?: (text: string, final?: ActionFinal) => void
   /** Итог показывает сам вызывающий (строка статуса у формы): общее уведомление о нём не нужно. Диалог рисков остаётся как был. */
   quiet?: boolean
+  /**
+   * По какому протоколу идёт действие. 'ctl' (по умолчанию): конвейер управления (`ctl_result`, `ctl_final`, CSRF из hello.ctl).
+   * 'memory': аварийные действия вкладки «Память» (op = action, ответ `memory_action_result`, CSRF из hello.memory; src/tb/dash2/memory_ops.py).
+   * Диалог «Принимаю риски» у обоих один и тот же.
+   */
+  channel?: 'ctl' | 'memory'
+}
+
+/** hello.memory: CSRF соединения, разрешённые аварийные действия «Памяти» и id предупреждений, которые нужно принять (пустой список: без диалога). */
+export interface MemoryHello {
+  csrf?: string
+  actions?: string[]
+  confirm?: Record<string, string[]>
+}
+
+/** Ответ `memory_action_result` на challenge или команду аварийного действия «Памяти». */
+export interface MemoryActionResult {
+  id: string
+  op: string
+  ok: boolean
+  code: string
+  msg?: string
+  warnings?: Array<{ id: string; text?: string }>
+  needs_confirm?: boolean
+  report?: Record<string, unknown> | null
 }
 
 export type ActionPhase = 'idle' | 'checking' | 'confirm' | 'blocked' | 'sending' | 'waiting' | 'done' | 'failed'

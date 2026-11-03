@@ -111,7 +111,7 @@ class TradingFlag(FlagBase):
                            ("hold_plan", {"id": PLAN_ID, "reason": "x"}), ("release_plan", {"id": PLAN_ID, "reason": "x"}), ("cancel_plan", {"id": PLAN_ID, "reason": "x"})):
             r = self.call("bot", tool, args)
             self.assertNotIn(self.code(r), tuple(registry.TRADING_CODES), tool)
-        self.assertEqual(len(self.inbox()), 5)
+        self.assertEqual(len(self.inbox()), 4)                                     # hold_plan в позиции отклонён E_STATUS_FORBIDS (2026-11-03), не флагом дня
         del spec_stop
 
     def test_amend_weakening_denied_tightening_allowed_when_flag_off(self):

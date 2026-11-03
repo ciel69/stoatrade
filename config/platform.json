@@ -14,6 +14,7 @@
       "ctl",
       "dash",
       "labels",
+      "learnloop",
       "brain"
     ],
     "testnet": [
@@ -27,6 +28,7 @@
       "ctl",
       "dash",
       "labels",
+      "learnloop",
       "brain"
     ],
     "trade": [
@@ -39,7 +41,8 @@
       "dispatch",
       "ctl",
       "dash",
-      "labels"
+      "labels",
+      "learnloop"
     ]
   },
   "supervisor": {
@@ -130,6 +133,11 @@
       "hb": "file",
       "hb_stale_s": 120.0,
       "grace_s": 90.0
+    },
+    "learnloop": {
+      "hb": "file",
+      "hb_stale_s": 900.0,
+      "grace_s": 120.0
     }
   },
   "scan": {

@@ -5,7 +5,8 @@ import { failureText, plainify } from '@/shared/lib'
 import { FINAL_TIMEOUT_MS, TIMEOUT_TEXT, blockReasons, buildCommand, timeoutText, isExpired, isIrreversible, isLiveStart, isRisky, risksOf, secondsLeft, unavailableReason } from '../lib/flow'
 import { createKeySender } from './key'
 import type { KeyOutcome } from '../lib/key'
-import type { ActionFinal, ActionHello, ActionPhase, ActionResult, ActionSpec, ActionToast, Challenge, ChallengeGate as ActionGateRow } from './types'
+import { memoryChallenge, memoryDoneText, memoryFailure, memoryNeedsChallenge, memoryUnavailable } from '../lib/memory'
+import type { ActionFinal, ActionHello, ActionPhase, ActionResult, ActionSpec, ActionToast, Challenge, ChallengeGate as ActionGateRow, MemoryActionResult, MemoryHello } from './types'
 
 type Transport = (payload: Record<string, unknown>) => boolean
 export type ActionMock = 'confirm' | 'blocked' | 'done' | 'fail' | 'toast' | 'full' | 'kill' | 'kill-live' | 'kill-blocked'
@@ -30,9 +31,12 @@ const MAX_TOASTS = 3
  * Общий движок действий управления. Один запуск за раз: challenge (условия), затем либо сразу команда (если рисков нет), либо диалог «Принимаю риски» и команда с nonce и фразами из challenge.
  * Ключей и токенов нет: команду подписывает и ставит в очередь сервер, здесь только CSRF соединения из hello.ctl. Доступность действия читается из hello.ctl.full и hello.ctl.modes.
  * Запросы идут со своими id (префикс `a`), поток запуска дня (entities/control, id `c`) не пересекается.
+ * Аварийные действия «Памяти» (spec.channel = 'memory') идут тем же окном, но своим протоколом: op = действие, CSRF из hello.memory, id с префиксом `m`,
+ * ответ `memory_action_result` на challenge и на команду (отдельного итога нет: ответ на команду и есть итог).
  */
 export const useActionStore = defineStore('action', () => {
   const hello = ref<ActionHello>({ enabled: false })
+  const memory = ref<MemoryHello>({})
   const phase = ref<ActionPhase>('idle')
   const spec = ref<ActionSpec | null>(null)
   const challenge = ref<Challenge | null>(null)
@@ -67,12 +71,21 @@ export const useActionStore = defineStore('action', () => {
     socket.subscribe('hello', applyHello)
     socket.subscribe('ctl_result', applyResult)
     socket.subscribe('ctl_final', applyFinal)
+    socket.subscribe('memory_action_result', applyMemoryResult)
   }
 
   function applyHello(m: LiveMessage): void {
+    const data = (m.data ?? {}) as { ctl?: ActionHello; memory?: MemoryHello }
+    const mem = data.memory
+    memory.value = mem && typeof mem === 'object' ? mem : {}
     if (mocked) return
-    const d = (m.data as { ctl?: ActionHello }).ctl
+    const d = data.ctl
     hello.value = d && typeof d.enabled === 'boolean' ? d : { enabled: false }
+  }
+
+  /** Можно ли запустить аварийное действие «Памяти» (для показа кнопок). */
+  function canMemory(action: string): boolean {
+    return memoryUnavailable(memory.value, action) === null
   }
 
   /** Можно ли запустить действие в этом дашборде (для показа кнопок). */
@@ -109,8 +122,11 @@ export const useActionStore = defineStore('action', () => {
   }
 
   function send(kind: 'challenge' | 'command', action: string, args: Record<string, unknown>, extra: Record<string, unknown> = {}): string | null {
-    const id = `a${++seq}`
-    const ok = !!hello.value.csrf && transport({ op: 'ctl', id, csrf: hello.value.csrf, kind, action, args, ...extra })
+    const mem = spec.value?.channel === 'memory'
+    const id = `${mem ? 'm' : 'a'}${++seq}`
+    const ok = mem
+      ? !!memory.value.csrf && transport({ ...args, ...extra, op: action, id, csrf: memory.value.csrf, kind })
+      : !!hello.value.csrf && transport({ op: 'ctl', id, csrf: hello.value.csrf, kind, action, args, ...extra })
     if (!ok) {
       finish(false, failureText('E_LINK'), 'E_LINK')
       return null
@@ -131,10 +147,17 @@ export const useActionStore = defineStore('action', () => {
     resultText.value = ''
     riskyRun.value = null
     pendingId = cmdId = null
-    const why = unavailableReason(hello.value, next.action)
+    const mem = next.channel === 'memory'
+    const why = mem ? memoryUnavailable(memory.value, next.action) : unavailableReason(hello.value, next.action)
     if (why) {
       finish(false, why)
       return false
+    }
+    if (mem && !memoryNeedsChallenge(memory.value, next.action)) {
+      // безрисковое действие «Памяти» (отклонить урок): без диалога и без лишнего вопроса серверу, итог уведомлением
+      riskyRun.value = false
+      dispatch()
+      return phase.value === 'sending'
     }
     phase.value = 'checking'
     pendingId = send('challenge', next.action, next.args)
@@ -167,6 +190,19 @@ export const useActionStore = defineStore('action', () => {
   function dispatch(): void {
     const s = spec.value
     if (!s) return
+    if (s.channel === 'memory') {
+      // принятые предупреждения: ровно все id из challenge (сервер сверяет множество)
+      const accepted = (challenge.value?.warnings ?? []).map((w) => w.id)
+      phase.value = 'sending'
+      const id = send('command', s.action, s.args, accepted.length ? { accepted } : {})
+      if (id === null) return
+      pendingId = cmdId = id
+      clearTimer()
+      timer = setTimeout(() => {
+        if (phase.value === 'sending' || phase.value === 'waiting') finish(false, s.timeoutMs ? timeoutText(s.timeoutMs) : TIMEOUT_TEXT)
+      }, s.timeoutMs ?? FINAL_TIMEOUT_MS)
+      return
+    }
     const cmd = buildCommand(s, challenge.value)
     phase.value = 'sending'
     const extra: Record<string, unknown> = {}
@@ -203,8 +239,31 @@ export const useActionStore = defineStore('action', () => {
     return `${failureText(f.code, f.msg)} ${blockReasons({ gates: bad }, '', live).join(' ')}`
   }
 
+  /** Ответ `memory_action_result`: на challenge (подтверждение или сразу команда) либо на команду (это и есть итог). */
+  function applyMemoryResult(m: LiveMessage): void {
+    const r = m.data as MemoryActionResult
+    if (!r || r.id !== pendingId || spec.value?.channel !== 'memory') return
+    pendingId = null
+    const raw = [r.code, r.msg].filter(Boolean).join(' | ') || null
+    if (phase.value === 'checking') {
+      if (r.code === 'CONFIRM' && (r.warnings?.length ?? 0) > 0) {
+        challenge.value = memoryChallenge(r)
+        receivedAt.value = Date.now()
+        riskyRun.value = true
+        phase.value = 'confirm'
+        return
+      }
+      if (r.ok) { riskyRun.value = false; return dispatch() }
+      return finish(false, memoryFailure(r.code, r.msg), raw)
+    }
+    if (phase.value !== 'sending' && phase.value !== 'waiting') return
+    if (r.ok && r.code === 'OK') return finish(true, memoryDoneText(r.op))
+    finish(false, memoryFailure(r.code, r.msg), raw)
+  }
+
   function applyFinal(m: LiveMessage): void {
     const f = m.data as ActionFinal
+    if (spec.value?.channel === 'memory') return
     if (f.rid !== cmdId || (phase.value !== 'sending' && phase.value !== 'waiting')) return
     if (f.status === 'done') finish(true, plainify(f.msg) ?? 'Готово.', null, f)
     else finish(false, failedText(f), [f.status, f.code, f.msg].filter(Boolean).join(' | ') || null, f)
@@ -424,5 +483,5 @@ export const useActionStore = defineStore('action', () => {
     transport = mockTransport('full')
   }
 
-  return { hello, phase, spec, challenge, receivedAt, error, errorDetails, resultText, riskyRun, toasts, active, risks, start, can, run, sendKey, accept, recheck, cancel, reset, dismissToast, mock, mockEdit, mockKill, mockNotify, mockDay, mockNews, applyHello, applyResult, applyFinal }
+  return { hello, memory, canMemory, applyMemoryResult, phase, spec, challenge, receivedAt, error, errorDetails, resultText, riskyRun, toasts, active, risks, start, can, run, sendKey, accept, recheck, cancel, reset, dismissToast, mock, mockEdit, mockKill, mockNotify, mockDay, mockNews, applyHello, applyResult, applyFinal }
 })

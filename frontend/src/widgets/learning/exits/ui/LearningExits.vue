@@ -32,7 +32,7 @@ const chartLabel = computed(() => (chart.value ? `Доля забранного,
       <p class="lead">{{ CAPTURE_EXPLAIN }}</p>
       <p v-if="block.note" class="lead">{{ block.note }}</p>
 
-      <div class="scroll">
+      <div class="scroll" tabindex="0" role="region" aria-label="Выходы по окнам">
         <table class="tbl">
           <caption class="sr">Выходы по окнам</caption>
           <thead>

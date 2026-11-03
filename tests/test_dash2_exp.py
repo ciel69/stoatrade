@@ -69,19 +69,36 @@ class ExpDetail(unittest.TestCase):
 
     def test_hypothesis_with_enough_wins_is_confirmed_like_the_brief(self):
         rs = [1.0, 1.5, 0.8, 1.2] * 8            # n = 32, средний R заметно выше нуля
-        journal(self.root, many(1, rs, hyp="H-good") + many(100, [1.0, -1.0] * 15, hyp="H-flat") + many(200, [1.0], hyp="H-new"))
+        # семейства словаря: написания range-fade сводятся в одно, trend_pullback -> trend-pullback, неизвестный тег -> other (Requirement 19.3)
+        journal(self.root, many(1, rs[:16], hyp="Range_Fade") + many(50, rs[16:], hyp="range-fade-lower-edge") + many(100, [1.0, -1.0] * 15, hyp="trend_pullback")
+                + many(200, [1.0], hyp="H-new"))
         d = topics.exp_detail(self.root, "hyp", "paper")
         r = {x["name"]: x for x in d["rows"]}
-        self.assertFalse(r["H-good"]["small"])
-        self.assertIsNotNone(r["H-good"]["p"])
-        self.assertTrue(r["H-good"]["confirmed"])
-        self.assertFalse(r["H-flat"]["confirmed"])
-        self.assertFalse(r["H-new"]["confirmed"])
-        self.assertEqual([c["hyp"] for c in d["confirmed"]], ["H-good"])
+        self.assertEqual(set(r), {"range-fade", "trend-pullback", "other"})
+        self.assertEqual((d["k"], d["rows_total"]), (2, 3))                  # K = семейства кроме other с бумажной n >= 30, а не число строк
+        self.assertAlmostEqual(d["alpha_adj"], 0.025)
+        self.assertEqual(r["range-fade"]["n"], 32)
+        self.assertFalse(r["range-fade"]["small"])
+        self.assertIsNotNone(r["range-fade"]["p"])
+        self.assertTrue(r["range-fade"]["confirmed"])
+        self.assertFalse(r["trend-pullback"]["confirmed"])
+        self.assertFalse(r["other"]["confirmed"])
+        self.assertEqual([c["hyp"] for c in d["confirmed"]], ["range-fade"])
         # на других разрезах значок «подтверждена» не выдаётся, а перечень подтверждённых остаётся
         d2 = topics.exp_detail(self.root, "symbol", "paper")
         self.assertTrue(all(not x["confirmed"] for x in d2["rows"]))
-        self.assertEqual([c["hyp"] for c in d2["confirmed"]], ["H-good"])
+        self.assertEqual([c["hyp"] for c in d2["confirmed"]], ["range-fade"])
+
+    def test_other_family_is_never_confirmed(self):
+        rs = [1.0, 1.5, 0.8, 1.2] * 8
+        journal(self.root, many(1, rs, hyp="probe-x"))                       # сильная выборка, но тег неизвестен -> other
+        d = topics.exp_detail(self.root, "hyp", "paper")
+        r = {x["name"]: x for x in d["rows"]}
+        self.assertEqual(list(r), ["other"])
+        self.assertIsNotNone(r["other"]["p"])
+        self.assertFalse(r["other"]["below_alpha"])
+        self.assertFalse(r["other"]["confirmed"])
+        self.assertEqual((d["k"], d["confirmed"]), (1, []))
 
     def test_modes_are_not_mixed_and_filter_works(self):
         journal(self.root, many(1, [1.0, 1.0], exp="E", mode="paper") + many(10, [-1.0], exp="E", mode="live"))

@@ -16,8 +16,9 @@ from tb import paths
 from tb.brain import brief as brief_mod
 from tb.brain import common
 from tb.brain import events_cli, idearev, plan_cli
-from tb.core import bus, decisions, expstats, ideas, journal, plan_schema, portfolio, risklevels, tradectx
+from tb.core import bus, decisions, expstats, hyps, ideas, journal, plan_schema, portfolio, risklevels, tradectx
 from tb.gateway import registry as _registry
+from tb.logic import learn_rules
 from tb.memory import blocks as memblocks, cases as memcases, cfg as memcfg, features as memfeatures, lessons as memlessons, query as memquery, review as memreview
 
 MAX_STR = 300
@@ -304,9 +305,25 @@ def h_status(ctx, a):
     return out
 
 
+RULE_TRUSTED_ROLE = "entry_scout"          # event_seq для правил rulebook доверяется только заданию раннера этой роли (meta от раннера, не от модели)
+
+
+def _rule_event_seq(ctx):
+    """event_seq задания раннера entry_scout из meta (ставит раннер, не модель) или None (chat и прочие: последнее событие монеты)."""
+    if ctx.meta.get("role") != RULE_TRUSTED_ROLE:
+        return None
+    s = ctx.meta.get("event_seq")
+    return s if isinstance(s, int) and not isinstance(s, bool) and s > 0 else None
+
+
+def _rule_role(ctx):
+    r = ctx.meta.get("role")
+    return r if isinstance(r, str) and r else "chat"
+
+
 def h_brief(ctx, a):
     b = brief_mod.build(a.get("scope", "start"), since=a.get("since"), budget_tokens=a.get("budget_tokens"), root=ctx.root, now=ctx.now,
-                        consumer=ctx.agent.consumer, seqs=a.get("seqs"), sym=a.get("sym"))
+                        consumer=ctx.agent.consumer, seqs=a.get("seqs"), sym=a.get("sym"), event_seq=_rule_event_seq(ctx))
     brief_mod.save(b, root=ctx.root, now=ctx.now)
     b["ok"] = True
     return b
@@ -658,11 +675,39 @@ def _stamp_tags(raw, ctx):
     raw["tags"] = tags
 
 
+def _tag_safe(v):
+    """Строка -> вид шаблона RE_TAG (нижний регистр, чужие символы -> `-`, не длиннее 40) или None, если короче 2 символов."""
+    s = re.sub(r"[^a-z0-9._-]+", "-", str(v).lower()).strip("-")[:40]
+    return s if re.match(RE_TAG, s) else None
+
+
+def _norm_hyp(raw):
+    """R2 (Requirement 19.2): tags.hypothesis -> семейство словаря (hyps.family); неизвестное -> `other` и исходник в tags.hyp_raw (для аудита).
+    План из-за гипотезы не отклоняется: пустой тег убирается, hyp_raw от модели не принимается (его ставит только шлюз)."""
+    tags = raw.get("tags")
+    if not isinstance(tags, dict):
+        return
+    tags.pop("hyp_raw", None)
+    v = tags.get("hypothesis")
+    if v is None:
+        tags.pop("hypothesis", None)
+        return
+    fam, src = hyps.family(v if isinstance(v, str) else json.dumps(v, ensure_ascii=False))
+    if fam is None:
+        tags.pop("hypothesis", None)
+        return
+    tags["hypothesis"] = fam
+    src = _tag_safe(src) if src is not None else None
+    if src:
+        tags["hyp_raw"] = src
+
+
 def h_submit(ctx, a):
     raw = dict(a["plan"])
     for k in plan_schema.EXEC_FIELDS:
         raw.pop(k, None)
     _stamp_tags(raw, ctx)
+    _norm_hyp(raw)                     # до проверки схемы, правил rulebook и записи rule_eval: в плане и журнале уже семейство
     lim = ctx.agent.limits
     if "mode" not in raw and lim["modes"] == ["paper"]:
         raw["mode"] = "paper"
@@ -681,10 +726,52 @@ def h_submit(ctx, a):
     n = _plans_last_hour(ctx)
     if n >= lim["plans_per_hour"]:
         raise ToolError("E_RATE_PLANS", "лимит планов в час: %d" % lim["plans_per_hour"], "", "denied")
-    resp = _send(ctx, "submit", a, payload=raw, reason=reason)
+    chk = _rule_gate(ctx, a, plan)
+    resp = None
+    try:
+        if chk["res"].get("fail"):
+            rid = chk["res"]["hits"][0]
+            raise ToolError(learn_rules.plan_code(rid), "план отклонён правилом rulebook %s (%s): вход в этих условиях запрещён" % (rid, chk["view"].get("ver")),
+                            "plan", "denied")
+        resp = _send(ctx, "submit", a, payload=raw, reason=reason)
+    finally:
+        _rule_eval(ctx, a, chk, resp)
     resp["gateway_actor"] = ctx.agent.actor
     _link_brief(ctx, a, resp)
     return resp
+
+
+def _rule_gate(ctx, a, plan):
+    """R2 (Requirement 7.7, точка (б)): правила rulebook на (монета, сторона, событие) плана той же функцией, что разметка кандидатов
+    (brain/cands.rule_check). Событие: event_seq задания раннера entry_scout (meta), для chat — последнее событие монеты (присланный моделью
+    event_seq не используется). Любая ошибка -> режим без применения."""
+    try:
+        return brief_mod.cands_mod.rule_check(ctx.root, plan.get("symbol"), plan.get("side"), _rule_event_seq(ctx), ctx.now)
+    except Exception:          # применение правил не должно ломать подачу плана: сбой = базовое поведение
+        return {"view": None, "event": None, "res": {"ok": True, "fail": None, "hits": [], "eval": [], "missing": [], "blocked": [], "apply": False}}
+
+
+def _rule_eval(ctx, a, chk, resp):
+    """Запись decisions kind="note", what="rule_eval" (не "rule": её засчитал бы expstats.rules_by_plan) на каждый submit_plan после ранних
+    проверок; поля basis — rulebook_view.rule_eval_fields. Сбой записи шлюз не роняет."""
+    try:
+        from tb.knowledge import rulebook_view as RV
+        pid = resp.get("plan_id") if isinstance(resp, dict) else None
+        cok = None
+        if a.get("brief_id"):
+            sb = brief_mod.load_saved(a["brief_id"], root=ctx.root)
+            cok = brief_mod.cands_mod.ok_before_rules((sb or {}).get("cands"))
+        basis = RV.rule_eval_fields(chk.get("view"), chk.get("res"), {"role": _rule_role(ctx), "cands_ok_n": cok, "event": chk.get("event"),
+                                                                      "plan": pid if isinstance(pid, str) else None})
+        res = chk.get("res") or {}
+        code = learn_rules.plan_code(res["hits"][0]) if res.get("fail") and res.get("hits") else "OK"
+        rec = {"actor": ctx.agent.actor, "kind": "note", "what": "rule_eval", "why": "правила rulebook на подаче плана", "basis": basis,
+               "res": {"ok": code == "OK", "code": code}}
+        if isinstance(pid, str):
+            rec["plan"] = pid
+        decisions.append(rec, root=ctx.root)
+    except Exception:          # аудит правил не роняет шлюз (запись, чтение досье, сериализация)
+        pass
 
 
 def _link_brief(ctx, a, resp):
@@ -721,7 +808,7 @@ def h_amend(ctx, a):
     sign = 1 if spec.get("side") == "long" else -1
     live = {"exch_stop": cur if pos else None, "position": pos, "stop_at_or_better_be": bool(pos and cur and avg and (cur - avg) * sign >= 0)}
     try:
-        new, iss = plan_schema.amend(spec, patch, status, live, a["rev"], ctx.now)
+        new, iss = plan_schema.amend(spec, patch, status, live, spec.get("rev"), ctx.now)     # ревизию мозг не присылает: проверка по текущему плану
     except NotImplementedError:
         raise ToolError("E_NOT_READY", "схема плана недоступна", status="unavailable")
     errs = [i for i in iss if i.get("severity") == "error"]
@@ -731,7 +818,7 @@ def h_amend(ctx, a):
     ok_tr, code_tr = _registry.trading_allowed(ctx.root, new.get("mode"), ctx.now, ctx.agent.id)
     if not ok_tr and not (pos and _tightening(spec, new)):
         raise ToolError(code_tr, "%s: ослабляющее изменение плана недоступно (ужесточение разрешено)" % _registry.TRADING_CODES.get(code_tr, "торговля недоступна"), "mode", "denied")
-    return _send(ctx, "amend", a, plan_id=a["id"], rev=a["rev"], payload=patch, reason=reason)
+    return _send(ctx, "amend", a, plan_id=a["id"], payload=patch, reason=reason)       # без rev_expected: исполнитель проверяет по текущему плану (01 п. 1.7)
 
 
 def _tightening(old, new):
@@ -753,12 +840,21 @@ def h_stop(ctx, a):
         cur = common.num((rt.get("pos") or {}).get("cur_stop")) or common.num((spec.get("stop") or {}).get("price"))
         if cur is not None and not (to > cur if spec.get("side") == "long" else to < cur):
             raise ToolError("E_STOP_WIDEN", "новый стоп %s не строже текущего %s: расширять стоп нельзя" % (to, cur), "to")
-    return _send(ctx, "stop", a, plan_id=a["id"], rev=a["rev"], payload={"to": to}, reason=reason)
+    return _send(ctx, "stop", a, plan_id=a["id"], payload={"to": to}, reason=reason)        # без rev_expected: исполнитель берёт только строже текущего стопа
 
 
 def h_close(ctx, a):
     _plan_scope(ctx, a["id"])
     return _send(ctx, "close", a, plan_id=a["id"], payload={"frac": a.get("frac", 1.0)}, reason=_need_reason(a))
+
+
+def h_hold(ctx, a):
+    """Пауза плана только до входа (решение владельца 2026-11-03): план в позиции на паузу не ставится, исполнитель отказал бы тем же кодом."""
+    spec, rt = _plan_scope(ctx, a["id"])
+    reason = _need_reason(a)
+    if common.plan_status({"spec": spec, "rt": rt}) in ("entered", "managing") or (common.num((rt.get("pos") or {}).get("qty")) or 0) > 0:
+        raise ToolError("E_STATUS_FORBIDS", "план в позиции на паузу не ставится: стоп, безубыток и управление работают всегда; пауза только до входа", "id")
+    return _send(ctx, "hold", a, plan_id=a["id"], reason=reason)
 
 
 def _simple(op):
@@ -815,7 +911,7 @@ _reg(Tool("get_brief", "Compact decision brief (JSON, token-budgeted). scope=sta
            "sym": _s("For scope=event: symbol of the job; it goes first in struct/levels.", 20, pattern=common.RE_SYMBOL.pattern),
            "budget_tokens": _i("Approximate token budget 200..6000.", 200, 6000)}, "read", h_brief,
           out=("brief_id", "ts", "scope", "trunc", "cut", "system", "account", "session", "room", "positions", "plans", "pending", "market", "hot",
-               "ideas", "levels", "struct", "struct_missing", "day", "limits", "risk_level", "economics", "experiments", "paper_history", "pause", "flash", "flow", "playbook", "cands", "intel", "news_digest", "recent", "since_last", "lessons", "memory", "checklist",
+               "ideas", "levels", "struct", "struct_missing", "day", "limits", "risk_level", "economics", "experiments", "paper_history", "pause", "flash", "flow", "playbook", "rulebook", "cands", "intel", "news_digest", "recent", "since_last", "lessons", "memory", "checklist",
                "plan", "plans_bad", "missing")))
 _reg(Tool("get_events", "Read bus events (whitelisted fields, no third-party text) without waiting. By default events after the last acked seq (unacked ones are "
           "re-delivered). Does not acknowledge: call ack_events after handling.",
@@ -837,23 +933,25 @@ _reg(Tool("show_plan", "Show one plan: whitelisted spec (numbers and identifiers
           out=("id", "spec", "own_thesis", "rt", "events", "decisions")))
 _reg(Tool("submit_plan", "Submit a new trading plan (schema tb.plan/1; see the plan schema/template). Validated offline, checked against this agent's limits "
           "(symbols, mode, risk in USDT and % of equity, size_mult, no pyramiding), then queued for the executor which runs guard. You never set size, leverage or "
-          "margin. Entry/stop/targets are prices in quote currency. Answer: ok true/false, or ok null = queued (do not resend).",
+          "margin. Entry/stop/targets are prices in quote currency. tags.hypothesis is a hypothesis family, one of: " +
+          ", ".join(f for f in hyps.HYP_FAMILIES if f != hyps.OTHER) + "; any other value is stored as other (original in tags.hyp_raw), "
+          "the plan is not rejected for it. Answer: ok true/false, or ok null = queued (do not resend).",
           dict({"plan": _obj("The plan object (tb.plan/1)."), "reason": REASON}, **{k: v for k, v in CMD_COMMON.items() if k != "reason"}), "plan.submit", h_submit,
           required=["plan"], out=("cmd_id", "plan_id", "rev", "guard_preview", "executor", "gateway_actor"), write=True))
-_reg(Tool("amend_plan", "Amend a plan with a JSON Merge Patch against revision rev. Stops can only be tightened in a position; risk can only go down. Validated "
-          "offline and again by the executor.",
-          dict({"id": PLAN_ID, "rev": _i("Current plan rev (stale rev is rejected).", 1, 10 ** 6), "patch": _obj("JSON Merge Patch (RFC 7386) of plan fields.")}, **CMD_COMMON),
-          "plan.manage", h_amend, required=["id", "rev", "patch", "reason"], out=("cmd_id", "plan_id", "rev", "guard_preview", "executor"), write=True))
+_reg(Tool("amend_plan", "Amend a plan with a JSON Merge Patch of the current plan (no revision needed: it is checked against the current plan). Stops can only be "
+          "tightened in a position; risk can only go down. Validated offline and again by the executor.",
+          dict({"id": PLAN_ID, "patch": _obj("JSON Merge Patch (RFC 7386) of plan fields.")}, **CMD_COMMON),
+          "plan.manage", h_amend, required=["id", "patch", "reason"], out=("cmd_id", "plan_id", "rev", "guard_preview", "executor"), write=True))
 _reg(Tool("stop_plan", "Tighten the stop of a plan to a price (quote currency) or to breakeven ('be'). Only stricter than the current stop is accepted.",
-          dict({"id": PLAN_ID, "rev": _i("Current plan rev.", 1, 10 ** 6), "to": {"type": "string", "description": "Price like '143.2' or 'be'.", "maxLength": 24,
-                                                                              "pattern": r"^(be|[0-9]+(\.[0-9]+)?)$", "free": False}}, **CMD_COMMON),
-          "plan.manage", h_stop, required=["id", "rev", "to", "reason"], out=("cmd_id", "plan_id", "rev", "executor"), write=True))
+          dict({"id": PLAN_ID, "to": {"type": "string", "description": "Price like '143.2' or 'be'.", "maxLength": 24,
+                                      "pattern": r"^(be|[0-9]+(\.[0-9]+)?)$", "free": False}}, **CMD_COMMON),
+          "plan.manage", h_stop, required=["id", "to", "reason"], out=("cmd_id", "plan_id", "rev", "executor"), write=True))
 _reg(Tool("close_plan", "Close the position of a plan (reduce-only, market) fully or by fraction frac in (0,1].",
           dict({"id": PLAN_ID, "frac": _n("Fraction of the remaining position, 0 < frac <= 1.", 0.0001, 1.0)}, **CMD_COMMON), "plan.manage", h_close,
           required=["id", "reason"], out=("cmd_id", "plan_id", "rev", "executor"), write=True))
 _reg(Tool("cancel_plan", "Cancel a plan before entry (removes the resting order). A plan in a position cannot be cancelled: use close_plan.",
           dict({"id": PLAN_ID}, **CMD_COMMON), "plan.manage", _simple("cancel"), required=["id", "reason"], out=("cmd_id", "plan_id", "rev", "executor"), write=True))
-_reg(Tool("hold_plan", "Pause a plan: forbids entry and adding until released.", dict({"id": PLAN_ID}, **CMD_COMMON), "plan.manage", _simple("hold"),
+_reg(Tool("hold_plan", "Pause a plan before entry: forbids entry until released. A plan in a position cannot be paused (stop, breakeven and management always work).", dict({"id": PLAN_ID}, **CMD_COMMON), "plan.manage", h_hold,
           required=["id", "reason"], out=("cmd_id", "plan_id", "rev", "executor"), write=True))
 _reg(Tool("release_plan", "Release a pause set by the brain on a plan (a hold set by the executor or the owner cannot be released).",
           dict({"id": PLAN_ID}, **CMD_COMMON), "plan.manage", _simple("release"), required=["id", "reason"], out=("cmd_id", "plan_id", "rev", "executor"), write=True))

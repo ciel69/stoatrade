@@ -72,7 +72,7 @@
 Типы:
 | type | pri | `d` (поля) | Когда |
 |---|---|---|---|
-| `scanner_signal` | wake если `wake:true` у источника | `kind` (`range_5m/turnover_surge/hot_enter/idea_near/idea_level/idea_invalidated/idea_tp`), `px`, `score`, `dir`, `range_5m_pct`, `ret_5m_pct`, `turn_surge_5m`, `spread_bps`, `funding_pct`, `idea` | мост `runtime/hot_events.jsonl` (без `idea_note` и любых текстовых полей) |
+| `scanner_signal` | wake если `wake:true` у источника | `kind` (`range_5m/turnover_surge/hot_enter/idea_near/idea_level/idea_invalidated/idea_tp`), `px`, `score`, `dir`, `range_5m_pct`, `ret_5m_pct`, `turn_surge_5m`, `spread_bps`, `funding_pct`, `chg_24h_pct`, `turn_24h_musd`, `idea` (+ поля деривативов и ордерфлоу, `core/bus.py:D_FIELDS`) | мост `runtime/hot_events.jsonl` (без `idea_note` и любых текстовых полей) |
 | `plan_armed` / `plan_rejected` | wake | `rev`, `codes` (список кодов), `preview` (leverage, risk_usdt, net_rr) | итог `draft` |
 | `trigger_fired` | wake | `cond` (kind), `level`, `px` | условие входа выполнено (до попытки) |
 | `entry_blocked` | wake | `why` (`GUARD/CHASE/COOLDOWN/STALE/SPREAD/MIN_SIZE`), `attempt` | вход не состоялся |
@@ -91,6 +91,9 @@
 | `session_ending` | wake | `min_left` | остаток сессии 3 мин |
 | `error` | wake | `where`, `code` | сбой исполнителя (без текста исключения; подробности в журнале решений) |
 | `exec_started` / `exec_stopped` / `exec_down` (синтетика) | wake | `version`, `env` | жизнь процесса |
+| `rulebook_promoted` | info (всегда, мозг не будит) | `ver`, `rule`, `trial` | продвижение правила в rulebook (R2.7) |
+| `rulebook_rollback` | info (всегда, мозг не будит) | `ver`, `rule`, `code`, `n`, `mean_r`, `p` | откат правила сторожем (R2.8), причина числами |
+Бюджет 400 байт: при превышении `bus.sanitize` выбрасывает поля `d` по убыванию длины, сначала вне защищённого набора (`bus.D_PROTECTED`), затем защищённые. У `scanner_signal` защищены `kind`, `dir` и признаки правил (`range_5m_pct`, `ret_5m_pct`, `turn_surge_5m`, `chg_24h_pct`, `spread_bps`, `funding_pct`, `turn_24h_musd`): худшее событие (`oi_spike`/`liq_cascade` со всеми полями, символ 20 знаков) сохраняет их все. Для типов `rulebook_*` явный `pri` источника игнорируется.
 Дедупликация: исполнитель не эмитит одну и ту же веху дважды (`r_plus_1` один раз на план), `connectivity` не чаще раза в 30 с на канал.
 
 ### Чат-режим: доставка и подтверждение

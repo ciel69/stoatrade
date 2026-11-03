@@ -249,22 +249,45 @@ def _b_economics(c):
 EXPERIMENTS_TOP = 5
 
 
+def _ref_env(c):
+    """env_norm справки меток: testnet, если исполнитель работает на testnet, иначе mainnet (как learnloop.clusters.env_norm)."""
+    return "testnet" if (c.health.get("data") or {}).get("env") == "testnet" else "mainnet"
+
+
+def _ref_compact(r):
+    """Справка меток семейства -> [n, mean, lo, hi] (R после издержек, 2 знака; нет интервала -> null)."""
+    return [r["n"], _r(r.get("mean"), 2), _r(r.get("lo"), 2), _r(r.get("hi"), 2)]
+
+
+def _exp_row(hyp, p, live=None, ref=None):
+    """Строка блока experiments: paper n и avg_r, live n / avg_r (если были), ref: [n, mean, lo, hi] справки меток (только семейства policy_map).
+    Поля win в строке нет (Requirement 19.8: бюджет блока; доля прибыльных остаётся в ./tb exp и на странице)."""
+    row = {"hyp": hyp, "n": p["n"], "avg_r": _r(p["avg_r"], 2)}
+    if live:
+        row["live_n"], row["live_avg_r"] = live["n"], _r(live["avg_r"], 2)
+    if ref:
+        row["ref"] = _ref_compact(ref)
+    return _drop_none(row)
+
+
 def _b_experiments(c):
-    """Гипотезы (тег hyp сделки): confirmed = на бумаге n >= MIN_N, средний R > 0 и p ниже alpha с поправкой Бонферрони (их можно повторять приоритетно);
-    open = ещё копят выборку или не подтверждены. По каждой paper n, avg_r, доля прибыльных и, если были, live n / avg_r. Нет гипотез -> None."""
+    """Гипотезы по семействам (тег hyp сделки нормализован при чтении, Requirement 19.3): confirmed = expstats.hyp_confirmed (бумага, не `other`,
+    n >= MIN_N, средний R > 0, p ниже alpha / K, K по семействам) — их можно повторять приоритетно; open = копят выборку или не подтверждены.
+    По каждой paper n, avg_r и, если были, live n / avg_r; у семейств из config/hypotheses.json: policy_map — ref: [n кластеров, средний R,
+    нижняя и верхняя граница 95% интервала] теневой политики по меткам за 14 суток (runtime/learn/hyp_ref.json; ориентир, на confirmed не влияет;
+    нет файла — без ref). Нет гипотез -> None."""
     from tb.core import expstats
+    from tb.brain import exp_cli
     by = {}
     for r in expstats.group_stats(expstats.load_trades("all", c.root, with_rules=False), by="hyp"):
         by.setdefault(r["key"], {})[r["mode"]] = r
+    ref = exp_cli.hyp_ref(c.root, _ref_env(c))
     conf, opn = [], []
     for hyp, m in by.items():
         p, h = m.get("paper"), common.ident(hyp)
         if not p or not h:
             continue
-        row = {"hyp": h, "n": p["n"], "avg_r": _r(p["avg_r"], 2), "win": _r(p["win_rate"], 2)}
-        if m.get("live"):
-            row["live_n"], row["live_avg_r"] = m["live"]["n"], _r(m["live"]["avg_r"], 2)
-        (conf if p["below_alpha"] and (p["avg_r"] or 0) > 0 else opn).append(_drop_none(row))
+        (conf if expstats.hyp_confirmed(p) else opn).append(_exp_row(h, p, m.get("live"), ref.get(h)))
     if not (conf or opn):
         return None
     conf.sort(key=lambda x: -(x.get("avg_r") or 0))
@@ -375,6 +398,63 @@ def _b_playbook(c, b, sym):
     reg = st.get("reg") if isinstance(st, dict) else None
     rows = playbook.match(cards, kinds, reg, playbook.exp_index(b.get("experiments")))
     return rows or None
+
+
+RULEBOOK_MAX_RULES = 5
+RULEBOOK_MAX_TOKENS = 300
+
+
+def _rule_view(c):
+    """Действующий rulebook один раз на досье (rulebook_view.active через cands.rule_view). Корень не задан -> None (правила не читаются)."""
+    if not hasattr(c, "_rule_view"):
+        c._rule_view = cands_mod.rule_view(c.root, c.now) if getattr(c, "root", None) is not None else None
+    return c._rule_view
+
+
+def _b_rulebook(c):
+    """Блок `rulebook` (R2, Requirement 7.4): версия и до 5 действующих правил (id, условие шаблоном memory.lessons.render_cond, виды сигналов
+    области, сторона относительно сигнала), признак применения (apply) и причина режима без применения (why). <= 300 токенов. Пустой rulebook
+    или недоступная база -> None (блока нет, досье прежнее). Правила применяет код (cands и submit_plan); блок только показывает их модели."""
+    view = _rule_view(c)
+    rules = (view or {}).get("rules") or []
+    if not rules:
+        return None
+    from tb.memory import lessons as memlessons
+    rows = []
+    for r in rules[:RULEBOOK_MAX_RULES]:
+        rid = common.ident(r.get("rule_id"))
+        try:
+            cond = memlessons.render_cond(r.get("cond") or [])
+        except (KeyError, TypeError, ValueError, AttributeError):
+            continue
+        if not rid:
+            continue
+        sc = r.get("scope") if isinstance(r.get("scope"), dict) else {}
+        kinds = [k for k in (common.ident(x) for x in (sc.get("kinds") or [])[:6]) if k]
+        rows.append(_drop_none({"id": rid, "kind": common.ident(r.get("kind")), "if": cond[:160], "kinds": kinds or None,
+                                "side": common.ident(sc.get("side")), "code": "RULE_" + rid}))
+    if not rows:
+        return None
+    out = {"ver": common.ident(view.get("ver")), "apply": bool(view.get("apply")), "rules": rows}
+    if not view.get("apply"):
+        out["why"] = common.ident(view.get("why"))
+    while len(out["rules"]) > 1 and tokens(out) > RULEBOOK_MAX_TOKENS:
+        out["rules"] = out["rules"][:-1]
+    if tokens(out) > RULEBOOK_MAX_TOKENS:
+        out["rules"] = [{k: v for k, v in out["rules"][0].items() if k in ("id", "code")}]
+    return out
+
+
+def load_saved(brief_id, root=None):
+    """Сохранённое досье state/briefs/<brief_id>.json (save) или None (нет, битое, неверный id)."""
+    if not isinstance(brief_id, str) or not re.match(r"^B-[0-9]{8}-[0-9]{4}-[0-9]{2}$", brief_id):
+        return None
+    try:
+        with open(os.path.join(paths.briefs(root=root), brief_id + ".json"), encoding="utf-8") as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return d if isinstance(d, dict) else None
 
 
 def _b_paper_history(c):
@@ -1299,7 +1379,7 @@ def _trim_struct(b):
 
 
 TRIM_STEPS = (
-    ("lessons", _drop("lessons")), ("missing", _drop("missing")), ("memory", _drop("memory")), ("playbook", _drop("playbook")), ("deriv", _drop("deriv")), ("flow", _drop("flow")), ("since_last", _drop("since_last")), ("paper_history", _drop("paper_history")), ("checklist_text", _checklist_ids), ("recent>5", _trim_recent(5)),
+    ("lessons", _drop("lessons")), ("rulebook", _drop("rulebook")), ("missing", _drop("missing")), ("memory", _drop("memory")), ("playbook", _drop("playbook")), ("deriv", _drop("deriv")), ("flow", _drop("flow")), ("since_last", _drop("since_last")), ("paper_history", _drop("paper_history")), ("checklist_text", _checklist_ids), ("recent>5", _trim_recent(5)),
     ("hot>3", _trim_hot(3)), ("ideas>4", _trim_ideas(4)), ("struct>3", _trim_struct), ("levels", _trim_levels), ("recent>3", _trim_recent(3)), ("pending", _drop("pending")),
     ("hot", _drop("hot")), ("ideas", _drop("ideas")), ("experiments", _drop("experiments")), ("cands", _drop("cands")), ("struct", _drop("struct")), ("news_digest", _drop("news_digest")), ("intel", _drop("intel")), ("recent>1", _trim_recent(1)), ("checklist", _drop("checklist")), ("market", _drop("market")),
     ("recent", _drop("recent")),
@@ -1337,10 +1417,11 @@ def next_brief_id(root, now):
     return "%s-%02d" % (stamp, n + 1)
 
 
-def build(scope="start", since=None, budget_tokens=None, root=None, now=None, consumer=bus.DEFAULT_CONSUMER, seqs=None, sym=None):
+def build(scope="start", since=None, budget_tokens=None, root=None, now=None, consumer=bus.DEFAULT_CONSUMER, seqs=None, sym=None, event_seq=None):
     """-> dict досье. scope: start | event | plan:ID. since: seq шины (для event: события строго после него; по умолчанию acked потребителя).
     seqs/sym (scope=event): события и монета задания мозга: они всегда попадают в `recent`, монета задания идёт первой в `struct`/`struct_missing`/`levels`
-    (без них монеты берутся из хвоста шины, где wake-событие может быть вытеснено, а монета выбрана не та)."""
+    (без них монеты берутся из хвоста шины, где wake-событие может быть вытеснено, а монета выбрана не та).
+    event_seq: событие задания раннера entry_scout для правил rulebook (шлюз передаёт его только из meta раннера, не от модели; для chat None)."""
     now = time.time() if now is None else now
     scope_plan = RE_PLAN_SCOPE.match(scope or "")
     if scope not in SCOPES and not scope_plan:
@@ -1380,6 +1461,7 @@ def build(scope="start", since=None, budget_tokens=None, root=None, now=None, co
         b["recent"] = _safe("recent", lambda: _b_recent(c, 8), missing)
         b["since_last"] = _safe("since_last", lambda: _b_since_last(c), missing)
         b["lessons"] = _safe("lessons", lambda: _b_lessons(c), missing)
+        b["rulebook"] = _safe("rulebook", lambda: _b_rulebook(c), missing)          # R2: действующие правила (применяет код в cands и submit_plan)
         b["memory"] = _safe("memory", lambda: memory_block(c, "start", b["plans"], consumer=consumer), missing)
         b["checklist"] = _safe("checklist", lambda: _b_checklist(c), missing)
     elif scope == "event":
@@ -1423,7 +1505,9 @@ def build(scope="start", since=None, budget_tokens=None, root=None, now=None, co
         _merge_blackout({"intel": _safe("intel", lambda: intel_block(root, now), missing), "market": mk})
         b["market"] = mk or None
         b["playbook"] = _safe("playbook", lambda: _b_playbook(c, b, job_sym), missing) if (job_sym and not involved) else None      # только поиск входа: у событий планов карточки не нужны
-        b["cands"] = _safe("cands", lambda: cands_mod.candidates(b, job_sym), missing) if (job_sym and not involved) else None      # предрасчёт входов (уровень, стоп, цели, RR, горизонт): модель выбирает, а не считает
+        b["rulebook"] = _safe("rulebook", lambda: _b_rulebook(c), missing) if (job_sym and not involved) else None      # R2: действующие правила (применяет код)
+        b["cands"] = _safe("cands", lambda: cands_mod.candidates(b, job_sym, root=root, event_seq=event_seq, now=now, view=_rule_view(c)), missing) \
+            if (job_sym and not involved) else None      # предрасчёт входов (уровень, стоп, цели, RR, горизонт): модель выбирает, а не считает; правила rulebook размечают RULE_<id>
         if job_sym:
             b["deriv"] = _safe("deriv", lambda: _b_deriv(root, now, job_sym), missing)          # деривативы монеты события: funding, OI за сутки, лонг/шорт, базис к другим биржам
             b["crowd"] = _safe("crowd", lambda: _b_crowd(root, now, b, job_sym, sd), missing)   # настроение толпы: флаги, mood, сторона давления (crowd.py)

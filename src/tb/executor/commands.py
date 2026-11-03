@@ -12,6 +12,20 @@ from tb.executor import protect
 from tb.executor.ports import PortError
 
 ACTORS = decisions.ACTORS
+IN_POS = ("entered", "managing")
+
+
+def _brain(cmd):
+    return str(cmd.get("actor") or "").startswith("brain:")
+
+
+def _rev_for(cmd, spec):
+    """rev_expected команды. Мозг ревизию не присылает (решение владельца 2026-11-03): его stop/amend проверяются по ТЕКУЩЕМУ плану (стоп только строже,
+    amend по правилам 01 п. 1.7), поэтому без rev_expected подставляется текущая ревизия. Остальные клиенты (владелец, ./tb plan) без rev получают E_REV_STALE."""
+    rev = cmd.get("rev_expected")
+    if rev is None and _brain(cmd):
+        return spec.get("rev")
+    return rev
 
 
 def _created_by(actor):
@@ -304,7 +318,7 @@ def cmd_amend(ex, cmd):
     live = {"exch_stop": exch if pos else None, "position": pos, "stop_at_or_better_be": be,
             "filled_targets": [t for t, v in (rt.get("targets") or {}).items() if v.get("state") == "filled"],
             "has_order": rt["entry"].get("state") in ("placing", "resting")}
-    new, iss = plan_schema.amend(spec, patch, status, live, cmd.get("rev_expected"), ex.clock())
+    new, iss = plan_schema.amend(spec, patch, status, live, _rev_for(cmd, spec), ex.clock())
     errs = [i for i in iss if i["severity"] == "error"]
     warns = [i for i in iss if i["severity"] != "error"]
     if new is None or errs:
@@ -356,7 +370,7 @@ def cmd_stop(ex, cmd):
     if p is None:
         return _err("E_ID", "плана нет", "plan_id")
     spec, rt = p["spec"], p["rt"]
-    iss = plan_schema.check_rev(spec, cmd.get("rev_expected"))
+    iss = plan_schema.check_rev(spec, _rev_for(cmd, spec))
     if iss:
         return {"ok": False, "status": "rejected", "errors": _issues(iss), "warnings": []}
     to = (cmd.get("payload") or {}).get("to")
@@ -418,6 +432,9 @@ def cmd_hold(ex, cmd):
     rt = p["rt"]
     if rt["status"] in plan_schema.TERMINAL:
         return _err("E_STATUS_FORBIDS", "терминальный статус", "status")
+    if rt["status"] in IN_POS or float((rt.get("pos") or {}).get("qty") or 0) > 0:
+        # решение владельца 2026-11-03: план в позиции на паузе не стоит (защита стопа и управление работают всегда); пауза только до входа
+        return _err("E_STATUS_FORBIDS", "план в позиции на паузу не ставится: стоп, безубыток и управление работают всегда; пауза только до входа", "status")
     rt["hold"], rt["hold_reason"] = "brain", "brain"
     ex.save(p, sync=True)
     return {"ok": True, "status": rt["status"], "plan_id": p["spec"]["id"], "rev": p["spec"]["rev"], "warnings": [], "errors": []}

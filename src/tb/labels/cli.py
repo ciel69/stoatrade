@@ -4,6 +4,10 @@
 нет базы (show, verify, backup); 2 - ошибка использования или реестра политик.
 Разметку (признаки, исходы, прогоны политик) делает только сервис `labels`. backfill и rerun лишь ставят сигналы в очередь (вставка pending или перевод в pending)
 одной транзакцией BEGIN IMMEDIATE; сервис должен быть запущен (`./tb status`), иначе очередь будет разобрана после его старта. Сеть и ключи не используются.
+
+R2 (Requirement 2.4, 2.11): при маркере runtime/knowledge.restoring backfill, rerun и backup отказывают (код 1). При маркере state/knowledge.v2
+backfill и rerun регистрируются писателями (runtime/knowledge.writers/<pid>), backfill проверяет маркер восстановления перед каждым куском и,
+увидев его, прерывается, закрывает соединение и пишет подтверждение; backup делает проверенную копию knowledge.store2.make_backup("owner").
 """
 import argparse
 import json
@@ -13,7 +17,11 @@ import sys
 import time
 
 from tb import paths
+from tb.knowledge import markers as KM
+from tb.knowledge import store2
 from tb.labels import capture, label, policies, query, schema, store
+
+RESTORING_MSG = "база знаний восстанавливается (runtime/knowledge.restoring): команда отклонена, повторите после восстановления"
 
 HB_ALIVE_S = 60.0
 CHUNK = 1 << 20
@@ -57,10 +65,11 @@ def _ro_meta(conn, key):
     return _jl(row[0]) if row else None
 
 
-def backfill(conn, root, since_t, cfg=None, now_s=None, restart=False, max_bytes=None):
+def backfill(conn, root, since_t, cfg=None, now_s=None, restart=False, max_bytes=None, stop=None):
     """Захват сигналов runtime/hot_events.jsonl с t0 >= since_t в signals (status=pending). Возобновляемо: курсор `backfill:<since>` (offset + head_sha первых 4 КБ) и
     транзакция на кусок 1 МБ; повтор читает с сохранённого смещения, дубли отсекает ключ (INSERT OR IGNORE). fng/dvol/risk_off не заполняются (null): снимка контекста
-    задним числом нет. Свечи не загружаются (их берёт сервис с max_rps). -> отчёт (прогресс также в meta[backfill] для `labels status`)."""
+    задним числом нет. Свечи не загружаются (их берёт сервис с max_rps). -> отчёт (прогресс также в meta[backfill] для `labels status`).
+    stop() (R2: маркер восстановления) проверяется перед каждым куском: True -> rep["aborted"]="RESTORING", дальше не пишем."""
     cfg = cfg if cfg is not None else capture.load_cfg(root)
     now_s = time.time() if now_s is None else now_s
     path = paths.runtime("hot_events.jsonl", root=root)
@@ -85,6 +94,9 @@ def backfill(conn, root, since_t, cfg=None, now_s=None, restart=False, max_bytes
     read = 0
     with open(path, "rb") as f:
         while max_bytes is None or read < max_bytes:
+            if stop is not None and stop():
+                rep["aborted"] = "RESTORING"
+                break
             f.seek(offset)
             data = f.read(CHUNK)
             if not data:
@@ -116,6 +128,8 @@ def backfill(conn, root, since_t, cfg=None, now_s=None, restart=False, max_bytes
             read += len(chunk)
     rep["offset"], rep["size"] = offset, size
     rep["done"] = offset >= size
+    if rep.get("aborted"):
+        return rep
     with store.tx(conn):
         _save_progress(conn, rep, offset, size, now_s, rep["done"])
     return rep
@@ -301,11 +315,20 @@ def cmd_backfill(a, root):
     if since_t is None:
         _err("--since обязателен")
         return 2
-    conn = store.open_rw(root)
-    try:
-        rep = backfill(conn, root, since_t, restart=a.restart, max_bytes=int(a.max_mb * (1 << 20)) if a.max_mb else None)
-    finally:
-        conn.close()
+    if KM.restoring(root):
+        _err(RESTORING_MSG)
+        return 1
+    with _writer(root) as v2:
+        conn = store.open_rw(root)
+        try:
+            rep = backfill(conn, root, since_t, restart=a.restart, max_bytes=int(a.max_mb * (1 << 20)) if a.max_mb else None,
+                           stop=(lambda: KM.restoring(root)) if v2 else None)
+        finally:
+            conn.close()
+    if rep.get("aborted"):
+        _err("backfill прерван: база знаний восстанавливается (runtime/knowledge.restoring); повторите команду после восстановления (продолжится с места остановки)")
+        _out(rep)
+        return 1
     _out(rep, a.text, ["backfill с %s: новых %s из %s в диапазоне, строк с ошибкой %s, прочитано %s из %s байт, %s" % (
         time.strftime("%Y-%m-%d", time.gmtime(since_t)), rep["new"], rep["seen"], rep["bad_lines"], rep["offset"], rep["size"],
         "готово" if rep["done"] else "не дочитано: повторите команду (продолжится с места остановки)")])
@@ -321,12 +344,19 @@ def cmd_rerun(a, root):
     if since_t is None:
         _err("--since обязателен")
         return 2
+    if KM.restoring(root):
+        _err(RESTORING_MSG)
+        return 1
     try:
-        conn = store.open_rw(root)
-        try:
-            res = rerun(conn, root, a.policy, since_t)
-        finally:
-            conn.close()
+        with _writer(root) as v2:
+            conn = store.open_rw(root)
+            try:
+                if v2 and KM.restoring(root):
+                    _err(RESTORING_MSG)
+                    return 1
+                res = rerun(conn, root, a.policy, since_t)
+            finally:
+                conn.close()
     except ValueError as e:
         _err(e)
         return 2
@@ -335,7 +365,45 @@ def cmd_rerun(a, root):
     return 0
 
 
+class _writer(object):
+    """R2: регистрация долгоживущего писателя при маркере v2; на выходе (соединение уже закрыто) - подтверждение, если появился маркер восстановления,
+    и снятие регистрации. Без маркера v2 ничего не делает. -> v2 (bool)."""
+
+    def __init__(self, root):
+        self.root = root
+        self.v2 = KM.has_v2(root)
+
+    def __enter__(self):
+        if self.v2:
+            KM.register_writer(self.root, "labels_cli")
+        return self.v2
+
+    def __exit__(self, *exc):
+        if self.v2:
+            if KM.restoring(self.root):
+                KM.ack(self.root)
+            KM.unregister_writer(self.root)
+        return False
+
+
 def cmd_backup(a, root):
+    if KM.restoring(root):
+        _err(RESTORING_MSG)
+        return 1
+    if KM.has_v2(root):
+        try:
+            dst = store2.make_backup(root, "owner")
+        except FileNotFoundError:
+            _err("нет базы знаний")
+            return 1
+        except store2.KnowledgeError as e:
+            _err(str(e))
+            return 1
+        except (OSError, sqlite3.Error) as e:
+            _err("%s: %s" % (type(e).__name__, e))
+            return 1
+        _out({"ok": True, "path": dst, "reason": "owner"}, a.text, ["backup: %s" % dst])
+        return 0
     try:
         dst = store.backup(root)
     except FileNotFoundError:
@@ -383,7 +451,7 @@ def build_parser():
     rr.add_argument("--policy", required=True)
     rr.add_argument("--since", required=True, help="YYYY-MM-DD (UTC)")
     rr.add_argument("--text", action="store_true")
-    bk = sub.add_parser("backup", help="копия базы state/backups/knowledge-YYYYMMDD.sqlite без остановки сервиса")
+    bk = sub.add_parser("backup", help="копия базы state/backups/knowledge-YYYYMMDD.sqlite без остановки сервиса (в режиме v2: проверенная knowledge-<время>-owner.sqlite)")
     bk.add_argument("--text", action="store_true")
     vf = sub.add_parser("verify", help="integrity_check и полнота разметки; код 0 только при нуле нарушений")
     vf.add_argument("--text", action="store_true")
