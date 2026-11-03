@@ -160,8 +160,9 @@ def compute(rows_1m, rows_5m, rows_1h, btc_5m, t0_s, sym, ev, ctx_snapshot, mem_
     g = time.gmtime(t0)
     feat["utc_hour"], feat["dow"], feat["utc_session"] = g.tm_hour, g.tm_wday, memfeat.utc_session(g.tm_hour)
     cfg = mem_cfg if mem_cfg is not None else _mem_cfg()
-    turn = _num((ev or {}).get("turnover_usd")) if isinstance(ev, dict) else None
-    feat["coin_class"] = memfeat.classify_coin(sym, cfg, turn)
+    # оборот 24 ч: поле событий сканера turn_24h_musd (млн USD, marketdata/hotscan.py) -> USD для classify_coin
+    tm = _num(ev.get("turn_24h_musd")) if isinstance(ev, dict) else None
+    feat["coin_class"] = memfeat.classify_coin(sym, cfg, tm * 1e6 if tm is not None else None)
 
     if isinstance(ctx_snapshot, dict):
         for k in ("fng", "dvol", "risk_off"):

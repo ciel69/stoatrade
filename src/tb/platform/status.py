@@ -69,7 +69,11 @@ def labels_reasons(hb, warn=None):
         cap = cap if isinstance(cap, (int, float)) and not isinstance(cap, bool) else 0
         if failed > w["failed_share"] * max(cap, 1):
             out.append("разметчик labels: не размечено за 24 ч %d из %d захваченных (порог %d%%)" % (failed, cap, round(w["failed_share"] * 100)))
-    if hb.get("last_error") == "DB_CORRUPT":
+    if hb.get("db_state") == "corrupt":
+        out.append("разметчик labels: база знаний повреждена (DB_CORRUPT), записи меток остановлены до восстановления (./tb knowledge verify)")
+    elif hb.get("db_state") == "restoring":
+        out.append("разметчик labels: идёт восстановление базы знаний, записи меток на паузе")
+    elif hb.get("last_error") == "DB_CORRUPT":
         out.append("разметчик labels: база знаний была повреждена и пересоздана (DB_CORRUPT), старая лежит как state/knowledge.corrupt-*.sqlite")
     for x in hb.get("warnings") or []:
         if x == "W_LABELS_SYNC_DIR":
@@ -84,6 +88,19 @@ def _labels_warn(root):
         return w if isinstance(w, dict) else None
     except Exception:  # noqa: BLE001 - статус не должен падать из-за конфига меток
         return None
+
+
+def knowledge_block(root, now):
+    """R2 (Requirement 2.3, 2.4, 2.10, 16.4): ./tb knowledge verify (quick_check, цепочки, маркеры) для статуса. Без маркеров v2 и восстановления -> None
+    (статус как в R1). -> {"color", "codes", "reasons"} или None."""
+    try:
+        from tb.knowledge import store2
+        rep = store2.status_check(root, now)
+    except Exception as e:  # noqa: BLE001 - статус не должен падать из-за проверки базы
+        return {"color": "yellow", "codes": ["VERIFY_ERROR"], "reasons": ["база знаний: проверка не выполнена (%s)" % type(e).__name__]}
+    if rep is None:
+        return None
+    return {"color": rep["color"], "codes": list(rep["codes"]), "reasons": list(rep["reasons"])}
 
 
 def build_status(root=None, now=None):
@@ -161,6 +178,11 @@ def build_status(root=None, now=None):
             if lr:
                 color = worse("yellow")
                 reasons.extend(lr)
+    kb = knowledge_block(root, now)
+    if kb is not None and kb["codes"]:
+        if color != "off":
+            color = worse(kb["color"])
+        reasons.extend(kb["reasons"])
     exec_expected = "exec" in svcs or (running and "exec" in (sup.get("services") or []))
     if exec_expected and not ex["alive"] and running:
         if (svcs.get("exec") or {}).get("state") == "running" and (svcs.get("exec") or {}).get("uptime_s", 0) < 60:
@@ -187,7 +209,7 @@ def build_status(root=None, now=None):
     return {"ts_epoch": round(now, 3), "color": color, "reasons": reasons, "running": running,
             "supervisor": {"pid": sup.get("pid") or None, "started": sup.get("started"), "uptime_s": round(now - sup["started"], 1) if running and isinstance(sup.get("started"), (int, float)) else None,
                            "profile": profile, "observe": sup.get("observe") if running else None, "services": sup.get("services") if running else None},
-            "services": svcs, "exec": ex, "kill": kill is not None, "kill_info": kill, "bus": bus_b, "scanner": scan_b,
+            "services": svcs, "exec": ex, "kill": kill is not None, "kill_info": kill, "bus": bus_b, "scanner": scan_b, **({"knowledge": kb} if kb is not None else {}),
             "unread": unread, "unread_total": total, "links": links}
 
 

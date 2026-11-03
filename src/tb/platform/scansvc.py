@@ -5,8 +5,8 @@
 шину `core/bus` типом `scanner_signal` (kind: range_5m, turnover_surge, hot_enter, idea_near, idea_level, idea_invalidated, idea_tp, idea_expired, idea_stale):
   - idea_stale: ревизия живой идеи (ideawatch, флаг stale_code): d.stale = причина (bus.STALE_CODES), d.idea = id; окно дедупликации 4 ч на идею;
   - источник событий тот же файл runtime/hot_events.jsonl, что пишет hotscan (хвост с конца файла, без истории при старте);
-  - белый список полей d: kind, px, score, dir, range_5m_pct, ret_5m_pct, turn_surge_5m, spread_bps, funding_pct, idea, wake (reasons/note/idea_note
-    и любой текст сканера НЕ попадают в шину; финальную очистку делает bus.sanitize);
+  - белый список полей d: kind, px, score, dir, range_5m_pct, ret_5m_pct, turn_surge_5m, spread_bps, funding_pct, chg_24h_pct, turn_24h_musd, idea, wake
+    (+ поля деривативов и ордерфлоу, см. NUM_KEYS; reasons/note/idea_note и любой текст сканера НЕ попадают в шину; финальную очистку делает bus.sanitize);
   - дедупликация: (kind, symbol, idea) не чаще окна dedup_s (по умолчанию 300 с; idea_near 1800 с; idea_level/invalidated/tp/expired сутки);
     окна сеются из хвоста шины при старте, поэтому перезапуск сервиса не даёт дублей;
   - idea_expired: идея снята по ttl (ideawatch делает это молча); сервис замечает смену статуса в state/ideas.jsonl и публикует событие;
@@ -31,7 +31,8 @@ _SYM = re.compile(r"^[A-Z0-9]{2,20}$")
 _IDEA = re.compile(r"^I\d+$")
 NUM_KEYS = (("price", "px"), ("score", "score"), ("range_5m_pct", "range_5m_pct"), ("ret_5m_pct", "ret_5m_pct"), ("turn_surge_5m", "turn_surge_5m"),
             ("spread_bps", "spread_bps"), ("funding_pct", "funding_pct"), ("oi_chg_15m_pct", "oi_chg_15m_pct"), ("oi_chg_1h_pct", "oi_chg_1h_pct"), ("liq_usd", "liq_usd"),
-            ("cvd_pct", "cvd_pct"), ("wall_usd", "wall_usd"), ("wall_dist_pct", "wall_dist_pct"), ("xex_bps", "xex_bps"))
+            ("cvd_pct", "cvd_pct"), ("wall_usd", "wall_usd"), ("wall_dist_pct", "wall_dist_pct"), ("xex_bps", "xex_bps"),
+            ("chg_24h_pct", "chg_24h_pct"), ("turn_24h_musd", "turn_24h_musd"))       # признаки правил R2 (memory.features.rule_features)
 MAX_DEDUP_KEYS = 4000
 
 

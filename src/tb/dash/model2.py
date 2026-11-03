@@ -1098,14 +1098,16 @@ def _group_stats(rows):
 
 
 def exp_stats(root, by="exp", mode="all"):
-    """/api/v2/exp?by=exp|variant|setup|hyp|symbol|mode&mode=: таблица как `./tb exp stats`, без вердиктов. n < 30 помечается звёздочкой."""
+    """/api/v2/exp?by=exp|variant|setup|hyp|symbol|mode&mode=: таблица как `./tb exp stats`, без вердиктов. n < 30 помечается звёздочкой.
+    Разрез hyp группирует по семействам словаря (tb.core.hyps) и считает K по общему правилу expstats.hyp_k."""
+    from tb.core import expstats, hyps
     by = by if by in ("exp", "variant", "setup", "hyp", "symbol", "mode") else "exp"
     trades, _ = model.load_trades(root)
     closed = [t for t in trades if t["status"] == "closed" and (mode in (None, "", "all") or t["mode"] == mode)]
     groups = {}
     for t in closed:
         e, v = _tag(t, "exp", "exp"), _tag(t, "var", "var")
-        key = {"exp": e, "variant": ("%s/%s" % (e, v)) if e and v else e, "setup": _tag(t, "setup", "setup"), "hyp": _tag(t, "hyp", "hyp"),
+        key = {"exp": e, "variant": ("%s/%s" % (e, v)) if e and v else e, "setup": _tag(t, "setup", "setup"), "hyp": hyps.family(_tag(t, "hyp", "hyp"))[0],     # семейство словаря (Requirement 19.3)
                "symbol": t.get("sym"), "mode": t.get("mode")}[by]
         if not key:
             continue
@@ -1121,7 +1123,8 @@ def exp_stats(root, by="exp", mode="all"):
     meta = model.read_json(paths.config("experiments.json", root=root))
     meta = {k: {"hypothesis": _s(_d(v).get("hypothesis"), 200), "prereg": _s(_d(v).get("prereg"), 280), "started": _s(_d(v).get("started"), 12),
                 "min_n": int(_n(_d(v).get("min_n")) or MIN_N)} for k, v in _d(meta).items() if isinstance(v, dict)}
-    k_cmp = len(rows)
+    # K: для гипотез общее правило expstats.hyp_k (семейства, кроме other, с бумажной n >= 30, Requirement 19.4), для прочих разрезов число групп
+    k_cmp = (expstats.hyp_k(expstats.load_trades("all", root, with_rules=False)) if rows else 0) if by == "hyp" else len(rows)
     return {"by": by, "mode": mode, "rows": rows[:60], "k": k_cmp, "alpha": (0.05 / k_cmp) if k_cmp else None, "min_n": MIN_N, "meta": meta,
             "total_closed": len(closed), "with_plan": sum(1 for t in closed if t.get("plan_id"))}
 

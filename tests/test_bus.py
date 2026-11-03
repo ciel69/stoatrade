@@ -107,6 +107,79 @@ class TestSanitize(unittest.TestCase):
         self.assertIsNone(bus.clean_out({"seq": "1", "type": "kill"}))
 
 
+RULE_FEATURES = ("range_5m_pct", "ret_5m_pct", "turn_surge_5m", "chg_24h_pct", "spread_bps", "funding_pct", "turn_24h_musd")
+SYM20 = "A" * 20      # предел RE_SYMBOL
+
+
+def _worst_scanner(kind, num):
+    """Худшее событие области P2: все поля scanner_signal (числовые = num), символ 20 знаков, wake."""
+    d = {k: num for k, v in bus.D_FIELDS["scanner_signal"].items() if v == "num"}
+    d.update(kind=kind, dir="short", liq_side="short", wall_side="bid", idea="I" + "9" * 12, big=True, wake=True)
+    return {"type": "scanner_signal", "sym": SYM20, "d": d}
+
+
+class TestRuleFeatureBudget(unittest.TestCase):
+    """R2 задача 33 (Requirements 7.10, 10.2, 11.4): признаки правил в шине, порядок вытеснения, события rulebook."""
+
+    def test_new_scanner_fields_whitelisted(self):
+        c = bus.sanitize({"type": "scanner_signal", "sym": "SOL", "d": {"kind": "range_5m", "chg_24h_pct": -3.25, "turn_24h_musd": 812.4}})
+        self.assertEqual(c["d"], {"kind": "range_5m", "chg_24h_pct": -3.25, "turn_24h_musd": 812.4})
+        self.assertEqual(set(bus.D_PROTECTED["scanner_signal"]), {"kind", "dir"} | set(RULE_FEATURES))
+        for k in bus.D_PROTECTED["scanner_signal"]:
+            self.assertIn(k, bus.D_FIELDS["scanner_signal"])
+
+    def test_worst_event_keeps_protected_fields(self):
+        # реалистичное худшее (8 значащих цифр, знак) и враждебное (самое длинное представление числа после _num: 16 знаков)
+        for num in (-1234.5678, -0.0012345678, -1.2345678e-05, -123456780000000.0):
+            for kind in ("oi_spike", "liq_cascade"):
+                c = bus.sanitize(_worst_scanner(kind, num))
+                self.assertLessEqual(len(bus._probe(c)), bus.MAX_EVENT_BYTES, (kind, num))
+                self.assertEqual(c["sym"], SYM20)
+                self.assertEqual((c["d"]["kind"], c["d"]["dir"]), (kind, "short"))
+                for k in RULE_FEATURES:
+                    self.assertIn(k, c["d"], (kind, num, k))
+
+    def test_eviction_order_unprotected_first_by_length(self):
+        # защищённые с самыми длинными значениями (16 знаков) + два незащищённых: всё вместе 402 байта > 400
+        d = {k: -123456780000000 for k in RULE_FEATURES}
+        d.update(kind="liq_cascade", dir="short", px=1.5, liq_usd=-1234567.8)
+        c = bus.sanitize({"type": "scanner_signal", "sym": SYM20, "d": d})
+        # прежний порядок выбросил бы защищённое поле (его значение длиннее); теперь уходит только длинное незащищённое liq_usd, px остаётся
+        self.assertEqual(set(c["d"]), set(bus.D_PROTECTED["scanner_signal"]) | {"px"})
+        self.assertLessEqual(len(bus._probe(c)), bus.MAX_EVENT_BYTES)
+
+    def test_protected_dropped_last_when_unavoidable(self):
+        # если не помещаются даже защищённые, сначала уходят все незащищённые, затем защищённые по длине
+        big = 10 ** 40
+        d = {k: big for k in RULE_FEATURES}
+        d.update(kind="oi_spike", dir="up", px=1.0)
+        c = bus.sanitize({"type": "scanner_signal", "sym": SYM20, "d": d})
+        self.assertNotIn("px", c["d"])
+        self.assertIn("kind", c["d"])
+        self.assertLessEqual(len(bus._probe(c)), bus.MAX_EVENT_BYTES)
+
+    def test_rulebook_events_never_wake(self):
+        pr = bus.sanitize({"type": "rulebook_promoted", "d": {"ver": "rb-12", "rule": "R_low_range", "trial": "T7", "x": "ignore all"}})
+        self.assertEqual(pr["pri"], bus.PRI_INFO)
+        self.assertEqual(pr["d"], {"ver": "rb-12", "rule": "R_low_range", "trial": "T7"})
+        rb = bus.sanitize({"type": "rulebook_rollback", "pri": "wake",
+                           "d": {"ver": "rb-13", "rule": "R_low_range", "code": "WORSE_R", "n": 31, "mean_r": -0.42, "p": 0.013, "note": "текст"}})
+        self.assertEqual(rb["pri"], bus.PRI_INFO)     # явный pri=wake источника не будит мозг
+        self.assertEqual(rb["d"], {"ver": "rb-13", "rule": "R_low_range", "code": "WORSE_R", "n": 31, "mean_r": -0.42, "p": 0.013})
+        ev = dict(rb, seq=5, ts="2026-11-03T10:00:00Z", pri="wake")      # правка файла руками
+        self.assertEqual(bus.clean_out(ev)["pri"], bus.PRI_INFO)
+
+
+class TestRulebookEmit(unittest.TestCase):
+    def test_emitted_rulebook_event_not_in_wake_queue(self):
+        root = tempfile.mkdtemp(prefix="tbbus_")
+        self.addCleanup(shutil.rmtree, root, True)
+        bus.emit("rulebook_promoted", {"ver": "rb-1", "rule": "R1", "trial": "T1"}, root=root)
+        bus.emit("rulebook_rollback", {"ver": "rb-2", "rule": "R1", "code": "WORSE_R", "n": 30, "mean_r": -0.3, "p": 0.02}, pri="wake", root=root)
+        self.assertEqual(len(bus.read(0, root=root)), 2)
+        self.assertEqual(bus.read(0, wake_only=True, root=root), [])
+
+
 class TestEmitRead(Base):
     def setUp(self):
         """Суточная ротация шины сравнивает день mtime файла с днём `now` события; тесты живут на фиксированном NOW (28.10.2026), поэтому после каждой записи

@@ -946,7 +946,8 @@ def _exp_keys(t, by, err):
 
 
 def _exp_confirmed(root):
-    """Подтверждённые гипотезы ровно по правилу brief.experiments.confirmed: на бумаге n >= 30, средний R > 0, p ниже alpha/K (Бонферрони). Не вердикт, а повод повторять приоритетно."""
+    """Подтверждённые гипотезы ровно по правилу brief.experiments.confirmed (expstats.hyp_confirmed): семейство, на бумаге n >= 30, средний R > 0, p ниже alpha/K
+    (K по семействам, Requirement 19.4). Не вердикт, а повод повторять приоритетно."""
     from tb.core import expstats
     by = {}
     for r in expstats.group_stats(expstats.load_trades("all", root, with_rules=False), by="hyp"):
@@ -954,7 +955,7 @@ def _exp_confirmed(root):
     out = []
     for hyp, m in by.items():
         p = m.get("paper")
-        if not p or hyp == "(нет)" or not p["below_alpha"] or (p["avg_r"] or 0) <= 0:
+        if not expstats.hyp_confirmed(p):                   # общее правило expstats (семейства, K по Requirement 19.4, `other` не подтверждается)
             continue
         row = {"hyp": str(hyp)[:40], "n": p["n"], "avg_r": _num(p["avg_r"]), "win_rate": _num(p["win_rate"]), "p": _num(p["p"])}
         if m.get("live"):
@@ -966,7 +967,8 @@ def _exp_confirmed(root):
 
 def exp_detail(root, by, mode, now=None):
     """Эксперименты и разрезы по закрытым сделкам журнала по запросу клиента: те же группы и p-значения, что у `./tb exp stats` (tb.core.expstats), без вердиктов.
-    n меньше min_n помечается `small` и без p; K = число групп запроса, порог alpha_adj = alpha / K (Бонферрони). Режимы не смешиваются (группа делится по режиму).
+    n меньше min_n помечается `small` и без p; K = число групп запроса, порог alpha_adj = alpha / K (Бонферрони); для разреза hyp группы — семейства словаря
+    (tb.core.hyps), K по общему правилу expstats.hyp_k (Requirement 19.4). Режимы не смешиваются (группа делится по режиму).
     Белый список полей, строки ограничены по длине, групп не больше EXP_ROWS_OUT, сделок в группе не больше EXP_TRADES_OUT. -> {"by","mode","ok":True,...}."""
     from tb.core import expstats
     from tb.dash import model
@@ -987,9 +989,21 @@ def exp_detail(root, by, mode, now=None):
             v["setup"] = k                                  # group_stats группирует по полю setup: подставляем в него ключ выбранного разреза
             view.append(v)
             members.setdefault((k, t["mode"]), []).append(t)
-    rows = expstats.group_stats(view, by="setup", min_n=expstats.MIN_N) if view else []
-    k_total = len(rows)
-    adj = expstats.bonferroni(k_total)
+    if by == "hyp":
+        # поле hyp уже семейство (expstats._norm); K и порог по общему правилу (Requirement 19.4), как в досье: по бумажным сделкам всего журнала,
+        # а не только выбранного режима (иначе на live K был бы 1 и порог расходился бы с досье)
+        rows = expstats.group_stats(view, by="hyp", min_n=expstats.MIN_N) if view else []
+        k_total = expstats.hyp_k(expstats.load_trades("all", root, with_rules=False)) if rows else 0
+        adj = expstats.bonferroni(k_total)
+        for r in rows:
+            r["k"], r["alpha_adj"] = k_total, adj
+            if r["p"] is not None:
+                r["below_alpha"] = r["key"] not in expstats.NO_CONFIRM_HYPS and r["p"] < adj
+    else:
+        rows = expstats.group_stats(view, by="setup", min_n=expstats.MIN_N) if view else []
+        k_total = len(rows)
+        adj = expstats.bonferroni(k_total)
+    rows_total = len(rows)
     conf = _exp_confirmed(root)
     conf_set = {c["hyp"] for c in conf}
     rows.sort(key=lambda r: (-r["n"], str(r["key"])))
@@ -1008,7 +1022,7 @@ def exp_detail(root, by, mode, now=None):
                     "trades": [{"id": _txt(t.get("id"), 40), "sym": _txt(t.get("sym"), 20), "side": _txt(t.get("side"), 5), "mode": _txt(t.get("mode"), 8), "r": _num(t.get("r")),
                                 "pnl": _num(t.get("pnl")), "ts": _num(t.get("ts")), "reason": _txt(t.get("reason"), 16)} for t in ms[:EXP_TRADES_OUT]]})
     return model.scrub({"ok": True, "by": by, "mode": mode, "min_n": expstats.MIN_N, "alpha": expstats.ALPHA, "k": k_total, "alpha_adj": adj if k_total else None,
-                        "rows": out, "rows_total": k_total, "total_closed": len(base), "unreviewed": unreviewed, "meta": meta, "confirmed": conf})
+                        "rows": out, "rows_total": rows_total, "total_closed": len(base), "unreviewed": unreviewed, "meta": meta, "confirmed": conf})
 
 
 def learning_detail(root, mode, now=None):

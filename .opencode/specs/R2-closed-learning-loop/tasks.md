@@ -10,7 +10,7 @@
 
 ## Tasks
 
-- [ ] 1. Диагноз R2.0: `tb.memory.diagnose`, `./tb memory lesson diagnose` (волна 1)
+- [x] 1. Диагноз R2.0: `tb.memory.diagnose`, `./tb memory lesson diagnose` (волна 1)
   - воронка: случаи → закрытые сделки → пул → доля `regime`, `setup`, `stop_pct`, `rr_planned` → число условий-кандидатов → прошедшие `min_n_propose`, `min_diff_r`, `min_share` → созданные за сутки → уроки по статусам; коды `POOL_TOO_SMALL`, `BELOW_N`, `BELOW_DIFF`, `BELOW_SHARE`, `DUP_ACTIVE`, `BUDGET`
   - причины по данным `DATA_VOLUME`, `DATA_QUALITY`, `MULTIPLICITY` (K × alpha ≥ 1 для кодового `propose`), `NONE`; `WIRING` командой не вычисляется (установленный факт в `design.md`, `memory/cli.py`, строки 208–209); `--out` только в `runtime/`; `lessons: 0 (файла нет)`
   - выполняется после утверждения спеки (задача 3): команда — новый код; сам прогон только читает данные
@@ -26,14 +26,14 @@
   - Зависит от: нет (внешнее)
   - _Requirements: 1.4_
 
-- [ ] 3. Внешнее: утверждение спеки владельцем и команда начать реализацию (волна 0)
+- [x] 3. Внешнее: утверждение спеки владельцем и команда начать реализацию (волна 0)
   - спека утверждена владельцем и дана команда начать реализацию; решения владельца 1–4 и ревизии 2026-11-03 внесены в спеку; в частности владелец видит, что после приёмки `promotion.mode="auto"` и полная автономия (решение владельца 2)
   - критерии приёмки: утверждение зафиксировано; `check-spec.mjs` без CRITICAL
   - тесты: проверка спеки скриптом
   - Зависит от: нет (внешнее). Все кодовые задачи (1, 4 и далее) зависят от этой задачи прямо (1, 4, 5, 6, 32, 33, 34) или через цепочку
   - _Requirements: 10.6_
 
-- [ ] 4. Таблицы цикла и защита базы: `tb.knowledge.schema2`, `tb.knowledge.store2`, `labels/store.py`, `labels/service.py`, `./tb knowledge verify|backup|restore|stats|disable-v2` (волна 1)
+- [x] 4. Таблицы цикла и защита базы: `tb.knowledge.schema2`, `tb.knowledge.store2`, `labels/store.py`, `labels/service.py`, `./tb knowledge verify|backup|restore|stats|disable-v2` (волна 1)
   - `migrate_v2a` с ключом `meta.knowledge_v2_ver` вне `labels.schema.MIGRATIONS`, только при `learnloop.enabled=true` или явной команде; таблицы `cluster_runs` (колонки и индекс по `design.md`), `rule_evals` (индексы `(ts, rule_id)` и `(ts)`, insert-only), `rule_rows` (с `wait`, `wait_since_ts`), `rulebook_versions`, `lesson_candidates`, `trials` (с `cut_ts`), `blocklist_rows`, `learn_events`; таблиц наблюдений нет; триггеры (append-only, insert-only `cluster_runs`, неизменяемые колонки `trials`); цепочка и проверка `prev` только у `rulebook_versions`; маркер `state/knowledge.v2`; `KnowledgeMigrationError` не останавливает сервис меток
   - `labels.store.open_rw`: при маркере не уходить в `_quarantine`, поднимать новое исключение `DbCorruptError` (код `DB_CORRUPT`); классификатор `knowledge.store2.is_corruption(e)` (только `SQLITE_CORRUPT`/`SQLITE_NOTADB` по `sqlite_errorcode & 0xFF`, без атрибута — текст `malformed`/`not a database`, с обходом цепочки `__context__`/`__cause__`; `IntegrityError`, `ProgrammingError`, `database is locked` — нет); сигнал `runtime/knowledge.corrupt` (pid, время, код) пишет сервис меток при `DbCorruptError` в `label_step`, `capture_step` и `open_rw` при старте; маркер восстановления проверяется также в `capture_step`, `checkpoint_step`, `heartbeat`; `./tb labels backup` (`labels/cli.py:338`) при маркере v2 переводится на `make_backup`, при маркере восстановления отказывает; распознанное им в записях меток переводится в `DbCorruptError`; `labels.store._is_corrupt` R1 не меняется; `labels/service.py`: обработчик `DbCorruptError` (останов записей, ожидание восстановления), регистрация `runtime/knowledge.writers/<pid>`, проверка маркера перед каждой меткой в `label_step`, пауза записей с закрытием соединения и подтверждением при маркере `runtime/knowledge.restoring`; `labels/cli.py` `backfill`/`rerun` (строки 304, 325): регистрация, отказ запуска при маркере, прерывание с подтверждением при его появлении; без маркера поведение R1 прежнее
   - `labels.store.open_ro`/`open_rw` проверяют маркер `runtime/knowledge.restoring` перед открытием и при нём не открывают соединение (исключение `KnowledgeRestoring`); так одним местом покрыты все короткоживущие читатели, открывающие соединение на один вызов: `learn/vs_policy.py:72`, `labels/query.py:49` (страница «Учится ли мозг», `./tb labels`), `labels/cli.py` (строки 166, 211, 267, 304, 325), операции дашборда (задачи 17, 18), `./tb status` и `./tb knowledge verify`, шлюз и мозг через `rulebook_view` (задача 11, тоже на вызов)
@@ -45,7 +45,7 @@
   - Зависит от: 3 (использует R1 `labels.store`)
   - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.7, 2.8, 2.9, 2.10, 16.1, 16.4_
 
-- [ ] 5. Конфиг цикла: `tb.learnloop.conf`, `config/learnloop.json` (волна 1)
+- [x] 5. Конфиг цикла: `tb.learnloop.conf`, `config/learnloop.json` (волна 1)
   - строгая загрузка, все пороги из `design.md` (`promotion.mode="off"` в поставке разработки, `holdout_days=7`, `n_target=150`, `min_n_menu=88` со сверкой по формуле Requirement 4.2, `overlap_share_max`, `loss_cap_wait_days`, `restore_ack_timeout_s`, `observe_s`, `event_max_age_s`, `feat_missing_max`, `day_min_work_h`, `observe_ok_share`, `lease_h`, `watch_fresh_h`, `step_error_max`, `menu_every_days`, `grace_min`, `cluster_close_max_h`, `reach_*`, `wait_max_days`, `cooldown_days`, `alpha_watch_weekly`, `starvation_window_days`, `events_per_day`, `allow_size_rules=false`, блок `second_iteration`); `alpha` только здесь; хеш конфига для критерия
   - события шины — задача 33 (общий файл `core/bus.py`)
   - критерии приёмки: битый конфиг не включает цикл; неизвестный ключ и `min_n_menu`, не равный формуле, отклоняются
@@ -53,7 +53,7 @@
   - Зависит от: 3
   - _Requirements: 4.2, 15.3_
 
-- [ ] 6. Чистый модуль условий `tb.logic.learn_cond` и перенос сравнений (волна 1)
+- [x] 6. Чистый модуль условий `tb.logic.learn_cond` и перенос сравнений (волна 1)
   - `RULE_FEATURES`, `MENU_NUM`, `MENU_CAT=("coin_class",)`, словарь признаков и операторов, сравнение (в `memory/lessons.py` оно приватное `_cmp_val`, переносится как публичное `cmp_val`, старое имя остаётся псевдонимом), `matches_features`; `memory.lessons` импортирует их оттуда без изменения имён и поведения; имя модуля не совпадает с существующими `tb.logic.conds` и `tb.logic.rules`, которые не меняются
   - критерии приёмки: прежние тесты `tests/test_memory_lessons*.py` проходят без правок; модуль не импортирует ничего, кроме stdlib
   - тесты `tests/test_logic_learn_cond.py`: перенесённые сравнения, границы, bool и категориальные
@@ -203,7 +203,7 @@
 
 - [ ] 23. Документация и приёмка первой итерации (волна 12)
   - до приёмки: решения задачи 9 по мощности и порогам внесены в спеку и конфиг (мощность конвейера ≥ 0.5)
-  - шаг приёмки: после зелёного `./tb test` и проверки аварийных средств выставить `promotion.mode="auto"` в `config/learnloop.json`; после этого режим не меняется, аварийно его меняет только владелец командой `./tb learn promotion`
+  - шаг приёмки: после зелёного `./tb test` и проверки аварийных средств выставить `enabled=true` (в поставке разработки `false`, чтобы миграция `migrate_v2a` и маркер `state/knowledge.v2` не появились на боевой базе до готовности цикла; уточнение главного агента 2026-11-03 при приёмке задачи 5) и `promotion.mode="auto"` в `config/learnloop.json`; после этого режим не меняется, аварийно его меняет только владелец командой `./tb learn promotion`
   - `docs/ROADMAP.md`: статусы R2.x; R2.1 (кандидаты кодом, недельное меню, роль `day_reviewer` — вторая итерация, не `day_auditor`); R2.3 (`rulebook_ver`, блок `rulebook`, а не «версия `rules_ver`»); R2.4 (вторая итерация, без правок промптов); R2.7 (разрешены только ужесточающие правила первой итерации `skip_when`; убрать «требовать подтверждения, понижение `size_mult`, правило выхода» из шага 4 раздела «Самообучение без ручного одобрения» (строка 36) для первой итерации); строки 35–37 раздела «Самообучение»: критерий подтверждения (n ≥ 30, ≥ 5 дней, разные режимы рынка) заменить на «holdout 7 суток и испытание: урок подтверждается при продвижении правила», «новая версия `rules_ver`» заменить на `rulebook_ver`; R2.9 (разделение на a и b, версия параметров — хеш конфига); R0.4, R5.1 и решение 2026-11-02 о потолке расходов (строки 79, 137, 191): убрать жёсткую привязку ролей к `lm-oss` (профиль берётся из настроек платформы); срок этапа 2 уточнён до 4–6.5 недель (или по замеру задачи 9); `docs/ARCHITECTURE.md`, `docs/BRAIN.md`, `docs/RUNBOOK.md` (протокол восстановления базы с `-wal`/`-shm`, единое правило безопасности, аварийные команды), `docs/spec_v2/08_case_memory.md` (п. 4.3, п. 7, `src.rulebook_ver`); полный `./tb test`
   - критерии приёмки: полный набор тестов зелёный; документы не расходятся со спекой; чеклист `kiro-specs` пройден; отчёт о приёмке с замером до/после
   - тесты: полный `./tb test`
@@ -266,7 +266,7 @@
   - Зависит от: 8, 27
   - _Requirements: 18.1, 18.2, 18.3, 18.4, 18.5, 18.6, 18.7, 18.8_
 
-- [ ] 32. Ключ оборота для `coin_class` на метках: `labels/features.py` (волна 1)
+- [x] 32. Ключ оборота для `coin_class` на метках: `labels/features.py` (волна 1)
   - `labels/features.py:163`: оборот для `classify_coin` брать из `ev["turn_24h_musd"] × 1e6` (поле событий `marketdata/hotscan.py`), а не из отсутствующего `ev["turnover_usd"]`; поведение для монет из справочника `config/memory.json:coin_class` не меняется
   - цикл от исправления не зависит (`cluster_runs` пересчитывает `coin_class` функцией задачи 12 для всех сигналов), исправление нужно для согласованности `feat` меток с прочими потребителями
   - критерии приёмки: на синтетическом событии с `turn_24h_musd` значение `feat.coin_class` метки равно `memory.features.classify_coin(sym, cfg, turn_24h_musd × 1e6)` (сигнатура `classify_coin(sym, cfg, turnover_usd=None)`, `memory/features.py`, строка 50), то есть `alt_mid`/`alt_small`/`meme` по порогам `turnover_mid_usd`/`turnover_small_usd`; тесты R1 проходят (обновляются только ожидания `coin_class` для монет вне справочника, если они были); паритет с `rule_features` проверяет задача 12
@@ -274,7 +274,7 @@
   - Зависит от: 3
   - _Requirements: 7.10_
 
-- [ ] 33. Поля шины для признаков правил и события rulebook: `core/bus.py`, `platform/scansvc.py`, `executor/scanbridge.py` (волна 1)
+- [x] 33. Поля шины для признаков правил и события rulebook: `core/bus.py`, `platform/scansvc.py`, `executor/scanbridge.py` (волна 1)
   - `core/bus.py:D_FIELDS["scanner_signal"]` (строки 108–112): добавить `chg_24h_pct` и `turn_24h_musd` (вид `num`); `NUM_KEYS` в `platform/scansvc.py` (строки 32–34, `Publisher.convert`) и `executor/scanbridge.py` (строки 16–17, `ScanBridge.convert`): добавить пары `("chg_24h_pct", "chg_24h_pct")`, `("turn_24h_musd", "turn_24h_musd")` (поля строк сканера `marketdata/hotscan.py`)
   - события `rulebook_promoted` и `rulebook_rollback` с приоритетом `info` в `core/bus.py` (одна задача на общий файл): и в `EVENT_TYPES` (сейчас 30 типов → 32), и в `D_FIELDS` с полями (`rulebook_promoted`: `ver`, `rule`, `trial` — вид `id`; `rulebook_rollback`: `ver`, `rule`, `code` — вид `id`, `n`, `mean_r`, `p` — вид `num`)
   - бюджет события: `bus.MAX_EVENT_BYTES = 400` (`core/bus.py`, строка 77), а `sanitize` при превышении выбрасывает самое длинное поле `d` (строки 257–258) — без правки добавленные поля могли бы вытеснить признаки правил. Порядок вытеснения меняется: сначала выбрасываются (по убыванию длины) поля вне защищённого набора, затем защищённые; `kind`, `dir` и поля `RULE_FEATURES` события (`range_5m_pct`, `ret_5m_pct`, `turn_surge_5m`, `chg_24h_pct`, `spread_bps`, `funding_pct`, `turn_24h_musd`) защищены
@@ -285,7 +285,7 @@
   - Зависит от: 3
   - _Requirements: 7.10, 10.2, 11.4_
 
-- [ ] 34. Словарь гипотез и нормализация при чтении: `core/hyps.py`, `config/hypotheses.json`, `core/expstats.py` (волна 1)
+- [x] 34. Словарь гипотез и нормализация при чтении: `core/hyps.py`, `config/hypotheses.json`, `core/expstats.py` (волна 1)
   - `config/hypotheses.json`: `families` (14 `hyp` карточек `config/playbook.json` + `level-reject`, `momentum-chase` + `other`), `aliases` (имена сетапов `brain/validate.py:SETUPS` и варианты из данных: `breakout_retest`, `range-fade-lower-edge`, `range-fade-s5m-res`, `range-fade-sup-s5m`, `trend_pullback` и др.), `policy_map` (`liq-cascade-reclaim` → `P4`/`liq_cascade`, `oi-flush-reclaim` → `P4`/`oi_flush`, `oi-build-squeeze` → `P2`/`oi_spike`); отдельный файл, а не `config/experiments.json` (формат `{эксперимент: {...}}`, перебирается `expstats.load_meta`, `dash2/topics.py:1003`, `dash/model2.py:1122`)
   - `tb.core.hyps` (чистый, читает только `config/hypotheses.json`): `HYP_FAMILIES`, `family(raw) -> (family, raw_or_None)` по Requirement 19.1
   - `expstats._norm`: `hyp` через `hyps.family` (журнал не переписывается; `family(None)` → `None`; ключи `aliases` в нормализованной форме); общая функция подтверждения по `by="hyp"`: K = число семейств, кроме `other`, с paper n ≥ `MIN_N` (не меньше 1), порог alpha / K, `other` не подтверждается; прочие разрезы `group_stats` без изменений
@@ -306,7 +306,7 @@
 
 - [ ] 36. Справка меток и блок гипотез: `learnloop/hypref.py`, `brain/brief.py`, `brain/playbook.py`, `brain/exp_cli.py`, `learn/stages.py` (волна 10)
   - шаг цикла `hypref` раз в час: для семейств из `policy_map` по `policy_runs` за 14 суток (соединение на вызов, фильтр `env_norm`, явное исключение из правила «только `cluster_runs`») n кластеров (час, сторона), среднее значений кластеров, 95% t-интервал, `env_norm` → `runtime/learn/hyp_ref.json`; подключение шага в реестр `learnloop.cycle`
-  - `_b_experiments`: строки по семействам, компактная справка `ref: [n, mean, lo, hi]`, без поля `win`; `exp_index` по семействам; `playbook.match` — прежнее +2; `./tb exp show` — справка рядом с числами сделок
+  - `_b_experiments`: строки по семействам, компактная справка `ref: [n, mean, lo, hi]`, без поля `win`; `exp_index` по семействам; `playbook.match` — прежнее +2; `./tb exp show` — справка рядом с числами сделок; JSON-вывод `./tb exp stats` (`brain/exp_cli.py`) берёт `k` и `alpha_adj` из строк `group_stats` (`hyp_k`), а не `len(rows)` (найдено при приёмке задачи 34)
   - страница: блок `learn.stages.hyps` (n/30, средний R ± 95% интервал, статус, справка); `tb.learn` и мозг только читают файл справки
   - запись отклонения от принципа испытаний (Requirement 19.7) в `docs/BRAIN.md` в задаче 23
   - критерии приёмки: худший случай блока `experiments` (5 + 5 строк со всеми полями) по `brief.tokens` не больше прежнего худшего случая; справка не меняет `confirmed` и ранг карточек; семейство без `policy_map` справки не имеет; при отсутствии файла справки блок работает без неё

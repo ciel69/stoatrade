@@ -4,6 +4,12 @@
 runtime/platform/labels.hb.json, wal_checkpoint(PASSIVE) раз в checkpoint_min и TRUNCATE раз в сутки. Блокировка второй копии: runtime/platform/labels.lock
 (выход с кодом 2). События в шину НЕ публикуются, ключи не читаются, из окружения процесса убираются все секреты (platform.services.labels_secret).
 Свечи - публичный REST Bybit (tb.labels.klines). Планов, ордеров и записей журнала сделок сервис не создаёт.
+
+R2 (Requirement 2.4, 2.11), только при маркере state/knowledge.v2: сервис регистрируется писателем runtime/knowledge.writers/<pid>; DbCorruptError
+(open_rw при старте) и повреждение по knowledge.markers.is_corruption в label_step / capture_step останавливают записи и пишут сигнал
+runtime/knowledge.corrupt, восстановление выполняет сервис цикла. Маркер runtime/knowledge.restoring проверяется в tick, перед каждой меткой
+label_step, в capture_step, checkpoint_step и heartbeat: соединение закрывается, пишется подтверждение runtime/knowledge.restoring.ack/<pid>,
+после снятия маркера соединение открывается заново. Без маркера v2 поведение R1 прежнее.
 """
 import argparse
 import collections
@@ -14,6 +20,7 @@ import sys
 import time
 
 from tb import paths
+from tb.knowledge import markers as KM
 from tb.labels import capture, klines, label, policies, query, schema, store
 from tb.platform import services as S
 
@@ -85,7 +92,12 @@ class Service(object):
         self.cfg = cfg if cfg is not None else capture.load_cfg(root)
         self.clock, self.sleep = clock, sleep
         self.log = log or (lambda m: print(m, flush=True))
-        self.conn = conn if conn is not None else store.open_rw(root)
+        self.v2 = False                 # R2: маркер state/knowledge.v2 и регистрация писателя
+        self.db_state = None            # R2: None | "corrupt" (ждём восстановления) | "restoring" (пауза по маркеру)
+        self.last_error = store.LAST_ERROR
+        self.conn = None
+        self._v2_check()
+        self.conn = conn if conn is not None else self._open()
         self.limiter = limiter
         if fetch is None:
             self.limiter = self.limiter or klines.Limiter(float(self.cfg.get("max_rps", 5)))
@@ -102,11 +114,82 @@ class Service(object):
         self.t_trunc = self.t0
         self.pause_until = 0.0
         self.bad_lines = 0
-        self.last_error = store.LAST_ERROR
+        self.last_error = schema.DB_CORRUPT if self.db_state == "corrupt" else store.LAST_ERROR
         self.rate_events = collections.deque()
         self.req_samples = collections.deque()
         self.stats = {}
         self.sync_warn = store.sync_dir_warning(root)
+
+    # ---- R2: защита базы знаний (только при маркере state/knowledge.v2; без него методы ничего не меняют)
+    def _v2_check(self):
+        if not self.v2 and KM.has_v2(self.root):
+            self.v2 = True
+            KM.register_writer(self.root, "labels")
+        return self.v2
+
+    def _open(self):
+        """open_rw; при маркере восстановления - пауза и подтверждение, при DbCorruptError - сигнал повреждения. -> соединение или None."""
+        try:
+            conn = store.open_rw(self.root)
+        except store.KnowledgeRestoring:
+            self.db_state = "restoring"
+            self._ack()
+            return None
+        except store.DbCorruptError as e:
+            self._corrupt("open_rw", e)
+            return None
+        if self.db_state is not None:
+            self.log("labels: база знаний снова доступна, записи возобновлены")
+            KM.remove(os.path.join(KM.ack_dir(self.root), str(os.getpid())))
+        self.db_state = None
+        return conn
+
+    def _ack(self):
+        if self.v2 and not KM.has_ack(self.root):
+            KM.ack(self.root)
+
+    def _close_conn(self):
+        if self.conn is not None:
+            try:
+                self.conn.close()
+            except sqlite3.Error:
+                pass
+            self.conn = None
+
+    def _restoring_check(self):
+        """Маркер runtime/knowledge.restoring: закрыть соединение, подтвердить, записи на паузе. -> True, если маркер есть."""
+        if not KM.restoring(self.root):
+            return False
+        if self.db_state != "restoring":
+            self.log("labels: идёт восстановление базы знаний: соединение закрыто, записи на паузе")
+        self._close_conn()
+        self.db_state = "restoring"
+        self._ack()
+        return True
+
+    def _corrupt(self, where, e):
+        """DbCorruptError: остановить записи, закрыть соединение, сигнал runtime/knowledge.corrupt для сервиса цикла (он один восстанавливает)."""
+        self._close_conn()
+        if self.db_state != "corrupt":
+            self.log("labels: база знаний повреждена (DB_CORRUPT в %s: %s): записи остановлены до восстановления" % (where, type(e).__name__))
+            try:
+                KM.write_corrupt(self.root, schema.DB_CORRUPT, where=where, now=self.clock())
+            except OSError:
+                pass
+        self.db_state = "corrupt"
+        self.last_error = schema.DB_CORRUPT
+
+    def _is_corrupt_v2(self, e):
+        return self.v2 and KM.is_corruption(e)
+
+    def _ensure_conn(self):
+        """Соединение есть или открыто заново (после снятия маркера восстановления / сигнала повреждения). -> bool."""
+        if self.conn is not None:
+            return True
+        if self.db_state == "corrupt" and KM.read_corrupt(self.root) is not None:
+            return False                                  # ждём восстановления сервисом цикла (он снимает сигнал)
+        self.conn = self._open()
+        return self.conn is not None
 
     # ---- свечи
     def _real_fetch(self, sym, interval, start_s, end_s):
@@ -128,10 +211,15 @@ class Service(object):
     def capture_step(self, now):
         if self.t_capture is not None and now - self.t_capture < float(self.cfg.get("capture_every_s", 15)):
             return None
+        if self._restoring_check() or self.conn is None:
+            return None
         self.t_capture = now
         try:
             r = capture.poll(self.conn, self.root, self.cfg, now)
         except (sqlite3.Error, OSError) as e:
+            if self._is_corrupt_v2(e):
+                self._corrupt("capture_step", e)
+                return None
             self.last_error = type(e).__name__
             self.log("labels: захват не удался (%s)" % type(e).__name__)
             return None
@@ -142,7 +230,15 @@ class Service(object):
         """Разметить до label_batch созревших меток. -> число обработанных."""
         if now < self.pause_until:
             return 0
-        rows = label.due(self.conn, now, int(self.cfg.get("label_batch", 20)))
+        if self._restoring_check() or self.conn is None:
+            return 0
+        try:
+            rows = label.due(self.conn, now, int(self.cfg.get("label_batch", 20)))
+        except sqlite3.Error as e:
+            if self._is_corrupt_v2(e):
+                self._corrupt("label_step", e)
+                return 0
+            raise
         n = 0
         t_step = self.clock()
         budget = float(self.cfg.get("label_budget_s", LABEL_BUDGET_S))
@@ -152,9 +248,14 @@ class Service(object):
                 break
             if el >= HB_EVERY_S:
                 self.heartbeat(now + el)
+            if self._restoring_check() or self.conn is None:   # R2: маркер проверяется перед каждой меткой пачки (проход до LABEL_BUDGET_S)
+                break
             try:
                 st = label.label_one(self.conn, self.root, row, self.cfg, self.pols, self.geom, self.fetch, self.btc, now)
             except Exception as e:  # noqa: BLE001 - сбой одной метки не роняет сервис; транзакция уже откатилась
+                if self._is_corrupt_v2(e):
+                    self._corrupt("label_step", e)
+                    break
                 self.last_error = type(e).__name__
                 self.log("labels: %s не размечена (%s)" % (row["key"], type(e).__name__))
                 try:
@@ -172,6 +273,8 @@ class Service(object):
         return n
 
     def checkpoint_step(self, now):
+        if self._restoring_check() or self.conn is None:
+            return
         if now - self.t_trunc >= DAY_S:
             self.t_trunc = self.t_ckpt = now
             self._ckpt("TRUNCATE")
@@ -193,12 +296,16 @@ class Service(object):
         if not force and self.t_hb is not None and now - self.t_hb < HB_EVERY_S:
             return
         self.t_hb = now
-        if force or self.t_stats is None or now - self.t_stats >= STATS_EVERY_S:
+        self._restoring_check()
+        if self.conn is not None and (force or self.t_stats is None or now - self.t_stats >= STATS_EVERY_S):
             self.t_stats = now
             try:
                 self.stats = query.heartbeat_stats(self.conn, now, self.cfg.get("coverage_fields"))
             except sqlite3.Error as e:
-                self.last_error = type(e).__name__
+                if self._is_corrupt_v2(e):
+                    self._corrupt("heartbeat", e)
+                else:
+                    self.last_error = type(e).__name__
         while self.rate_events and self.rate_events[0] < now - DAY_S:
             self.rate_events.popleft()
         tot = self._req_total()
@@ -216,12 +323,16 @@ class Service(object):
               "failed_24h": st.get("failed_24h"), "no_data_24h": st.get("no_data_24h"), "rate_limited_24h": len(self.rate_events), "req_per_min": rpm,
               "bad_lines": self.bad_lines, "last_error": self.last_error or store.LAST_ERROR, "db_mb": db_mb,
               "missing_share_24h": st.get("missing_share_24h"), "warnings": warnings, "enabled": bool(self.cfg.get("enabled", True))}
+        if self.v2:
+            hb["v2"] = True
+            hb["db_state"] = self.db_state
         S.write_hb("labels", hb, root=self.root, now=now)
 
     def tick(self, now=None):
         now = self.clock() if now is None else now
         n = 0
-        if self.cfg.get("enabled", True):
+        self._v2_check()
+        if self.cfg.get("enabled", True) and not self._restoring_check() and self._ensure_conn():
             self.capture_step(now)
             n = self.label_step(now)
             self.checkpoint_step(now)
@@ -229,10 +340,9 @@ class Service(object):
         return n
 
     def close(self):
-        try:
-            self.conn.close()
-        except sqlite3.Error:
-            pass
+        self._close_conn()
+        if self.v2:
+            KM.unregister_writer(self.root)
 
 
 def run(root, cfg=None, fetch=None, btc_cache=None, limiter=None, clock=time.time, sleep=time.sleep, stop=lambda: False, max_seconds=0.0, log=None):

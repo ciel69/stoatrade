@@ -1,6 +1,7 @@
 """Мост сканера: хвост runtime/hot_events.jsonl -> шина (03 п. 3.3 scanner_signal). Владелец: WP5.
 
-Белый список полей: kind (из bus.SCANNER_KINDS), px, score, dir, range_5m_pct, ret_5m_pct, turn_surge_5m, spread_bps, funding_pct, idea, wake.
+Белый список полей: kind (из bus.SCANNER_KINDS), px, score, dir, range_5m_pct, ret_5m_pct, turn_surge_5m, spread_bps, funding_pct, chg_24h_pct,
+turn_24h_musd, idea, wake.
 Любой текст сканера (reasons, note, idea_note) и неизвестные типы отбрасываются: внешний текст в шину не попадает. Позиция в файле хранится в
 памяти; при старте читается только новое (с конца файла), чтобы не заливать шину историей.
 """
@@ -14,7 +15,7 @@ from tb.core import bus
 _SYM = re.compile(r"^[A-Z0-9]{2,20}$")
 _IDEA = re.compile(r"^I\d+$")
 NUM_KEYS = (("price", "px"), ("score", "score"), ("range_5m_pct", "range_5m_pct"), ("ret_5m_pct", "ret_5m_pct"), ("turn_surge_5m", "turn_surge_5m"),
-            ("spread_bps", "spread_bps"), ("funding_pct", "funding_pct"))
+            ("spread_bps", "spread_bps"), ("funding_pct", "funding_pct"), ("chg_24h_pct", "chg_24h_pct"), ("turn_24h_musd", "turn_24h_musd"))
 
 
 class ScanBridge(object):

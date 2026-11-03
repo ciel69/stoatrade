@@ -1,13 +1,14 @@
 """`./tb memory <команда>`: similar | stats | add | show | sync | migrate | coverage | verify | review-queue | review | lesson | backtest | compare. Вывод JSON одной строкой (--text: кратко для человека).
 
-Код возврата: 0 успех, 1 verify нашёл проблему, 2 ошибка использования/валидации. Сеть и биржа не используются; пишутся только state/cases.jsonl и state/lessons.jsonl.
+Код возврата: 0 успех, 1 verify нашёл проблему, 2 ошибка использования/валидации. Сеть и биржа не используются; пишутся только state/cases.jsonl и state/lessons.jsonl
+(`lesson diagnose` ничего не пишет в state/: текст или --json, отчёт по --out только в runtime/).
 """
 import argparse
 import json
 import sys
 import time
 
-from tb.memory import agg, backtest, cases, cfg as memcfg, features, lessons, migrate, privacy, query, review, similar
+from tb.memory import agg, backtest, cases, cfg as memcfg, diagnose, features, lessons, migrate, privacy, query, review, similar
 
 
 def _out(obj, text=False, lines=None):
@@ -205,6 +206,11 @@ def cmd_lesson(a, root, cfg):
         _out({"ok": True, "lesson_id": l["lesson_id"], "status": l["status"]})
     elif act == "refresh":
         _out({"changes": lessons.refresh(root, cases.load(root), cfg, now, dry_run=a.dry_run)})
+    elif act == "diagnose":
+        rep = diagnose.diagnose(root, cfg, now)          # только чтение state/; запись лишь по --out в runtime/
+        if a.out:
+            rep["out"] = diagnose.write_out(rep, a.out, root)
+        _out(rep, not a.json, diagnose.render(rep) + (["отчёт: %s" % rep["out"]] if a.out else []))
     elif act == "propose":
         cands = lessons.propose(root, cases.load(root), cfg, now)
         made = []
@@ -270,7 +276,7 @@ def build_parser():
     rv.add_argument("case_id")
     rv.add_argument("--file", required=True)
     ls = sub.add_parser("lesson")
-    ls.add_argument("action", choices=("list", "show", "add", "confirm", "reject", "expire", "merge", "refresh", "propose"))
+    ls.add_argument("action", choices=("list", "show", "add", "confirm", "reject", "expire", "merge", "refresh", "propose", "diagnose"))
     ls.add_argument("id", nargs="?")
     ls.add_argument("--file")
     ls.add_argument("--into")
@@ -278,6 +284,8 @@ def build_parser():
     ls.add_argument("--dry-run", action="store_true")
     ls.add_argument("--write", action="store_true")
     ls.add_argument("--text", action="store_true")
+    ls.add_argument("--json", action="store_true", help="diagnose: JSON вместо текста")
+    ls.add_argument("--out", help="diagnose: записать отчёт JSON в файл внутри runtime/")
     return p
 
 

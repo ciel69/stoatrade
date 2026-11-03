@@ -128,8 +128,9 @@ class TestEconomics(Base):
                                                 {"t": day0 + 100, "usd": 0.004, "in": 100, "out": 50, "provider": "ds"}])
         rows = []
         for i in range(30):                                               # 20 выигрышей +1R и 10 проигрышей -0.5R: средний R > 0, p ниже alpha
-            rows += self.trade(i, "reclaim-vol", 1.0 if i < 20 else -0.5, 0.2 if i < 20 else -0.1, iso(NOW - 600))
-        for i in range(2):                                                # вчера: в результат дня не входит, в выборку гипотезы входит
+            hyp = "reclaim-level" if i % 2 else "level_reclaim"           # два написания одного семейства (имя сетапа) сводятся при чтении (Requirement 19.3)
+            rows += self.trade(i, hyp, 1.0 if i < 20 else -0.5, 0.2 if i < 20 else -0.1, iso(NOW - 600))
+        for i in range(2):                                                # вчера: в результат дня не входит, в выборку гипотезы входит; неизвестный тег -> other
             rows += self.trade(i, "probe-x", 0.5, 0.1, iso(NOW - 86400))
         with open(self.R("state", "trades.jsonl"), "a", encoding="utf-8") as f:
             f.write("".join(json.dumps(r) + "\n" for r in rows))
@@ -140,9 +141,9 @@ class TestEconomics(Base):
             self.assertEqual(eco["pnl_paper_day"], 3.0)
             self.assertAlmostEqual(eco["net_paper_day"], 2.996)
             ex = b["experiments"]
-            self.assertEqual([x["hyp"] for x in ex["confirmed"]], ["reclaim-vol"])
+            self.assertEqual([x["hyp"] for x in ex["confirmed"]], ["reclaim-level"])
             self.assertEqual(ex["confirmed"][0]["n"], 30)
-            self.assertEqual([x["hyp"] for x in ex["open"]], ["probe-x"])
+            self.assertEqual([x["hyp"] for x in ex["open"]], ["other"])
             self.assertEqual(ex["min_n"], 30)
 
     def test_min_trades_quota(self):

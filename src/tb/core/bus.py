@@ -59,7 +59,10 @@ EVENT_TYPES = {
     "brain_swap": PRI_INFO,            # WP11-C2/интеграция: смена модели/команды мозга или запасной профиль: kind, from, to, rev, by
     "day_state": PRI_INFO,             # WP14: переход состояния дня (stopped/starting/running/closing/halted)
     "news_flash": PRI_WAKE,            # быстрые новости (intel/flash.py): класс, подсказка направления, важность, источник; БЕЗ текста заголовка
+    "rulebook_promoted": PRI_INFO,     # R2.7: новая версия rulebook с правилом active (ver, rule, trial); мозг не будит
+    "rulebook_rollback": PRI_INFO,     # R2.8: откат правила сторожем (ver, rule, code; n, mean_r, p); мозг не будит
 }
+INFO_ONLY_TYPES = ("rulebook_promoted", "rulebook_rollback")     # всегда info: явный pri="wake" источника или правка файла не будят мозг
 WAKE_MILESTONES = ("r_plus_1", "r_minus_05", "near_target", "target_filled", "hold_expiring", "hold_expired")      # hold_expiring/hold_expired: срок удержания подходит/вышел, таймер не закрывает, решает мозг
 SCANNER_KINDS = ("range_5m", "turnover_surge", "hot_enter", "patrol", "idea_near", "idea_level", "idea_invalidated", "idea_tp", "idea_expired", "idea_stale",
                  "oi_spike", "oi_flush", "funding_extreme", "liq_cascade",           # деривативы (hotscan.DerivGate, marketdata/liqwatch.py)
@@ -107,7 +110,7 @@ _RE_ROT = re.compile(r"^events-(\d{8})(?:-(\d+))?\.jsonl$")
 _ENUM_DIR = ("enum", ("up", "down", "long", "short"))
 D_FIELDS = {
     "scanner_signal": {"kind": ("enum", SCANNER_KINDS), "px": "num", "score": "num", "dir": _ENUM_DIR, "range_5m_pct": "num", "ret_5m_pct": "num",
-                       "turn_surge_5m": "num", "spread_bps": "num", "funding_pct": "num", "idea": "idea", "stale": ("enum", STALE_CODES), "wake": "bool", "big": "bool",      # big: крупное событие (каскад от big_x порогов монеты)
+                       "turn_surge_5m": "num", "spread_bps": "num", "funding_pct": "num", "chg_24h_pct": "num", "turn_24h_musd": "num", "idea": "idea", "stale": ("enum", STALE_CODES), "wake": "bool", "big": "bool",      # big: крупное событие (каскад от big_x порогов монеты)
                        "oi_chg_15m_pct": "num", "oi_chg_1h_pct": "num", "liq_usd": "num", "liq_side": ("enum", ("long", "short")),
                        "cvd_pct": "num", "wall_usd": "num", "wall_dist_pct": "num", "wall_side": ("enum", ("bid", "ask")), "xex_bps": "num"},
     "plan_armed": {"rev": "num", "codes": "ids", "preview": "numdict"},
@@ -140,6 +143,13 @@ D_FIELDS = {
                    "verdict": ("enum", ("ok", "attention", "alarm"))},
     "day_state": {"state": ("enum", ("stopped", "starting", "running", "closing", "halted")), "step": "id", "code": "id"},
     "news_flash": {"cls": ("enum", FLASH_CLASSES), "dir": ("enum", ("up", "down", "none")), "imp": "num", "src": "id", "age_s": "num", "id": "id"},
+    "rulebook_promoted": {"ver": "id", "rule": "id", "trial": "id"},
+    "rulebook_rollback": {"ver": "id", "rule": "id", "code": "id", "n": "num", "mean_r": "num", "p": "num"},
+}
+# защищённые поля `d`: при превышении MAX_EVENT_BYTES `sanitize` выбрасывает их только после всех прочих (R2 Requirement 7.10):
+# kind, dir и признаки правил `memory.features.rule_features` (их потеря молча выключила бы правило)
+D_PROTECTED = {
+    "scanner_signal": ("kind", "dir", "range_5m_pct", "ret_5m_pct", "turn_surge_5m", "chg_24h_pct", "spread_bps", "funding_pct", "turn_24h_musd"),
 }
 
 
@@ -227,8 +237,8 @@ def sanitize(event):
     """Очищает событие по белым спискам -> {"type","pri","plan"?,"sym"?,"d"}. Без seq и ts (их ставит `emit`).
 
     Неизвестный `type` -> ValueError. Неверные plan/sym отбрасываются, поля `d` вне списка типа и значения не того вида отбрасываются,
-    свободный текст (строки не из перечисления и не идентификаторы) не проходит. Если строка длиннее MAX_EVENT_BYTES, самые длинные поля
-    `d` отбрасываются; не помещается и так -> ValueError."""
+    свободный текст (строки не из перечисления и не идентификаторы) не проходит. Если строка длиннее MAX_EVENT_BYTES, поля `d` отбрасываются
+    по убыванию длины: сначала вне D_PROTECTED типа, затем защищённые; не помещается и так -> ValueError. Типы INFO_ONLY_TYPES всегда info."""
     if not isinstance(event, dict):
         raise ValueError("событие должно быть dict")
     type_ = event.get("type")
@@ -243,7 +253,7 @@ def sanitize(event):
             if ok:
                 d[k] = v
     pri = event.get("pri")
-    if pri not in PRIORITIES:
+    if pri not in PRIORITIES or type_ in INFO_ONLY_TYPES:
         pri = default_pri(type_, d)
     d.pop("wake", None)               # подсказка источника, в конверт не пишется
     out = {"type": type_, "pri": pri}
@@ -254,8 +264,10 @@ def sanitize(event):
     if isinstance(sym, str) and _RE_SYMBOL.match(sym):
         out["sym"] = sym
     out["d"] = d
+    protected = D_PROTECTED.get(type_, ())
     while len(_probe(out)) > MAX_EVENT_BYTES and d:
-        d.pop(max(d, key=lambda k: len(json.dumps(d[k], separators=(",", ":")))))
+        pool = [k for k in d if k not in protected] or list(d)
+        d.pop(max(pool, key=lambda k: len(json.dumps(d[k], separators=(",", ":")))))
     if len(_probe(out)) > MAX_EVENT_BYTES:
         raise ValueError("событие длиннее %d байт" % MAX_EVENT_BYTES)
     return out

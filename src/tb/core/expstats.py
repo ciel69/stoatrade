@@ -17,6 +17,7 @@ import re
 
 from tb import paths
 from tb.core import decisions as _decisions
+from tb.core import hyps as _hyps
 
 MIN_N = 30
 ALPHA = 0.05
@@ -66,7 +67,7 @@ def _norm(t):
     return {"id": t.get("id"), "plan_id": plan_id, "parent": parent, "plan_rev": t.get("plan_rev"),
             "rules_key": t.get("prereg_hash") or t.get("rules_hash") or t.get("plan_rev"),
             "exp": t.get("exp") or _tag(tags, "exp"), "var": t.get("var") or _tag(tags, "var"),
-            "setup": t.get("setup") or _tag(tags, "setup"), "hyp": t.get("hyp"),
+            "setup": t.get("setup") or _tag(tags, "setup"), "hyp": _hyps.family(t.get("hyp"))[0],     # семейство при чтении (Requirement 19.3)
             "agent": _dot_tag(tags, "agent"), "model": _dot_tag(tags, "model"), "mem": _dot_tag(tags, "mem") or _tag(tags, "mem"),
             "blackout": "blackout" if "blackout" in tags else "обычные",      # вход в макро-окне (paper, blackout_mode=warn): отдельный срез
             "mode": t.get("mode") or "live", "sym": t.get("sym"), "stype": t.get("stype") or t.get("session"), "side": t.get("side"),
@@ -295,19 +296,41 @@ def group_stats(trades, by="exp", min_n=MIN_N, alpha=ALPHA):
     """-> [{"key","mode","n","win_rate","avg_r","se_r","pf","fees","small","mark",...,"k","alpha_adj","below_alpha"}] по группам.
 
     Группы делятся по (ключ, mode): живое и бумажное не смешиваются. k = число групп в запросе; alpha_adj = alpha / k (Бонферрони).
+    Для by="hyp" k считается по семействам (hyp_k, Requirement 19.4), а `other` и «(нет)» не получают below_alpha.
     p-значение (H0: средний R = 0) считается только при n >= min_n; below_alpha = p < alpha_adj, но это НЕ вердикт."""
     groups = {}
     for t in trades:
         for k in _keys(t, by):
             groups.setdefault((k, t["mode"]), []).append(t)
     rows = [_row(k, mode, g, min_n) for (k, mode), g in sorted(groups.items())]
-    k = len(rows)
+    k = hyp_k(trades, min_n) if by == "hyp" else len(rows)
     adj = bonferroni(k, alpha)
     for r in rows:
         r["k"], r["alpha_adj"] = k, adj
         if r["p"] is not None:
-            r["below_alpha"] = r["p"] < adj
+            r["below_alpha"] = False if (by == "hyp" and r["key"] in NO_CONFIRM_HYPS) else r["p"] < adj
     return rows
+
+
+NO_CONFIRM_HYPS = (_hyps.OTHER, "(нет)")      # не подтверждаются и в K не входят
+
+
+def hyp_k(trades, min_n=MIN_N):
+    """K подтверждения гипотез (Requirement 19.4): число семейств, кроме `other` и сделок без тега, у которых на бумаге n >= min_n; не меньше 1.
+    trades: нормализованные сделки (load_trades, поле hyp уже семейство); режимы, кроме paper, на K не влияют."""
+    cnt = {}
+    for t in trades:
+        h = t.get("hyp")
+        if t.get("mode") == "paper" and h not in (None, "") and h not in NO_CONFIRM_HYPS:
+            cnt[h] = cnt.get(h, 0) + 1
+    return max(1, sum(1 for v in cnt.values() if v >= min_n))
+
+
+def hyp_confirmed(row, min_n=MIN_N):
+    """Общее правило подтверждения гипотезы по строке group_stats(by="hyp"): бумага, семейство (не `other`), n >= min_n, средний R > 0 и p ниже alpha / K.
+    Не вердикт, а повод повторять приоритетно (досье, `./tb exp`, дашборд)."""
+    return bool(isinstance(row, dict) and row.get("mode") == "paper" and row.get("key") not in NO_CONFIRM_HYPS and (row.get("n") or 0) >= min_n
+                and row.get("below_alpha") and (row.get("avg_r") or 0) > 0)
 
 
 # ---------------------------------------------------------------- сравнение вариантов

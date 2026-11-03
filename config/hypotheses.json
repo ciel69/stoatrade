@@ -1,0 +1,27 @@
+{
+  "schema": "tb.hypotheses/1",
+  "_comment": "Словарь гипотез (R2, Requirement 19). families: закрытый список семейств тега hyp = hyp карточек config/playbook.json + семейства сетапов brain/validate.py:SETUPS без своей карточки + other. aliases: известные варианты написания -> семейство; ключи в нормализованной форме (нижний регистр, '-' вместо '_'). Порядок нормализации tb.core.hyps.family: регистр и _ -> -, точное совпадение с семейством, aliases, самое длинное семейство-префикс с '-', иначе other. policy_map: семейство -> теневая политика R1 (config/shadow_policies.json) и виды сигналов для справки меток. Журнал сделок не переписывается: нормализация при чтении.",
+  "families": [
+    "reclaim-level", "sweep-reject", "range-fade", "breakout-retest", "trend-pullback", "oi-flush-reclaim", "oi-build-squeeze",
+    "funding-crowded-reversal", "liq-cascade-reclaim", "cvd-absorption", "wall-defense", "news-listing-retest", "news-negative-short", "macro-wait",
+    "level-reject", "momentum-chase",
+    "other"
+  ],
+  "aliases": {
+    "level-reclaim": "reclaim-level",
+    "none": "other",
+    "vol-reclaim": "reclaim-level",
+    "fade-s5m-res-range": "range-fade",
+    "range-top-reject-lvl": "range-fade",
+    "patrol-breakout": "breakout-retest",
+    "patrol-retest": "breakout-retest",
+    "funding-squeeze-reclaim": "funding-crowded-reversal",
+    "funding-extreme-short": "funding-crowded-reversal",
+    "reclaim-funding": "funding-crowded-reversal"
+  },
+  "policy_map": {
+    "liq-cascade-reclaim": {"policy": "P4", "kinds": ["liq_cascade"]},
+    "oi-flush-reclaim": {"policy": "P4", "kinds": ["oi_flush"]},
+    "oi-build-squeeze": {"policy": "P2", "kinds": ["oi_spike"]}
+  }
+}

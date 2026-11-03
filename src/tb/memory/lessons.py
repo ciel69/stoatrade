@@ -12,6 +12,7 @@ import time
 
 from tb import paths
 from tb.core import expstats
+from tb.logic.learn_cond import cmp_val, matches_features  # noqa: F401  (реэкспорт: lessons.matches_features, lessons._cmp_val)
 from tb.memory import agg, cases, chain, privacy, similar
 
 SCHEMA = "tb.lesson/1"
@@ -137,25 +138,11 @@ def validate_claim(cl):
     return errs
 
 
-def _cmp_val(op, v, x):
-    if x is None:
-        return False
-    if op == "=":
-        return x == v
-    if op == "in":
-        return x in v
-    if isinstance(x, bool) or not isinstance(x, (int, float)):
-        return False
-    return x >= v if op == ">=" else x <= v
+_cmp_val = cmp_val                                   # прежнее имя (сравнение перенесено в tb.logic.learn_cond)
 
 
 def matches(cond, case):
-    vec = similar.vector(case)
-    return all(_cmp_val(c["op"], c["value"], vec.get(c["feature"])) for c in cond)
-
-
-def matches_features(cond, feats):
-    return all(_cmp_val(c["op"], c["value"], feats.get(c["feature"])) for c in cond)
+    return matches_features(cond, similar.vector(case))
 
 
 def _domain(c):

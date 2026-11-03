@@ -446,7 +446,7 @@ CREATE TABLE learn_events(seq INTEGER PRIMARY KEY, ts TEXT NOT NULL, step TEXT N
 
 ```json
 {
-  "schema": "tb.learnloop_cfg/1", "enabled": true, "allow_size_rules": false,
+  "schema": "tb.learnloop_cfg/1", "enabled": false, "allow_size_rules": false,
   "promotion": {"mode": "off", "warmup_days": 7, "warmup_window_days": 10, "warmup_stuck_days": 21, "backup_max_age_h": 24, "watch_fresh_h": 3, "step_error_max": 3,
                 "loss_cap_wait_days": 14},
   "lease": {"lease_h": 6},
