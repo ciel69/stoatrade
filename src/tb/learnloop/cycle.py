@@ -31,6 +31,8 @@ from tb.knowledge import store2
 from tb.labels import store as LST
 from tb.learnloop import candidates as CA
 from tb.learnloop import clusters as CL
+from tb.learnloop import promote as PR
+from tb.learnloop import reconcile as RC
 from tb.learnloop import trial as TR
 from tb.learnloop import versions as V
 
@@ -167,9 +169,9 @@ def default_steps():
         Step("holdouts", "daily", step_holdouts),
         Step("register", "daily", TR.step_register),                                     # trial.register_pending для новых уроков hyp
         Step("verdicts", "hourly", TR.step_verdicts, interval="verdict_s", group="verdict"),
-        Step("promote", "hourly", stub(15), interval="verdict_s", group="verdict", stub=True, task=15),   # пересечения, LOSS_CAP, promotion_ready
+        Step("promote", "hourly", PR.step_promote, interval="verdict_s", group="verdict"),        # пересечения, LOSS_CAP, лимит, promotion_ready
         Step("bounds", "hourly", step_bounds, interval="verdict_s"),
-        Step("reconcile", "hourly", stub(15), interval="reconcile_s", stub=True, task=15),
+        Step("reconcile", "hourly", RC.step_reconcile, interval="reconcile_s"),                   # уроки меток по rule_rows/trials
         Step("watch", "hourly", stub(16), interval="watch_s", group="watch", stub=True, task=16),        # обновляет runtime/watch_lease.json
         Step("hypref", "hourly", stub(36), interval="hypref_s", stub=True, task=36),
     ]

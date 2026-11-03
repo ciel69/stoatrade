@@ -220,11 +220,11 @@ class TestStartup(Base):
         rep = s.cycle.last_report
         self.assertEqual(rep["errors"], {}, rep)
         self.assertEqual(rep["ran"]["menu"], "NO_DATA")
-        for n in ("register", "verdicts"):                                   # задача 14: настоящие шаги испытаний
+        for n in ("register", "verdicts", "promote", "reconcile"):           # задачи 14, 15: настоящие шаги
             self.assertEqual(rep["ran"][n], "OK")
-        for n in ("promote", "reconcile", "watch", "hypref"):
+        for n in ("watch", "hypref"):
             self.assertEqual(rep["ran"][n], CY.STUB)
-        self.assertEqual(sorted(s.cycle.stubs()), sorted(["promote", "reconcile", "watch", "hypref"]))
+        self.assertEqual(sorted(s.cycle.stubs()), sorted(["watch", "hypref"]))
         self.assertIn("daily", [b["reason"] for b in store2.list_backups(self.root)])
         self.assertEqual(self.q("SELECT step, code FROM learn_events WHERE step='menu'"), [("menu", "NO_DATA")])
         _a, hb = S.read_hb("learnloop", self.root, clock.t)
