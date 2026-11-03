@@ -196,6 +196,57 @@ class TestMigrate(Base):
         self.assertEqual(s["decision"]["why"], "[redacted]")
 
 
+class TestRulebookVer(Base):
+    """R2 (задача 18): src.rulebook_ver = версия rulebook из записи rule_eval плана в журнале решений (момент решения); без записи — «до R2»."""
+
+    def add_trade(self, tid, plan_id, ts="2026-10-28T10:00:00Z"):
+        with open(os.path.join(self.root, "state", "trades.jsonl"), "a", encoding="utf-8") as f:
+            f.write(json.dumps({"ev": "open", "id": tid, "ts_open": ts, "sym": "ETH", "side": "long", "entry": 100, "sl": 99, "tp": 103, "mode": "paper",
+                                "plan_id": plan_id}) + "\n")
+            f.write(json.dumps({"ev": "close", "id": tid, "ts_close": "2026-10-28T11:00:00Z", "r": 1.0, "reason": "tp"}) + "\n")
+
+    def rule_eval(self, plan_id, ver):
+        decisions.append({"actor": "brain:api", "kind": "note", "what": "rule_eval", "why": "правила rulebook на подаче плана", "plan": plan_id,
+                          "basis": {"role": "entry_scout", "rule_hits": [], "rule_eval_ids": [], "feat_missing_ids": [], "rulebook_ver": ver},
+                          "res": {"ok": True, "code": "OK"}}, root=self.root)
+
+    def test_version_from_rule_eval_of_plan(self):
+        self.add_trade("RB-1", "PL-RB-1")
+        self.rule_eval("PL-RB-1", "R-0002")
+        self.rule_eval("PL-RB-1", "R-0003")             # повторная запись плана: берётся первая (момент первой подачи)
+        migrate.migrate(self.root)
+        c = self.by_journal("RB-1")
+        self.assertEqual(c["src"]["rulebook_ver"], "R-0002")
+        self.assertTrue(cases.verify(self.root)["ok"])
+
+    def test_no_record_means_pre_r2(self):
+        self.add_trade("RB-2", "PL-RB-2")
+        self.rule_eval("PL-OTHER", "R-0002")
+        migrate.migrate(self.root)
+        self.assertNotIn("rulebook_ver", self.by_journal("RB-2")["src"])
+        for c in cases.load(self.root):                   # случаи из снимка (до R2) остаются без версии и валидны
+            if (c.get("refs") or {}).get("journal_id") != "RB-2":
+                self.assertNotIn("rulebook_ver", c["src"])
+        self.assertTrue(cases.verify(self.root)["ok"])
+
+    def test_bad_version_ignored(self):
+        self.add_trade("RB-3", "PL-RB-3")
+        self.rule_eval("PL-RB-3", "R-1; drop")
+        self.add_trade("RB-4", "PL-RB-4")
+        self.rule_eval("PL-RB-4", None)
+        migrate.migrate(self.root)
+        self.assertNotIn("rulebook_ver", self.by_journal("RB-3")["src"])
+        self.assertNotIn("rulebook_ver", self.by_journal("RB-4")["src"])
+
+    def test_existing_case_not_rewritten(self):
+        self.add_trade("RB-5", "PL-RB-5")
+        migrate.migrate(self.root)
+        raw = sha(cases.cases_path(self.root))
+        self.rule_eval("PL-RB-5", "R-0002")               # запись появилась после записи случая: случай неизменен
+        self.assertEqual(migrate.migrate(self.root)["written"], 0)
+        self.assertEqual(sha(cases.cases_path(self.root)), raw)
+
+
 class TestSearchOnMigrated(Base):
     def test_dood_like_query_returns_dood_and_beat_first(self):
         migrate.migrate(self.root)

@@ -238,7 +238,7 @@ class TestUsageAndSignature(Root):
 
     def test_signature_changes(self):
         s0 = L.source_signature(self.root)
-        self.assertEqual(s0, (None, None, None, None, None))
+        self.assertEqual(s0, (None,) * 10)          # R2.6: + lessons.jsonl, swaps.jsonl, knowledge.sqlite, -wal, маркер восстановления
         self.write_trades(tr(1))
         s1 = L.source_signature(self.root)
         self.assertNotEqual(s0, s1)

@@ -5,6 +5,7 @@
 изменилось (один общий цикл раз в TICK_S секунд на всех клиентов, а не опрос от каждого). Раз в HEARTBEAT_S секунд тема `link` (клиент по ней видит, что связь жива). Клиент -> сервер: {"op":"ping"} -> {"topic":"pong"}.
 Опроса нет: при обрыве клиент переподключается сам и получает свежие снимки. Команды управления (только старт и мягкая остановка дня в paper|testnet|observe) идут тем же сокетом
 операцией {"op":"ctl",...} через мост `tb.dash2.ctlbridge` (тот же конвейер ctl, CSRF соединения из hello, белый список, лимит частоты, аудит); live и всё опасное остаются за старым дашбордом.
+Вкладка «Память» (R2): чтение memory_cases|memory_lessons|memory_rules|memory_path и аварийные действия lesson_reject|rule_disable|rules_disable_all — `tb.dash2.memory_ops`.
 Защита: слушаем только 127.0.0.1, проверка Host и Origin, не больше MAX_CLIENTS сокетов, лимит размера входящего сообщения, никаких полей вне белых списков тем.
 """
 import argparse
@@ -17,7 +18,7 @@ import time
 from http import HTTPStatus
 
 from tb import paths
-from tb.dash2 import ctlbridge, topics
+from tb.dash2 import ctlbridge, memory_ops, topics
 
 HOST = "127.0.0.1"
 DEFAULT_PORT = 8765        # порт дашборда платформы (svc.dash.port); dev-запуск рядом: --port 8767
@@ -72,6 +73,7 @@ class Hub(object):
         self._heavy_at = {}             # (тема, режим) -> когда собирали
         self.stats = {"connects": 0, "messages": 0, "changes": 0}
         self.bridge = ctlbridge.CtlBridge(root, clock=clock)
+        self.memory = memory_ops.MemoryActions(root, clock=clock)       # аварийные действия вкладки «Память» (CSRF соединения в hello.memory)
         topics._STATE_TTL = max(topics._STATE_TTL, 1.5)       # home и trades за один проход собираются из одного состояния
 
     # ---- сообщения
@@ -127,9 +129,10 @@ class Hub(object):
         broadcast(list(self.clients), msg)
         self.stats["messages"] += len(self.clients)
 
-    def snapshot_messages(self, mode, ctl=None):
+    def snapshot_messages(self, mode, ctl=None, memory=None):
         out = [self._msg("hello", 0, {"topics": sorted(list(topics.TOPICS) + list(topics.MODE_TOPICS)), "tick_s": self.tick_s, "heartbeat_s": self.heartbeat_s,
-                                       "server_ts": round(self.clock(), 3), "mode": mode, "modes": list(topics.MODES), "ctl": ctl or {"enabled": False}})]
+                                       "server_ts": round(self.clock(), 3), "mode": mode, "modes": list(topics.MODES), "ctl": ctl or {"enabled": False},
+                                       "memory": memory or {"actions": []}})]
         out += [self.state[(n, None)]["msg"] for n in sorted(topics.TOPICS) if (n, None) in self.state]
         out += [self.state[(n, mode)]["msg"] for n in sorted(topics.MODE_TOPICS) if (n, mode) in self.state]
         return out
@@ -156,7 +159,7 @@ class Hub(object):
                     if (n, mode) not in self.state:
                         await self._rebuild(n, mode, force=True)
             sent = {k: v["seq"] for k, v in self.state.items()}
-            for m in self.snapshot_messages(mode, self.bridge.open(ws)):
+            for m in self.snapshot_messages(mode, self.bridge.open(ws), self.memory.open(ws)):
                 await ws.send(m)
             self.clients[ws] = mode                  # в рассылку только после снимка: иначе изменение темы обогнало бы hello
             for key in sorted(self.state, key=str):  # тема изменилась, пока шёл снимок: досылаем текущую
@@ -189,11 +192,41 @@ class Hub(object):
                     await self.exp_op(ws, m)
                 elif m.get("op") == "learning":
                     await self.learning_op(ws, m)
+                elif m.get("op") in memory_ops.READ_OPS:
+                    await self.memory_read_op(ws, m)
+                elif m.get("op") in memory_ops.ACTIONS:
+                    await self.memory_action_op(ws, m)
         except ConnectionClosed:                 # клиент закрыл вкладку или оборвал связь: не ошибка сервера
             pass
         finally:
             self.clients.pop(ws, None)
             self.bridge.close(ws)
+            self.memory.close(ws)
+
+    async def memory_read_op(self, ws, m):
+        """Вкладка «Память» по запросу (чтение, R2 задача 17): memory_cases|memory_lessons|memory_rules|memory_path -> `<op>_detail` только этому
+        соединению. Сбой -> {ok:false, state:"error", error:"failed"}, соединение живо."""
+        from tb.dash import model
+        op = m["op"]
+        try:
+            res = await asyncio.to_thread(memory_ops.read, op, self.root, m, None)
+        except Exception:                    # битый журнал или база не должны рвать соединение и ломать остальной дашборд
+            res = {"ok": False, "state": "error", "reason": "не удалось собрать", "error": "failed"}
+        try:
+            await ws.send(self._msg(memory_ops.READ_OPS[op], 0, model.scrub(res)))
+        except Exception:
+            pass
+
+    async def memory_action_op(self, ws, m):
+        """Аварийные действия «Памяти»: lesson_reject (без диалога), rule_disable и rules_disable_all (только с подтверждением рисков) -> `memory_action_result`."""
+        try:
+            res = await asyncio.to_thread(self.memory.handle, ws, m)
+        except Exception:
+            res = {"id": "", "op": str(m.get("op"))[:24], "ok": False, "code": "E_INTERNAL", "msg": memory_ops.MSG["E_INTERNAL"]}
+        try:
+            await ws.send(self._msg(memory_ops.RESULT_TOPIC, 0, res))
+        except Exception:
+            pass
 
     async def plan_op(self, ws, m):
         """Подробности плана по запросу (чтение): ответ `plan_detail` только этому соединению. Идентификатор проверяется в model2.plan_detail."""

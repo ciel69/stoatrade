@@ -37,6 +37,8 @@ def _fold_trades(path):
 PLAN_BRIEF = "plan_brief"                       # decisions what=plan_brief: связь плана с досье и событием, на которых он подан (пишет шлюз при подаче плана)
 RE_BRIEF_ID = re.compile(r"^B-[0-9]{8}-[0-9]{4}-[0-9]{2}$")
 RE_PLAN_ID = re.compile(r"^PL-[A-Za-z0-9-]{1,40}$")
+RULE_EVAL = "rule_eval"                         # decisions kind=note, what=rule_eval: проверка плана правилами rulebook на подаче (шлюз, R2); basis.rulebook_ver
+RE_RULEBOOK_VER = re.compile(r"^R-[0-9]{4,6}$")  # src.rulebook_ver в схеме случая — строка до 8 символов
 
 
 def read_sources(root=None):
@@ -44,16 +46,21 @@ def read_sources(root=None):
     for r in ideas.read_rows(ideas.outcomes_path(root)):
         if r.get("id") is not None:
             outs.setdefault((r.get("kind"), str(r["id"])), []).append(r)
-    decs, links = [], {}
+    decs, links, rbv = [], {}, {}
     try:
         for d in decisions.read(limit=0, root=root):
             if d.get("kind") == "skip":
                 decs.append(d)
             elif d.get("what") == PLAN_BRIEF and isinstance(d.get("plan"), str) and isinstance(d.get("basis"), dict):
                 links.setdefault(d["plan"], d["basis"])          # первая запись плана: досье первой подачи
+            elif d.get("what") == RULE_EVAL and d.get("kind") == "note" and isinstance(d.get("plan"), str) and isinstance(d.get("basis"), dict):
+                v = d["basis"].get("rulebook_ver")
+                if isinstance(v, str) and RE_RULEBOOK_VER.match(v):
+                    rbv.setdefault(d["plan"], v)                 # версия rulebook, с которой шлюз проверил план на подаче (момент решения)
     except (OSError, ValueError):
-        decs, links = [], {}
-    return {"trades": _fold_trades(paths.state("trades.jsonl", root=root)), "ideas": ideas.load_ideas(root=root), "outcomes": outs, "decisions": decs, "plan_links": links}
+        decs, links, rbv = [], {}, {}
+    return {"trades": _fold_trades(paths.state("trades.jsonl", root=root)), "ideas": ideas.load_ideas(root=root), "outcomes": outs, "decisions": decs,
+            "plan_links": links, "plan_rulebook": rbv}
 
 
 def _brief(root, brief_id):
@@ -72,12 +79,16 @@ class Ext(object):
     """Ленивые источники признаков НОВОГО случая сделки: связь плана с досье (decisions plan_brief), spec плана, события шины (trigger_fired, scanner_signal).
     Шина читается один раз и только если понадобилась."""
 
-    def __init__(self, root, links):
-        self.root, self.links = root, links or {}
+    def __init__(self, root, links, rulebook=None):
+        self.root, self.links, self.rulebook = root, links or {}, rulebook or {}
         self._bus = None
 
     def link(self, plan_id):
         return self.links.get(plan_id) or {}
+
+    def rulebook_ver(self, plan_id):
+        """Версия rulebook на момент решения: из первой записи rule_eval плана в журнале решений; нет записи — None (случай «до R2»)."""
+        return self.rulebook.get(plan_id) if isinstance(plan_id, str) else None
 
     def spec(self, plan_id):
         if not isinstance(plan_id, str) or not RE_PLAN_ID.match(plan_id):
@@ -149,6 +160,9 @@ def build_trade_case(tid, t, cfg, root=None, ext=None):
          "result": features.result_from_close(op, cl), "whatif": None, "review": None, "tags": _post_tags(post),
          "flags": (["retro_features"] if sit.get("retro") else []) + (["inj_suspect"] if sus else []),
          "exclude_from_stats": role in (cfg.get("exclude_roles") or [])}
+    rbv = ext.rulebook_ver(plan_id) if ext is not None and plan_id else None
+    if rbv is not None:
+        c["src"]["rulebook_ver"] = rbv                   # R2: версия rulebook на момент решения; без неё случай относится к «до R2»
     return c
 
 
@@ -210,7 +224,7 @@ def plan(root=None, cfg=None, with_signals=False, final_only=False):
            "excluded": [], "with_missing": 0, "errors": [], "updates": {"whatif": 0, "tags": 0}}
     built = []
     trade_ids = set()
-    ext = Ext(root, src.get("plan_links"))
+    ext = Ext(root, src.get("plan_links"), src.get("plan_rulebook"))
     for tid, t in src["trades"]:
         if t["close"] is not None:
             rep["sources"]["trades_closed"] += 1
