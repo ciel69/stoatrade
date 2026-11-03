@@ -8,6 +8,7 @@
 from tb import paths
 from tb.brain import common, validate
 from tb.core import bus
+from tb.core import hyps
 
 MAX_TEXT = {"when": 210, "stop": 120, "target": 120, "inval": 120, "avoid": 120}
 TEXT_FIELDS = ("when", "stop", "target", "inval", "avoid")
@@ -74,8 +75,8 @@ def match(cards, kinds, reg=None, exp=None, k=MAX_CARDS):
         if reg in REGIMES and c["regimes"] and reg not in c["regimes"]:
             continue                                         # режим известен и не тот, для которого карточка
         score = 4.0 * min(len(hit), 2) + (1.0 if (reg in c["regimes"]) else 0.0) + 3.0 / len(c["kinds"])         # узкая карточка (мало видов сигнала) точнее общей
-        e = exp.get(c["hyp"])
-        if e and e.get("confirmed"):
+        e = exp.get(_fam(c["hyp"]))
+        if e and e.get("confirmed"):                         # только подтверждённое семейство: +2 (Requirement 19.7)
             score += 2.0
         scored.append((-score, order, c, hit, e))
     scored.sort(key=lambda t: (t[0], t[1]))
@@ -92,11 +93,21 @@ def match(cards, kinds, reg=None, exp=None, k=MAX_CARDS):
     return out
 
 
+def _fam(hyp):
+    """Семейство тега гипотезы (tb.core.hyps.family); неизвестный тег остаётся как есть, чтобы не склеиваться с другими в `other`."""
+    f, raw = hyps.family(hyp)
+    return hyp if (f is None or raw is not None) else f
+
+
 def exp_index(experiments):
-    """brief.experiments -> {hyp: {n, avg_r, confirmed}} для match."""
+    """brief.experiments -> {семейство: {n, avg_r, confirmed}} для match. Ключ — семейство (Requirement 19.3); справка меток (ref) в индекс
+    не входит: она не меняет confirmed и ранг карточек (Requirement 19.5). Подтверждённая строка не затирается открытой того же семейства."""
     idx = {}
     for key, flag in (("confirmed", True), ("open", False)):
         for r in ((experiments or {}).get(key) or []):
             if isinstance(r, dict) and r.get("hyp"):
-                idx[r["hyp"]] = {"n": r.get("n"), "avg_r": r.get("avg_r"), "confirmed": flag}
+                k = _fam(r["hyp"])
+                if k in idx and idx[k]["confirmed"]:
+                    continue
+                idx[k] = {"n": r.get("n"), "avg_r": r.get("avg_r"), "confirmed": flag}
     return idx

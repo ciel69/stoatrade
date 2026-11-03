@@ -249,22 +249,45 @@ def _b_economics(c):
 EXPERIMENTS_TOP = 5
 
 
+def _ref_env(c):
+    """env_norm справки меток: testnet, если исполнитель работает на testnet, иначе mainnet (как learnloop.clusters.env_norm)."""
+    return "testnet" if (c.health.get("data") or {}).get("env") == "testnet" else "mainnet"
+
+
+def _ref_compact(r):
+    """Справка меток семейства -> [n, mean, lo, hi] (R после издержек, 2 знака; нет интервала -> null)."""
+    return [r["n"], _r(r.get("mean"), 2), _r(r.get("lo"), 2), _r(r.get("hi"), 2)]
+
+
+def _exp_row(hyp, p, live=None, ref=None):
+    """Строка блока experiments: paper n и avg_r, live n / avg_r (если были), ref: [n, mean, lo, hi] справки меток (только семейства policy_map).
+    Поля win в строке нет (Requirement 19.8: бюджет блока; доля прибыльных остаётся в ./tb exp и на странице)."""
+    row = {"hyp": hyp, "n": p["n"], "avg_r": _r(p["avg_r"], 2)}
+    if live:
+        row["live_n"], row["live_avg_r"] = live["n"], _r(live["avg_r"], 2)
+    if ref:
+        row["ref"] = _ref_compact(ref)
+    return _drop_none(row)
+
+
 def _b_experiments(c):
-    """Гипотезы (тег hyp сделки): confirmed = на бумаге n >= MIN_N, средний R > 0 и p ниже alpha с поправкой Бонферрони (их можно повторять приоритетно);
-    open = ещё копят выборку или не подтверждены. По каждой paper n, avg_r, доля прибыльных и, если были, live n / avg_r. Нет гипотез -> None."""
+    """Гипотезы по семействам (тег hyp сделки нормализован при чтении, Requirement 19.3): confirmed = expstats.hyp_confirmed (бумага, не `other`,
+    n >= MIN_N, средний R > 0, p ниже alpha / K, K по семействам) — их можно повторять приоритетно; open = копят выборку или не подтверждены.
+    По каждой paper n, avg_r и, если были, live n / avg_r; у семейств из config/hypotheses.json: policy_map — ref: [n кластеров, средний R,
+    нижняя и верхняя граница 95% интервала] теневой политики по меткам за 14 суток (runtime/learn/hyp_ref.json; ориентир, на confirmed не влияет;
+    нет файла — без ref). Нет гипотез -> None."""
     from tb.core import expstats
+    from tb.brain import exp_cli
     by = {}
     for r in expstats.group_stats(expstats.load_trades("all", c.root, with_rules=False), by="hyp"):
         by.setdefault(r["key"], {})[r["mode"]] = r
+    ref = exp_cli.hyp_ref(c.root, _ref_env(c))
     conf, opn = [], []
     for hyp, m in by.items():
         p, h = m.get("paper"), common.ident(hyp)
         if not p or not h:
             continue
-        row = {"hyp": h, "n": p["n"], "avg_r": _r(p["avg_r"], 2), "win": _r(p["win_rate"], 2)}
-        if m.get("live"):
-            row["live_n"], row["live_avg_r"] = m["live"]["n"], _r(m["live"]["avg_r"], 2)
-        (conf if p["below_alpha"] and (p["avg_r"] or 0) > 0 else opn).append(_drop_none(row))
+        (conf if expstats.hyp_confirmed(p) else opn).append(_exp_row(h, p, m.get("live"), ref.get(h)))
     if not (conf or opn):
         return None
     conf.sort(key=lambda x: -(x.get("avg_r") or 0))

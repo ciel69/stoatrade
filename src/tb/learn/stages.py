@@ -16,12 +16,17 @@ env_norm режима (testnet -> testnet, paper и live -> mainnet). Уроки
 
 Вердикт «до/после» (Requirement 14.2): few_data, если n < VERSION_MIN_N в любой из сторон; иначе worse, если верхняя граница 95% интервала
 разницы (после − до, Уэлч) меньше 0; иначе not_worse. Общий вердикт страницы (verdict.decide) от этих блоков не зависит.
+
+Блок «Гипотезы» (hyps, задача 36, Requirement 19.6): бумажные сделки (expstats.load_trades, семейства при чтении) по семействам — n / 30,
+средний R ± 95% t-интервал, статус по expstats.hyp_confirmed (K = hyp_k), справка меток из runtime/learn/hyp_ref.json (пишет шаг цикла
+learnloop.hypref; здесь только чтение, tb.learnloop не импортируется). Нет файла справки — блок без справки; нет сделок — no_data с причиной.
 """
 import json
 import sqlite3
 
 from tb import paths
 from tb.core import expstats
+from tb.core import hyps as HY
 from tb.knowledge import rulebook_view as RV
 from tb.labels import store as LST
 from tb.learn import stats
@@ -30,7 +35,7 @@ from tb.memory import lessons as LS
 STAGE = 2
 ROADMAP = "R2.6"
 NOTE = "появится на этапе 2"
-TITLES = {"lessons": "Уроки", "versions": "Версии мозга до/после"}
+TITLES = {"lessons": "Уроки", "versions": "Версии мозга до/после", "hyps": "Гипотезы"}
 MODES = ("paper", "testnet", "live")
 
 CYCLE_TABLES = ("lesson_candidates", "trials", "rule_rows", "rulebook_versions")
@@ -52,6 +57,9 @@ NOTES = {
                 "Вердикт: данных мало при n < %d с любой стороны; хуже, если верхняя граница 95%% интервала разницы меньше 0; иначе не хуже. "
                 "Сравнение до/после, не A/B: рынок между периодами различался." % VERSION_MIN_N,
     "versions_none": "Смен rulebook, моделей и промптов пока нет.",
+    "hyps": "Гипотезы по семействам на бумаге: n из %d, средний R (после издержек) с 95%% интервалом, статус (подтверждена: n >= %d, средний R > 0 "
+            "и p ниже alpha / K по семействам). Справка меток — теневая политика по меткам за 14 суток, ориентир: статус не меняет." % (expstats.MIN_N, expstats.MIN_N),
+    "hyps_none": "Бумажных сделок с гипотезой пока нет.",
     RESTORING: "База знаний восстанавливается: блок появится после восстановления.",
     E_DB: "База знаний не читается.",
 }
@@ -412,5 +420,90 @@ def versions(ctx=None):
 
 
 def build(ctx=None):
-    """-> {"lessons": блок, "versions": блок}."""
+    """-> {"lessons": блок, "versions": блок}. Блок «Гипотезы» — отдельно, hyps(ctx)."""
     return {"lessons": lessons(ctx), "versions": versions(ctx)}
+
+
+# ---------------------------------------------------------------- гипотезы (задача 36, Requirement 19.6)
+
+HYP_STATUSES = ("confirmed", "accumulating", "not_confirmed")
+HYP_REF_FILE = ("learn", "hyp_ref.json")
+HYP_MODE = "paper"                                # подтверждение гипотез — только по бумаге (Requirement 19.4)
+
+
+def read_hyp_ref(root, env):
+    """Справка меток runtime/learn/hyp_ref.json (пишет шаг цикла learnloop.hypref; здесь только чтение) -> ({семейство: справка}, ts | None).
+    Только семейства config/hypotheses.json: policy_map и n > 0; нет файла или мусор -> ({}, None)."""
+    try:
+        with open(paths.runtime(*HYP_REF_FILE, root=root), encoding="utf-8") as f:
+            doc = json.load(f)
+    except (OSError, ValueError):
+        return {}, None
+    fams = doc.get("families") if isinstance(doc, dict) else None
+    if not isinstance(fams, dict):
+        return {}, None
+    pmap = HY.policy_map()
+    out = {}
+    for fam, d in fams.items():
+        if fam not in pmap or not isinstance(d, dict) or not isinstance(d.get("env"), dict):
+            continue
+        e = d["env"].get(env)
+        n = _int(e.get("n")) if isinstance(e, dict) else None
+        if not n or n <= 0:
+            continue
+        out[fam] = {"policy": d.get("policy") if isinstance(d.get("policy"), str) else None, "policy_ver": _int(d.get("policy_ver")),
+                    "kinds": [k for k in (d.get("kinds") or []) if isinstance(k, str)][:LIST_MAX], "env_norm": env,
+                    "window_days": _int(doc.get("window_days")), "n": n, "r": stats.est(_fnum(e.get("mean")), _fnum(e.get("lo")), _fnum(e.get("hi")), n, LVL)}
+    return out, _int(doc.get("ts"))
+
+
+def hyp_status(row, min_n=expstats.MIN_N):
+    """Статус семейства по строке group_stats(by="hyp") бумаги: confirmed (expstats.hyp_confirmed), accumulating (n < min_n), иначе not_confirmed."""
+    if expstats.hyp_confirmed(row, min_n):
+        return "confirmed"
+    return "accumulating" if (row.get("n") or 0) < min_n else "not_confirmed"
+
+
+def hyps_block(trades, ref, ref_ts=None, env="mainnet"):
+    """Блок «Гипотезы» по нормализованным сделкам expstats (поле hyp — семейство). Строки — семейства с бумажными сделками и семейства со справкой:
+    n / n_target (30), средний R ± 95% t-интервал по сделкам, доля прибыльных, p, статус, справка меток (или None). Порядок: подтверждённые,
+    затем по убыванию n, затем по имени. Справка статус не меняет."""
+    paper = [t for t in trades or [] if t.get("mode") == HYP_MODE]
+    gs = [r for r in expstats.group_stats(paper, by="hyp") if r["mode"] == HYP_MODE and r["key"] != "(нет)"]
+    k = gs[0]["k"] if gs else expstats.hyp_k(paper)
+    rs_by = {}
+    for t in paper:
+        if t.get("hyp") and _fnum(t.get("r")) is not None:
+            rs_by.setdefault(t["hyp"], []).append(float(t["r"]))
+    fams = []
+    seen = set()
+    for r in gs:
+        f = r["key"]
+        seen.add(f)
+        fams.append({"family": f, "n": r["n"], "n_target": expstats.MIN_N, "small": r["n"] < expstats.MIN_N, "r": stats.mean_est(rs_by.get(f, []), LVL),
+                     "win": r["win_rate"], "p": r["p"], "status": hyp_status(r), "confirmable": f not in expstats.NO_CONFIRM_HYPS, "ref": ref.get(f)})
+    for f in sorted(ref):
+        if f not in seen:
+            fams.append({"family": f, "n": 0, "n_target": expstats.MIN_N, "small": True, "r": stats.est(None, n=0, lvl=LVL), "win": None, "p": None,
+                         "status": "accumulating", "confirmable": True, "ref": ref[f]})
+    fams.sort(key=lambda x: (x["status"] != "confirmed", -x["n"], x["family"]))
+    out = {"id": "hyps", "title": TITLES["hyps"], "note": NOTES["hyps"], "mode": HYP_MODE, "env_norm": env, "min_n": expstats.MIN_N, "lvl": LVL,
+           "k": k, "alpha_adj": expstats.bonferroni(k), "families": fams, "n_trades": len(paper),
+           "n_confirmed": sum(1 for x in fams if x["status"] == "confirmed"), "ref_ts": ref_ts if ref else None}
+    if not gs:
+        out.update(status="no_data", reason="no_trades", note=NOTES["hyps_none"])
+    elif all(x["small"] for x in fams if x["n"]):
+        out.update(status="few_data", reason="n_lt_min")
+    else:
+        out.update(status="ok", reason=None)
+    return out
+
+
+def hyps(ctx=None):
+    """Блок «Гипотезы» (learn.stages.hyps, Requirement 19.6): бумажные сделки корня (expstats.load_trades, как досье и ./tb exp) по семействам,
+    справка меток из runtime/learn/hyp_ref.json (env mainnet: бумага на данных mainnet). Без контекста отчёта — заглушка этапа."""
+    if not _ctx_ok(ctx):
+        return _stub("hyps")
+    env = "mainnet"
+    ref, ts = read_hyp_ref(ctx.root, env)
+    return hyps_block(expstats.load_trades(HYP_MODE, ctx.root, with_rules=False), ref, ts, env)

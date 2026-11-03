@@ -1,5 +1,6 @@
 """R2.6 (задача 18): блоки «Уроки» и «Версии мозга до/после» (tb.learn.stages). Свойство 17 «страница не врёт» (числа = пересчёт прямыми
-запросами), n < 30, границы вердикта до/после, нет таблиц цикла, восстановление базы, режимы не смешиваются, только чтение, общий вердикт."""
+запросами), n < 30, границы вердикта до/после, нет таблиц цикла, восстановление базы, режимы не смешиваются, только чтение, общий вердикт.
+Задача 36: блок «Гипотезы» (stages.hyps) — n/30, средний R ± 95% интервал, статус, справка меток только по policy_map, без файла справки."""
 import builtins
 import json
 import os
@@ -384,6 +385,131 @@ class TestPageVerdictAndReadOnly(Base):
         with open(os.path.join(self.root, "state", "brain", "swaps.jsonl"), "w", encoding="utf-8") as f:
             f.write("{}\n")
         self.assertNotEqual(s1, load.source_signature(self.root))
+
+
+class TestHyps(Base):
+    """Блок «Гипотезы» (задача 36, Requirement 19.6; свойство 32): n/30, средний R ± 95% интервал, статус, справка меток; только чтение."""
+
+    def trade_rows(self, i, hyp, r, mode="paper"):
+        tid = "T-%s-%s-%03d" % (mode, hyp, i)
+        ts = iso(NOW - DAY + i * 60)
+        return [{"ev": "open", "id": tid, "ts_open": ts, "sym": "SOL", "side": "long", "mode": mode, "risk_usdt": 0.2, "hyp": hyp},
+                {"ev": "close", "id": tid, "ts_close": ts, "pnl_usdt": r * 0.2, "r": r}]
+
+    def history(self):
+        rows = []
+        self.liq = [1.0 if i < 20 else -0.5 for i in range(30)]
+        for i, r in enumerate(self.liq):
+            rows += self.trade_rows(i, "liq_cascade_reclaim" if i % 2 else "liq-cascade-reclaim", r)
+        self.rf = [0.3, -0.1, 0.2]
+        for i, r in enumerate(self.rf):
+            rows += self.trade_rows(100 + i, "range-fade-lower-edge", r)
+        for i in range(5):
+            rows += self.trade_rows(200 + i, "probe-x", 0.1)                     # неизвестный тег -> other
+        for i in range(4):
+            rows += self.trade_rows(300 + i, "range-fade", 5.0, mode="live")    # live в блок не входит
+        with open(os.path.join(self.root, "state", "trades.jsonl"), "w", encoding="utf-8") as f:
+            f.write("".join(json.dumps(r) + "\n" for r in rows))
+
+    def ref_file(self):
+        doc = {"schema": "tb.hyp_ref/1", "ts": NOW - 600, "window_days": 14, "a": NOW - 14 * DAY, "b": NOW, "families": {
+            "liq-cascade-reclaim": {"policy": "P4", "policy_ver": 1, "kinds": ["liq_cascade"],
+                                    "env": {"mainnet": {"n": 40, "n_runs": 55, "mean": -0.2, "lo": -0.35, "hi": -0.05}, "testnet": {"n": 0}}},
+            "oi-build-squeeze": {"policy": "P2", "policy_ver": 1, "kinds": ["oi_spike"], "env": {"mainnet": {"n": 12, "n_runs": 12, "mean": 0.1, "lo": -0.2, "hi": 0.4}}},
+            "range-fade": {"policy": "P4", "policy_ver": 1, "kinds": ["range_5m"], "env": {"mainnet": {"n": 99, "mean": 1.0, "lo": 0.5, "hi": 1.5}}}}}
+        p = os.path.join(self.root, "runtime", "learn", "hyp_ref.json")
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(doc, f)
+
+    def rows(self, b):
+        return dict((r["family"], r) for r in b["families"])
+
+    def test_no_ctx_stub(self):
+        b = stages.hyps(None)
+        self.assertEqual((b["id"], b["status"], b["title"]), ("hyps", "stage", "Гипотезы"))
+
+    def test_no_trades_no_file(self):
+        b = stages.hyps(self.ctx())
+        self.assertEqual((b["status"], b["reason"], b["families"], b["ref_ts"]), ("no_data", "no_trades", [], None))
+        self.assertIn("пока нет", b["note"])
+
+    def test_property17_numbers_status_and_ref(self):
+        self.history()
+        self.ref_file()
+        b = stages.hyps(self.ctx())
+        self.assertEqual((b["status"], b["mode"], b["env_norm"], b["min_n"]), ("ok", "paper", "mainnet", 30))
+        rows = self.rows(b)
+        liq = rows["liq-cascade-reclaim"]
+        self.assertEqual((liq["n"], liq["n_target"], liq["small"], liq["status"]), (30, 30, False, "confirmed"))
+        self.assertEqual(liq["r"], stats.mean_est(self.liq))
+        self.assertEqual(liq["win"], 20 / 30.0)
+        self.assertEqual((liq["ref"]["n"], liq["ref"]["r"]["v"], liq["ref"]["r"]["lo"], liq["ref"]["r"]["hi"]), (40, -0.2, -0.35, -0.05))
+        self.assertEqual((liq["ref"]["policy"], liq["ref"]["kinds"]), ("P4", ["liq_cascade"]))
+        rf = rows["range-fade"]
+        self.assertEqual((rf["n"], rf["small"], rf["status"], rf["ref"]), (3, True, "accumulating", None))    # без policy_map справки нет
+        self.assertEqual(rf["r"], stats.mean_est(self.rf))
+        oth = rows["other"]
+        self.assertEqual((oth["n"], oth["confirmable"], oth["status"]), (5, False, "accumulating"))
+        sq = rows["oi-build-squeeze"]                                         # сделок нет, справка есть
+        self.assertEqual((sq["n"], sq["status"], sq["ref"]["n"]), (0, "accumulating", 12))
+        self.assertEqual(b["families"][0]["family"], "liq-cascade-reclaim")     # подтверждённые первыми
+        rows_all = X_group(self.root)
+        self.assertEqual((b["k"], b["alpha_adj"]), (rows_all[0]["k"], rows_all[0]["alpha_adj"]))
+        self.assertEqual((b["n_trades"], b["n_confirmed"], b["ref_ts"]), (38, 1, NOW - 600))
+
+    def test_ref_does_not_change_status(self):
+        self.history()
+        no_ref = stages.hyps(self.ctx())
+        self.assertTrue(all(r["ref"] is None for r in no_ref["families"]))
+        self.ref_file()
+        with_ref = stages.hyps(self.ctx())
+        st = lambda b: dict((r["family"], (r["status"], r["n"], r["r"])) for r in b["families"] if r["n"])
+        self.assertEqual(st(no_ref), st(with_ref))
+
+    def test_broken_file_and_family_outside_policy_map(self):
+        self.history()
+        p = os.path.join(self.root, "runtime", "learn", "hyp_ref.json")
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("[")
+        self.assertEqual(stages.read_hyp_ref(self.root, "mainnet"), ({}, None))
+        self.assertEqual(stages.hyps(self.ctx())["status"], "ok")
+        self.ref_file()
+        ref, _ts = stages.read_hyp_ref(self.root, "mainnet")
+        self.assertEqual(sorted(ref), ["liq-cascade-reclaim", "oi-build-squeeze"])
+        self.assertEqual(stages.read_hyp_ref(self.root, "testnet")[0], {})    # n = 0 — справки нет
+
+    def test_few_data(self):
+        with open(os.path.join(self.root, "state", "trades.jsonl"), "w", encoding="utf-8") as f:
+            f.write("".join(json.dumps(r) + "\n" for r in self.trade_rows(1, "sweep-reject", 0.5)))
+        b = stages.hyps(self.ctx())
+        self.assertEqual((b["status"], b["reason"]), ("few_data", "n_lt_min"))
+
+    def test_read_only(self):
+        self.history()
+        self.ref_file()
+        real_open = builtins.open
+
+        def guarded(f, mode="r", *a, **kw):
+            if any(ch in mode for ch in "wax+"):
+                raise AssertionError("запись файла: %s" % f)
+            return real_open(f, mode, *a, **kw)
+
+        with mock.patch.object(builtins, "open", guarded), mock.patch.object(LST, "open_rw", side_effect=AssertionError("open_rw")):
+            self.assertEqual(stages.hyps(self.ctx())["status"], "ok")
+
+    def test_report_safe_shape(self):
+        self.history()
+        self.ref_file()
+        blk = report._safe("lessons", lambda: stages.hyps(self.ctx()))        # форма блока проходит проверку отчёта
+        self.assertNotEqual(blk["status"], "error")
+        self.assertEqual(report.sanitize(stages.hyps(self.ctx()))["families"][0]["family"], "liq-cascade-reclaim")
+
+
+def X_group(root):
+    from tb.core import expstats
+    return expstats.group_stats(expstats.load_trades("paper", root, with_rules=False), by="hyp")
 
 
 if __name__ == "__main__":

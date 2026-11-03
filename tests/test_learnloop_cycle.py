@@ -222,8 +222,8 @@ class TestStartup(Base):
         self.assertEqual(rep["ran"]["menu"], "NO_DATA")
         for n in ("register", "verdicts", "promote", "reconcile", "watch"):  # задачи 14–16: настоящие шаги
             self.assertEqual(rep["ran"][n], "OK")
-        self.assertEqual(rep["ran"]["hypref"], CY.STUB)
-        self.assertEqual(s.cycle.stubs(), ["hypref"])
+        self.assertEqual(rep["ran"]["hypref"], "NO_DATA")                   # задача 36: настоящий шаг; во временном корне нет shadow_policies.json
+        self.assertEqual(s.cycle.stubs(), [])
         self.assertTrue(s.cycle.watch_real())
         self.assertIn("daily", [b["reason"] for b in store2.list_backups(self.root)])
         self.assertEqual(self.q("SELECT step, code FROM learn_events WHERE step='menu'"), [("menu", "NO_DATA")])
@@ -236,7 +236,7 @@ class TestStartup(Base):
         self.assertIn("DAYS", hb["ready"]["failed"])
         lb = ST.learnloop_block(hb, clock.t)
         self.assertEqual(lb["color"], "green")
-        self.assertIn("заглушки", ST.learnloop_line(lb))
+        self.assertNotIn("заглушки", ST.learnloop_line(lb))
 
     def test_second_pass_same_time_adds_nothing(self):
         """Свойство 14: повтор прохода на тех же данных не создаёт строк, версий и переходов."""

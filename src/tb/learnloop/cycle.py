@@ -8,9 +8,8 @@
   hourly    раз в intervals.<interval>              verdicts (14), promote (15), bounds, reconcile (15), watch (16), hypref (36)
 Проход выполняется, когда наступил срок хотя бы одного шага observe/daily/hourly. Шаг — fn(ctx) -> dict (code: OK, MENU, NO_MENU, NOT_DUE,
 NO_DATA, STUB ...). Исключение шага -> STEP_ERROR (ChainBroken -> CHAIN_BROKEN) в learn_events и следующий шаг; повреждение по
-store2.is_corruption -> Corruption (проход прерывается, сервис запускает протокол восстановления). Заглушки задач 14–16 и 36 — stub(...):
-задача заменяет fn своей функцией в default_steps (имя, период и группу не меняет); stub=True убирается — тогда шаг watch считается настоящим
-и включается проверка WATCH_STALE.
+store2.is_corruption -> Corruption (проход прерывается, сервис запускает протокол восстановления). Заглушка шага другой задачи — stub(...)
+(stub=True; шаг watch с заглушкой не включает проверку WATCH_STALE); шаги задач 14–16 и 36 настоящие, заглушек в default_steps нет.
 
 Учёт суток (Requirement 15.6): работа сервиса копится по часам суток UTC (промежуток между тиками не больше 2 x observe_s, иначе платформа
 была выключена — не засчитывается); при смене суток пишется сводка learn_events step="day" (counted: работа >= day_min_work_h, full: counted,
@@ -31,6 +30,7 @@ from tb.knowledge import store2
 from tb.labels import store as LST
 from tb.learnloop import candidates as CA
 from tb.learnloop import clusters as CL
+from tb.learnloop import hypref as HR
 from tb.learnloop import promote as PR
 from tb.learnloop import reconcile as RC
 from tb.learnloop import trial as TR
@@ -159,7 +159,7 @@ def step_bounds(ctx):
 
 
 def default_steps():
-    """Реестр шагов в порядке выполнения внутри периода. Задача 36 подставляет свою функцию вместо stub(...) (шаги задач 14–16 настоящие)."""
+    """Реестр шагов в порядке выполнения внутри периода (шаги задач 14–16 и 36 настоящие)."""
     return [
         Step("rule_eval_import", "pass", step_rule_eval_import),
         Step("close_clusters", "observe", step_close_clusters, group="observe"),
@@ -174,7 +174,7 @@ def default_steps():
         Step("bounds", "hourly", step_bounds, interval="verdict_s"),
         Step("reconcile", "hourly", RC.step_reconcile, interval="reconcile_s"),                   # уроки меток по rule_rows/trials
         Step("watch", "hourly", WA.step_watch, interval="watch_s", group="watch"),        # откат, TRADE_STARVATION, аренда runtime/watch_lease.json
-        Step("hypref", "hourly", stub(36), interval="hypref_s", stub=True, task=36),
+        Step("hypref", "hourly", HR.step_hypref, interval="hypref_s"),                   # справка меток по policy_map -> runtime/learn/hyp_ref.json
     ]
 
 
