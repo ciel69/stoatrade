@@ -76,7 +76,8 @@ class TestBriefBuild(TR.RulesBase):
         self.active_rule()
         b = self.build()
         self.assertEqual((b["rulebook"]["ver"], b["rulebook"]["apply"], [r["id"] for r in b["rulebook"]["rules"]]), ("R-0002", True, ["RL0001"]))
-        self.assertEqual({k: v for k, v in b.items() if k != "rulebook"}, base_start)
+        # setUp() заново берёт время: ts досье может отличаться на секунду, остальное поле в поле
+        self.assertEqual({k: v for k, v in b.items() if k not in ("rulebook", "ts")}, {k: v for k, v in base_start.items() if k != "ts"})
         self.assertIn("rulebook", self.build("event", sym="SOL"))
 
     def test_db_unavailable_no_block(self):

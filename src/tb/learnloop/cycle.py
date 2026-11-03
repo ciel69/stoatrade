@@ -35,6 +35,7 @@ from tb.learnloop import promote as PR
 from tb.learnloop import reconcile as RC
 from tb.learnloop import trial as TR
 from tb.learnloop import versions as V
+from tb.learnloop import watch as WA
 
 HOUR = 3600
 DAY = 86400
@@ -158,7 +159,7 @@ def step_bounds(ctx):
 
 
 def default_steps():
-    """Реестр шагов в порядке выполнения внутри периода. Задачи 14–16 и 36 подставляют свои функции вместо stub(...)."""
+    """Реестр шагов в порядке выполнения внутри периода. Задача 36 подставляет свою функцию вместо stub(...) (шаги задач 14–16 настоящие)."""
     return [
         Step("rule_eval_import", "pass", step_rule_eval_import),
         Step("close_clusters", "observe", step_close_clusters, group="observe"),
@@ -172,7 +173,7 @@ def default_steps():
         Step("promote", "hourly", PR.step_promote, interval="verdict_s", group="verdict"),        # пересечения, LOSS_CAP, лимит, promotion_ready
         Step("bounds", "hourly", step_bounds, interval="verdict_s"),
         Step("reconcile", "hourly", RC.step_reconcile, interval="reconcile_s"),                   # уроки меток по rule_rows/trials
-        Step("watch", "hourly", stub(16), interval="watch_s", group="watch", stub=True, task=16),        # обновляет runtime/watch_lease.json
+        Step("watch", "hourly", WA.step_watch, interval="watch_s", group="watch"),        # откат, TRADE_STARVATION, аренда runtime/watch_lease.json
         Step("hypref", "hourly", stub(36), interval="hypref_s", stub=True, task=36),
     ]
 

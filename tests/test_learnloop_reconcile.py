@@ -250,6 +250,104 @@ class TestRestore(Base):
         self.assertEqual([a for a in self.rec(NOW + 2 * H) if a["action"] != "unregistered"], [])
 
 
+# ---------------------------------------------------------------- отклонение урока меток владельцем (задача 16, Requirement 5.12)
+
+class TestOwnerReject(Base):
+    """Свойство 19: отклонение владельцем закрывает открытое испытание и не активное правило, пишет OWNER_REJECT бессрочно и копию owner;
+    активное правило не меняется. Путь — tb.knowledge.rulebook_cli.reject_lesson (его вызывают memory lesson reject и дашборд)."""
+
+    def reject(self, lid, now=NOW + H):
+        from tb.knowledge import rulebook_cli as RBC
+        return RBC.reject_lesson(self.root, lid, now, mcfg=self.mcfg)
+
+    def owner_events(self):
+        return self.c.execute("SELECT step, code, ref FROM learn_events WHERE actor='OWNER'").fetchall()
+
+    def test_open_trial(self):
+        l = self.lesson(sample=False)
+        rid = self.rule_for(l, state="open")
+        tid = TR.by_rule(self.c, rid)["trial_id"]
+        rep = self.reject(l["lesson_id"])
+        self.assertTrue(rep["ok"])
+        self.assertEqual(self.st(l["lesson_id"]), ("rejected", "OWNER"))
+        t = TR.get(self.c, tid)
+        self.assertEqual((t["state"], t["verdict"], t["numbers"]["reason"]), ("closed", "inconclusive", "OWNER_REJECT"))
+        r = V.rule(self.c, rid)
+        self.assertEqual((r["status"], r["reason_code"]), ("rejected", "OWNER"))
+        ch = RL.LR.cond_h(SPREAD, "lower")
+        row = self.c.execute("SELECT code, until_ts, actor FROM blocklist_rows WHERE cond_h=? ORDER BY seq DESC LIMIT 1", (ch,)).fetchone()
+        self.assertEqual(row, ("OWNER_REJECT", None, "OWNER"))
+        self.assertIsNotNone(RL.blocked(self.c, ch, NOW + 400 * D))                    # бессрочно: условие не возвращается через меню
+        self.assertIn("owner", [b["reason"] for b in store2.list_backups(self.root)])
+        self.assertEqual(self.owner_events(), [("lesson", "OWNER_REJECT", l["lesson_id"])])
+        self.assertEqual(self.rec(NOW + 2 * H), [])                                    # сверка согласна с базой
+        n = self.counts()
+        rep = self.reject(l["lesson_id"], NOW + 3 * H)                                 # повтор: только запись OWNER
+        self.assertEqual((rep["lesson_changed"], rep["blocked"]), (False, False))
+        self.assertEqual(self.counts()[:2] + self.counts()[3:], n[:2] + n[3:])
+
+    def test_active_rule_untouched(self):
+        l = self.lesson(sample=False)
+        rid = self.rule_for(l)
+        V.promote(self.c, rid, NOW, self.cfg)
+        self.rec(NOW)
+        self.assertEqual(self.st(l["lesson_id"]), ("confirmed", "TRIAL_PROMOTE"))
+        ver = RV.last_version(self.c)["ver"]
+        rep = self.reject(l["lesson_id"])
+        self.assertEqual(rep["rules"], [{"rule_id": rid, "status": "active", "done": None}])
+        self.assertEqual(self.st(l["lesson_id"]), ("rejected", "OWNER"))
+        self.assertEqual(V.rule(self.c, rid)["status"], "active")
+        self.assertEqual((RV.last_version(self.c)["ver"], RV.last_version(self.c)["rule_ids"]), (ver, [rid]))
+        self.assertEqual(RL.blocked(self.c, RL.LR.cond_h(SPREAD, "lower"), NOW + 2 * H)["code"], "OWNER_REJECT")
+        self.assertEqual(self.rec(NOW + 2 * H), [])
+
+    def test_waiting_rule_rejected(self):
+        l = self.lesson(sample=False)
+        rid = self.rule_for(l)                                          # испытание закрыто promote, правило ждёт READY
+        self.reject(l["lesson_id"])
+        self.assertEqual((V.rule(self.c, rid)["status"], V.rule(self.c, rid)["reason_code"]), ("rejected", "OWNER"))
+        self.assertEqual(TR.promoted(self.c), [])
+        self.assertEqual(PR.run(self.c, self.root, self.cfg, NOW + 2 * H, ready=READY)["promoted"], [])
+
+    def test_memory_cli(self):
+        import contextlib
+        import io
+        from tb.memory import cli as MC
+        l = self.lesson(sample=False)
+        rid = self.rule_for(l, state="open")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = MC.main(["lesson", "reject", l["lesson_id"]], root=self.root)
+        self.assertEqual(code, 0)
+        out = json.loads(buf.getvalue())
+        self.assertEqual((out["action"], out["status"], out["rules"][0]["done"]), ("lesson_reject", "rejected", "closed"))
+        self.assertEqual(V.rule(self.c, rid)["status"], "rejected")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(MC.main(["lesson", "confirm", l["lesson_id"]], root=self.root), 2)        # прочие команды — BAD_SRC
+
+    def test_db_unavailable_after_transition(self):
+        """База недоступна (восстанавливается): урок отклонён, команда сообщает о повторе (код 1); испытание закроет сверка кодом OWNER."""
+        import contextlib
+        import io
+        from tb.knowledge import markers as KM
+        from tb.memory import cli as MC
+        l = self.lesson(sample=False)
+        rid = self.rule_for(l, state="open")
+        KM.write_json(KM.restoring_path(self.root), {"pid": 1})
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = MC.main(["lesson", "reject", l["lesson_id"]], root=self.root)
+        KM.remove(KM.restoring_path(self.root))
+        self.assertEqual(code, 1)
+        self.assertFalse(json.loads(buf.getvalue())["ok"])
+        self.assertEqual(self.st(l["lesson_id"]), ("rejected", "OWNER"))
+        acts = self.rec(NOW + 2 * H)
+        self.assertEqual([(a["action"], a["code"]) for a in acts], [("mismatch", "OWNER")])
+        self.assertEqual(V.rule(self.c, rid)["reason_code"], "OWNER")
+        self.reject(l["lesson_id"], NOW + 3 * H)                                       # повтор дописывает чёрный список
+        self.assertEqual(RL.blocked(self.c, RL.LR.cond_h(SPREAD, "lower"), NOW + 4 * H)["code"], "OWNER_REJECT")
+
+
 # ---------------------------------------------------------------- шаг цикла
 
 class TestStep(Base):

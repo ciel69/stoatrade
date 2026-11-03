@@ -220,17 +220,20 @@ class TestStartup(Base):
         rep = s.cycle.last_report
         self.assertEqual(rep["errors"], {}, rep)
         self.assertEqual(rep["ran"]["menu"], "NO_DATA")
-        for n in ("register", "verdicts", "promote", "reconcile"):           # задачи 14, 15: настоящие шаги
+        for n in ("register", "verdicts", "promote", "reconcile", "watch"):  # задачи 14–16: настоящие шаги
             self.assertEqual(rep["ran"][n], "OK")
-        for n in ("watch", "hypref"):
-            self.assertEqual(rep["ran"][n], CY.STUB)
-        self.assertEqual(sorted(s.cycle.stubs()), sorted(["watch", "hypref"]))
+        self.assertEqual(rep["ran"]["hypref"], CY.STUB)
+        self.assertEqual(s.cycle.stubs(), ["hypref"])
+        self.assertTrue(s.cycle.watch_real())
         self.assertIn("daily", [b["reason"] for b in store2.list_backups(self.root)])
         self.assertEqual(self.q("SELECT step, code FROM learn_events WHERE step='menu'"), [("menu", "NO_DATA")])
+        lease = RV.read_lease(self.root)                                     # пустой rulebook: проверка успешна, аренда записана
+        self.assertEqual((lease["ts"], lease["rulebook_ver"]), (int(clock.t), "R-0001"))
         _a, hb = S.read_hb("learnloop", self.root, clock.t)
         self.assertEqual((hb["state"], hb["mode"]), ("ok", "auto"))
         self.assertFalse(hb["ready"]["ok"])
-        self.assertIn("WATCH", hb["ready"]["failed"])
+        self.assertNotIn("WATCH", hb["ready"]["failed"])                     # аренда свежа; не готово по прогреву
+        self.assertIn("DAYS", hb["ready"]["failed"])
         lb = ST.learnloop_block(hb, clock.t)
         self.assertEqual(lb["color"], "green")
         self.assertIn("заглушки", ST.learnloop_line(lb))

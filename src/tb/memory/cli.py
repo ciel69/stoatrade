@@ -187,6 +187,21 @@ def _bad_src(msg):
     return 2
 
 
+def _reject_labels(root, lesson_id, cfg, now):
+    """Отклонение урока меток владельцем (R2, Requirement 5.12): урок rejected (OWNER), открытое испытание закрывается, не активное правило
+    rejected (OWNER), активное не трогается, условие в чёрный список бессрочно (OWNER_REJECT), копия базы, learn_events OWNER.
+    Логика — tb.knowledge.rulebook_cli.reject_lesson (вне пакета tb.learnloop; её же вызывает дашборд). База недоступна -> код 1."""
+    from tb.knowledge import rulebook_cli
+    try:
+        rep = rulebook_cli.reject_lesson(root, lesson_id, now, mcfg=cfg)
+    except rulebook_cli.Unavailable as e:
+        _out({"ok": False, "lesson_id": lesson_id, "status": "rejected", "error": "база знаний недоступна: %s" % e,
+              "retry": "урок отклонён; повторите команду после восстановления базы (испытание закроет и сверка статусов)"})
+        return 1
+    _out(rep)
+    return 0
+
+
 def cmd_lesson(a, root, cfg):
     now = time.time()
     act = a.action
@@ -212,6 +227,8 @@ def cmd_lesson(a, root, cfg):
             return _bad_src("add: уроки меток создаёт только цикл обучения")
         l = lessons.create(root, d.get("cond"), d.get("claim"), "owner", cases.load(root), cfg, now, status="confirmed" if d.get("confirmed") is True else "hyp")
         _out({"ok": True, "lesson_id": l["lesson_id"], "status": l["status"]})
+    elif act == "reject" and lessons.is_labels(lessons.read_all(root).get(a.id)):
+        return _reject_labels(root, a.id, cfg, now)
     elif act in ("confirm", "reject", "expire", "merge"):
         try:
             l = lessons.owner_set(root, a.id, act, cfg, now, into=a.into)
