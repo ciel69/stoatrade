@@ -613,6 +613,18 @@ def chase_errors(o, ctx, sign):
     return errs
 
 
+def rule_fail(cands, side):
+    """Код отказа правила rulebook (RULE_<id>) у кандидата стороны side в разметке кода (ctx.cands из досье) или None. Правило зависит от
+    монеты, стороны и события, а не от уровня, поэтому запрет стороны действует на любой вход этой стороны, в том числе с числами модели."""
+    for c in cands if isinstance(cands, list) else []:
+        if not isinstance(c, dict) or c.get("side") != side:
+            continue
+        f = c.get("fail")
+        if isinstance(f, str) and f.startswith("RULE_"):
+            return f
+    return None
+
+
 def _entry(o, ctx):
     errs = []
     top = {k: v for k, v in o.items() if k != "size_mult"}
@@ -652,6 +664,9 @@ def _entry(o, ctx):
         errs.append("NO_SLOTS")
     if ctx.get("room_allowed") is False:
         errs.append("ROOM_CLOSED")
+    rf = rule_fail(ctx.get("cands"), side)
+    if rf:
+        errs.append(rf)                                      # R2: сторона отсечена правилом rulebook (разметка кода в brief.cands): модель снять запрет не может
     if data_stale(ctx):
         errs.append("STALE_DATA")                            # цена сканера/фида по монете старше порога: план по устаревшим данным не подаём
     sign = 1 if side == "long" else -1

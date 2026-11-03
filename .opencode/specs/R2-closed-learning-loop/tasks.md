@@ -120,7 +120,7 @@
   - Зависит от: 6, 33
   - _Requirements: 7.10, 7.13_
 
-- [ ] 13. Применение правил в общих точках входа и блок `rulebook`: `brain/cands.py`, `brain/brief.py`, `brain/validate.py`, `gateway/catalog.py`, `dash/model2.py`, `memory/cases.py` (волна 5)
+- [x] 13. Применение правил в общих точках входа и блок `rulebook`: `brain/cands.py`, `brain/brief.py`, `brain/validate.py`, `gateway/catalog.py`, `dash/model2.py`, `memory/cases.py` (волна 5)
   - API задачи 11: `rulebook_view.active(root)` → `{ver, rules, apply, why, kinds}`, `resolve_event(root, sym, event_seq, now, kinds)` (для `chat` `event_seq=None`; при пустом rulebook `view["kinds"]` пуст — передавать виды политики `P2` из `memory.features.policy_scope`, иначе ложный `RULES_NO_EVENT`), `learn_rules.apply(view, cand, feats, ctx)`, `rule_eval_fields(view, result, ctx)`, коды `learn_rules.fail_code`/`plan_code`
   - `brain/cands.py:candidates` (вызывается `brief.build`, общий для раннера `entry_scout` и `chat` через `h_brief`): `brief.py:1426` передаёт `root`; `resolve_event` → `rule_features` → `learn_rules.apply` по `rulebook_view.active(root)`, `ok=false` и `RULE_<id>`; повторная проверка кода отказа в валидаторе
   - `gateway/catalog.py:h_submit` (`submit_plan`, общий для раннера и `chat`): та же цепочка `resolve_event` → `rule_features` → `apply` после ранних проверок (`precheck`, `check_scope`, `_need_trading`, `check_plan`, лимит планов; строки 673–683) и до `_send`, отказ `E_RULE_<id>`; для `chat` присланный `event_seq` не используется (последнее событие монеты); запись `decisions` `kind="note"`, `what="rule_eval"` (не `rule`: иначе её засчитает `expstats.rules_by_plan`, `core/expstats.py:86`) на каждый вызов, дошедший до этой точки (`rule_eval_fields`); `RULES_NO_EVENT` по доле записей без события; применение только в области `scope`, на всех уровнях риска и режимах (решение владельца 1)
@@ -165,6 +165,7 @@
   - _Requirements: 11.11, 13.2, 13.3, 13.4, 13.6_
 
 - [ ] 18. Блоки «Уроки» и «Версии мозга до/после»: `tb.learn.stages` (волна 9)
+  - писатель случаев (`memory/migrate.py` или место сборки `src` случая) заполняет `src.rulebook_ver` версией rulebook на момент решения (из записи `rule_eval` плана или `rulebook_view.active`); без версии случай относится к «до R2» (найдено при приёмке задачи 13)
   - замена заглушек: уроки по статусам и источникам, воронка кандидат → `hyp` → испытание → `confirmed` и правило, недельный ряд, лучший урок (наибольший модуль `effect` среди уроков с n ≥ 30, 95% t-интервал); версии (`rulebook_ver`, смены моделей и промптов из `swaps.jsonl`) с R, числом сделок, нарушениями, n «до»/«после», вердикт «данных мало» (n < 100 в любой стороне) / «хуже» (верхняя граница 95% интервала разницы после − до < 0) / «не хуже»; без новых формул, только чтение, кеш отчёта; режимы не смешиваются; соединение на один вызов через `labels.store.open_ro`
   - критерии приёмки: без таблиц цикла прежняя заглушка; общий вердикт страницы не зависит от уроков
   - тесты `tests/test_learn_stages_r2.py`: свойство 17, n < 30, границы вердикта, нет таблиц, слои

@@ -18,6 +18,7 @@ from tb.brain import common
 from tb.brain import events_cli, idearev, plan_cli
 from tb.core import bus, decisions, expstats, ideas, journal, plan_schema, portfolio, risklevels, tradectx
 from tb.gateway import registry as _registry
+from tb.logic import learn_rules
 from tb.memory import blocks as memblocks, cases as memcases, cfg as memcfg, features as memfeatures, lessons as memlessons, query as memquery, review as memreview
 
 MAX_STR = 300
@@ -304,9 +305,25 @@ def h_status(ctx, a):
     return out
 
 
+RULE_TRUSTED_ROLE = "entry_scout"          # event_seq для правил rulebook доверяется только заданию раннера этой роли (meta от раннера, не от модели)
+
+
+def _rule_event_seq(ctx):
+    """event_seq задания раннера entry_scout из meta (ставит раннер, не модель) или None (chat и прочие: последнее событие монеты)."""
+    if ctx.meta.get("role") != RULE_TRUSTED_ROLE:
+        return None
+    s = ctx.meta.get("event_seq")
+    return s if isinstance(s, int) and not isinstance(s, bool) and s > 0 else None
+
+
+def _rule_role(ctx):
+    r = ctx.meta.get("role")
+    return r if isinstance(r, str) and r else "chat"
+
+
 def h_brief(ctx, a):
     b = brief_mod.build(a.get("scope", "start"), since=a.get("since"), budget_tokens=a.get("budget_tokens"), root=ctx.root, now=ctx.now,
-                        consumer=ctx.agent.consumer, seqs=a.get("seqs"), sym=a.get("sym"))
+                        consumer=ctx.agent.consumer, seqs=a.get("seqs"), sym=a.get("sym"), event_seq=_rule_event_seq(ctx))
     brief_mod.save(b, root=ctx.root, now=ctx.now)
     b["ok"] = True
     return b
@@ -681,10 +698,52 @@ def h_submit(ctx, a):
     n = _plans_last_hour(ctx)
     if n >= lim["plans_per_hour"]:
         raise ToolError("E_RATE_PLANS", "лимит планов в час: %d" % lim["plans_per_hour"], "", "denied")
-    resp = _send(ctx, "submit", a, payload=raw, reason=reason)
+    chk = _rule_gate(ctx, a, plan)
+    resp = None
+    try:
+        if chk["res"].get("fail"):
+            rid = chk["res"]["hits"][0]
+            raise ToolError(learn_rules.plan_code(rid), "план отклонён правилом rulebook %s (%s): вход в этих условиях запрещён" % (rid, chk["view"].get("ver")),
+                            "plan", "denied")
+        resp = _send(ctx, "submit", a, payload=raw, reason=reason)
+    finally:
+        _rule_eval(ctx, a, chk, resp)
     resp["gateway_actor"] = ctx.agent.actor
     _link_brief(ctx, a, resp)
     return resp
+
+
+def _rule_gate(ctx, a, plan):
+    """R2 (Requirement 7.7, точка (б)): правила rulebook на (монета, сторона, событие) плана той же функцией, что разметка кандидатов
+    (brain/cands.rule_check). Событие: event_seq задания раннера entry_scout (meta), для chat — последнее событие монеты (присланный моделью
+    event_seq не используется). Любая ошибка -> режим без применения."""
+    try:
+        return brief_mod.cands_mod.rule_check(ctx.root, plan.get("symbol"), plan.get("side"), _rule_event_seq(ctx), ctx.now)
+    except Exception:          # применение правил не должно ломать подачу плана: сбой = базовое поведение
+        return {"view": None, "event": None, "res": {"ok": True, "fail": None, "hits": [], "eval": [], "missing": [], "blocked": [], "apply": False}}
+
+
+def _rule_eval(ctx, a, chk, resp):
+    """Запись decisions kind="note", what="rule_eval" (не "rule": её засчитал бы expstats.rules_by_plan) на каждый submit_plan после ранних
+    проверок; поля basis — rulebook_view.rule_eval_fields. Сбой записи шлюз не роняет."""
+    try:
+        from tb.knowledge import rulebook_view as RV
+        pid = resp.get("plan_id") if isinstance(resp, dict) else None
+        cok = None
+        if a.get("brief_id"):
+            sb = brief_mod.load_saved(a["brief_id"], root=ctx.root)
+            cok = brief_mod.cands_mod.ok_before_rules((sb or {}).get("cands"))
+        basis = RV.rule_eval_fields(chk.get("view"), chk.get("res"), {"role": _rule_role(ctx), "cands_ok_n": cok, "event": chk.get("event"),
+                                                                      "plan": pid if isinstance(pid, str) else None})
+        res = chk.get("res") or {}
+        code = learn_rules.plan_code(res["hits"][0]) if res.get("fail") and res.get("hits") else "OK"
+        rec = {"actor": ctx.agent.actor, "kind": "note", "what": "rule_eval", "why": "правила rulebook на подаче плана", "basis": basis,
+               "res": {"ok": code == "OK", "code": code}}
+        if isinstance(pid, str):
+            rec["plan"] = pid
+        decisions.append(rec, root=ctx.root)
+    except Exception:          # аудит правил не роняет шлюз (запись, чтение досье, сериализация)
+        pass
 
 
 def _link_brief(ctx, a, resp):
@@ -824,7 +883,7 @@ _reg(Tool("get_brief", "Compact decision brief (JSON, token-budgeted). scope=sta
            "sym": _s("For scope=event: symbol of the job; it goes first in struct/levels.", 20, pattern=common.RE_SYMBOL.pattern),
            "budget_tokens": _i("Approximate token budget 200..6000.", 200, 6000)}, "read", h_brief,
           out=("brief_id", "ts", "scope", "trunc", "cut", "system", "account", "session", "room", "positions", "plans", "pending", "market", "hot",
-               "ideas", "levels", "struct", "struct_missing", "day", "limits", "risk_level", "economics", "experiments", "paper_history", "pause", "flash", "flow", "playbook", "cands", "intel", "news_digest", "recent", "since_last", "lessons", "memory", "checklist",
+               "ideas", "levels", "struct", "struct_missing", "day", "limits", "risk_level", "economics", "experiments", "paper_history", "pause", "flash", "flow", "playbook", "rulebook", "cands", "intel", "news_digest", "recent", "since_last", "lessons", "memory", "checklist",
                "plan", "plans_bad", "missing")))
 _reg(Tool("get_events", "Read bus events (whitelisted fields, no third-party text) without waiting. By default events after the last acked seq (unacked ones are "
           "re-delivered). Does not acknowledge: call ack_events after handling.",

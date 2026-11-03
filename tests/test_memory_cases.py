@@ -113,6 +113,19 @@ class TestValidate(unittest.TestCase):
         self.assertNotEqual(a, cases.case_id_for("2026-10-27T14:33:11Z", "DOOD", "y"))
         self.assertRegex(a, cases.RE_CASE_ID)
 
+    def test_src_rulebook_ver_optional(self):
+        """R2 (Requirement 7.5): необязательное src.rulebook_ver (строка до 8 символов); старые случаи без поля валидны."""
+        old = mk()
+        self.assertNotIn("rulebook_ver", old.get("src") or {})
+        self.ok(old)
+        c = mk()
+        c["src"] = dict(c.get("src") or {}, rulebook_ver="R-0002")
+        self.assertEqual(self.ok(c)["src"]["rulebook_ver"], "R-0002")
+        c["src"]["rulebook_ver"] = "R-0002-extra-long"
+        self.assertLessEqual(len(self.ok(c)["src"]["rulebook_ver"]), 8)
+        c["src"]["rulebook_ver"] = 2
+        self.bad(c, "rulebook_ver")
+
 
 class TestStore(TmpRoot):
     def test_append_and_load(self):

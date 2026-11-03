@@ -1,8 +1,16 @@
 """Кандидаты на вход для entry_scout (блок досье `cands`): код заранее считает уровень, стоп, цели, расстояния, RR после издержек и горизонт,
 чтобы модель выбирала сетап, а не считала. Тонкая обёртка над tb.logic.geometry (R1.2): собирает пул уровней и ctx из досье, читает config/geometry.json,
 вызывает геометрию и добавляет в каждую строку geometry_ver. Алгоритм, константы и формат строк прежние (см. tb.logic.geometry).
+
+R2 (Requirement 7.7, точка (а)): после геометрии кандидаты размечаются действующим rulebook (tb.knowledge.rulebook_view): событие решения
+(resolve_event) -> признаки (memory.features.rule_features) -> tb.logic.learn_rules.apply по стороне кандидата. Кандидат под активным правилом
+остаётся в списке на своём месте (номер n прежний) с ok=false и fail="RULE_<id>". Та же функция rule_check вызывается шлюзом в submit_plan
+(точка (б)), поэтому одно решение (монета, сторона, событие) даёт одинаковый результат в обеих точках. При пустом rulebook, режиме без
+применения (выключатель, аренда, недоступная или восстанавливаемая база) и любой ошибке чтения кандидаты не меняются.
 """
 import json
+import sqlite3
+import time
 
 from tb import paths
 from tb.brain import validate as V
@@ -10,6 +18,7 @@ from tb.logic import geometry as G
 
 CLUSTER_PCT = G.DEFAULT_CLUSTER_PCT
 chase = G.chase
+RULE_ERRORS = (sqlite3.Error, OSError, ValueError, TypeError, KeyError, AttributeError, ImportError)
 
 
 def load_config(root=None):
@@ -33,8 +42,114 @@ def _horizon(ctx, stop_pct, rr, wide_pct=None, tp1_pct=None):
     return G._horizon(ctx, stop_pct, rr, wide_pct, tp1_pct, G._profiles(load_config()[0])[0])
 
 
-def candidates(brief, sym, ctx=None, root=None):
-    """-> [кандидат] (ok сначала, по убыванию rr_net) или None. ctx: validate.entry_context(brief, {"sym": sym}) (считается сам, если не передан)."""
+# ---------------------------------------------------------------- правила rulebook (общая функция мозга и шлюза)
+
+def rule_view(root=None, now=None):
+    """Действующий rulebook (rulebook_view.active) или None при любой ошибке (режим без применения)."""
+    try:
+        from tb.knowledge import rulebook_view as RV
+        return RV.active(root, now)
+    except RULE_ERRORS:
+        return None
+
+
+def policy_kinds(root=None):
+    """Виды сигналов области проверки (config/learnloop.json verify.policy, для P2 — range_5m, turnover_surge, hot_enter, oi_spike, liq_cascade)
+    из config/shadow_policies.json (включённая запись, последняя по ver). Не читается -> []."""
+    try:
+        with open(paths.config("learnloop.json", root=root), encoding="utf-8") as f:
+            pid = (json.load(f).get("verify") or {}).get("policy")
+        from tb.labels import policies as LP
+        from tb.memory import features as MF
+        pols = [p for p in LP.load(root) if p.get("id") == pid and p.get("enabled")]
+        return list(MF.policy_scope(max(pols, key=lambda p: p["ver"]))["kinds"]) if pols else []
+    except RULE_ERRORS:
+        return []
+
+
+def rule_kinds(view, root=None):
+    """Виды событий для resolve_event: виды scope действующих правил; при пустом rulebook — виды политики проверки (иначе ложный RULES_NO_EVENT)."""
+    kinds = list((view or {}).get("kinds") or [])
+    return kinds or policy_kinds(root)
+
+
+def resolve(root, sym, event_seq, now, view):
+    """Событие решения (rulebook_view.resolve_event) или None при ошибке чтения шины/конфига."""
+    try:
+        from tb.knowledge import rulebook_view as RV
+        return RV.resolve_event(root, sym, event_seq, now, rule_kinds(view, root))
+    except RULE_ERRORS:
+        return None
+
+
+def _mem_cfg(root):
+    try:
+        from tb.memory import cfg as memcfg
+        return memcfg.load(root)
+    except RULE_ERRORS:
+        return {}
+
+
+def rule_check(root, sym, side, event_seq=None, now=None, view=None, event=False, cfg=None):
+    """Одно решение (монета, сторона, событие) под действующим rulebook -> {"view", "event", "res"}; res — learn_rules.apply для {"side", "ok": True}.
+
+    event_seq — только из задания раннера entry_scout (для chat None). view — готовый rulebook_view.active (иначе читается). event — уже
+    разрешённое событие (False — разрешить здесь). Любая ошибка -> res в режиме без применения (ok=True, ничего не отсечено)."""
+    now = time.time() if now is None else now
+    view = rule_view(root, now) if view is None else view
+    ev = resolve(root, sym, event_seq, now, view) if event is False else event
+    res = {"ok": True, "fail": None, "hits": [], "eval": [], "missing": [], "blocked": [], "apply": False}
+    if view and view.get("apply") and view.get("rules"):
+        try:
+            from tb.logic import learn_rules as LR
+            from tb.memory import features as MF
+            feats = MF.rule_features(ev, {"side": side}, _mem_cfg(root) if cfg is None else cfg)
+            res = LR.apply(view, {"side": side, "ok": True}, feats)
+        except RULE_ERRORS:
+            pass
+    return {"view": view, "event": ev, "res": res}
+
+
+def is_rule_fail(c):
+    """Кандидат отсечён правилом rulebook (fail RULE_<id>)."""
+    return isinstance(c, dict) and isinstance(c.get("fail"), str) and c["fail"].startswith("RULE_")
+
+
+def ok_before_rules(cands):
+    """Число ok-кандидатов до правил: ok и отсечённые правилом (поле cands_ok_n записи rule_eval). Не список -> None."""
+    if not isinstance(cands, list):
+        return None
+    return sum(1 for c in cands if isinstance(c, dict) and (c.get("ok") or is_rule_fail(c)))
+
+
+def apply_rules(out, sym, root=None, event_seq=None, now=None, view=None):
+    """Разметить кандидатов действующими правилами на месте: ok-кандидат стороны, на которой сработало правило, -> ok=false, fail=RULE_<id>.
+    Пустой rulebook, режим без применения или корень не задан (root=None: ./tb brief без корня, прежние вызовы) -> ничего (база и шина не читаются)."""
+    if not out or root is None:
+        return out
+    now = time.time() if now is None else now
+    view = rule_view(root, now) if view is None else view
+    if not (view and view.get("apply") and view.get("rules")):
+        return out
+    sides = sorted(set(c.get("side") for c in out if isinstance(c, dict) and c.get("ok") and c.get("side") in ("long", "short")))
+    if not sides:
+        return out
+    ev = resolve(root, sym, event_seq, now, view)
+    cfg = _mem_cfg(root)
+    for side in sides:
+        res = rule_check(root, sym, side, now=now, view=view, event=ev, cfg=cfg)["res"]
+        if res.get("fail"):
+            for c in out:
+                if isinstance(c, dict) and c.get("ok") and c.get("side") == side:
+                    c["ok"] = False
+                    c["fail"] = res["fail"]
+    return out
+
+
+def candidates(brief, sym, ctx=None, root=None, event_seq=None, now=None, view=None):
+    """-> [кандидат] (ok сначала, по убыванию rr_net) или None. ctx: validate.entry_context(brief, {"sym": sym}) (считается сам, если не передан).
+    root — корень платформы (конфиг геометрии, rulebook, шина); event_seq — событие задания раннера entry_scout (для chat None); view —
+    готовый rulebook_view.active(root). Отсечённые правилом кандидаты остаются на своём месте с ok=false и fail=RULE_<id>."""
     if not isinstance(brief, dict) or not sym:
         return None
     ctx = ctx or V.entry_context(brief, {"sym": sym})
@@ -42,4 +157,4 @@ def candidates(brief, sym, ctx=None, root=None):
     out = G.candidates(V.level_pool(brief, sym), ctx, cfg)
     for r in out or []:
         r["geometry_ver"] = ver
-    return out
+    return apply_rules(out, sym, root, event_seq, now, view)

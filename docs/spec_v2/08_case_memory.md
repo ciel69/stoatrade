@@ -12,7 +12,7 @@
 {"schema":"tb.case/1","seq":41,"case_id":"C-20261027-DOOD-01","rev":2,"kind":"new|update","ts":"2026-10-27T13:39:43Z",
  "type":"trade|skip|idea|signal",
  "refs":{"journal_id":"BB-M-DOOD-1027-1522","idea":"I1","plan":"PL-1027-DOOD-01","brief_id":"B-20261027-1330-01","event_seq":1810,"outcome_id":"I1"},
- "src":{"risk_level":3,"actor":"agent|owner|system","agent_id":"api","model":"ds-pro","role":"position_manager|morning_analyst|chat|manual","exp":"sweep-reject-v1","var":"A","rules_ver":"2026-10-27","mode":"live|paper|testnet","mem":"on|off"},
+ "src":{"risk_level":3,"actor":"agent|owner|system","agent_id":"api","model":"ds-pro","role":"position_manager|morning_analyst|chat|manual","exp":"sweep-reject-v1","var":"A","rules_ver":"2026-10-27","mode":"live|paper|testnet","mem":"on|off","rulebook_ver":"R-0002"},
  "situation":{
    "sym":"DOOD","coin_class":"meme|major|alt_mid|alt_small|stock_token|unknown","side":"long|short|watch",
    "setup":"level_reclaim|level_reject|sweep_reject|breakout_retest|range_fade|trend_pullback|momentum_chase|manual|none","hyp":"код-гипотеза или null",
@@ -28,7 +28,7 @@
  "review":{...п. 1.4}|null,
  "tags":{"err":["no-confirm","chase"],"rule_followed":"yes|no|partial|na"}}
 ```
-Правила полей: `situation` фиксируется в момент решения и не меняется ревизиями (проверка: update не может изменить `situation`/`decision`); числа округляются (проценты 2 знака, bps 1); неизвестное = `null` (не 0); словарь `coin_class` определяется детерминированно по справочнику (`major`={BTC,ETH}, `stock_token` по `instruments.json`/маске, остальное по обороту: порог в `config/memory.json`); `rules_ver` = дата редакции правил (из `config/memory.json:rules_ver`, владелец поднимает при изменении правил: случаи разных версий не смешиваются по умолчанию); `src.model`/`agent_id` ставит КОД из контекста вызова (шлюз), не LLM; `mem` = включена ли память у агента на момент решения (нужно для A/B, п. 5).
+Правила полей: `situation` фиксируется в момент решения и не меняется ревизиями (проверка: update не может изменить `situation`/`decision`); числа округляются (проценты 2 знака, bps 1); неизвестное = `null` (не 0); словарь `coin_class` определяется детерминированно по справочнику (`major`={BTC,ETH}, `stock_token` по `instruments.json`/маске, остальное по обороту: порог в `config/memory.json`); `rules_ver` = дата редакции правил (из `config/memory.json:rules_ver`, владелец поднимает при изменении правил: случаи разных версий не смешиваются по умолчанию); `src.model`/`agent_id` ставит КОД из контекста вызова (шлюз), не LLM; `mem` = включена ли память у агента на момент решения (нужно для A/B, п. 5). `rulebook_ver` (R2, необязательное, строка до 8 символов) = версия действующего rulebook цикла обучения `R-NNNN` на момент решения (`tb.knowledge.rulebook_view`); не путать с `rules_ver` (редакция правил владельца в `config/memory.json`, при продвижении и откате правил цикла не меняется); случаи без поля остаются валидными.
 Приватность: в случае нет ключей, адресов, абсолютных сумм капитала/баланса/позиции в USDT; только доли и R. `risk_usdt`, `pnl_usdt` НЕ хранятся (только R и проценты); номинал/маржа не хранятся. Символ хранится (публичная информация).
 
 ### 1.2 Виды случаев
