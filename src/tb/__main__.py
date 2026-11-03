@@ -59,6 +59,7 @@ V2 = {
     "memory": "tb.memory.cli",     # память случаев (WP15a)
     "labels": "tb.labels.cli",     # фабрика меток (R1): status|stats|coverage|show|backfill|rerun|backup|verify
     "knowledge": "tb.knowledge.cli",   # база знаний v2 (R2.9a): verify|backup|restore|stats|disable-v2|migrate-v2a
+    "rulebook": "tb.knowledge.rulebook_cli",   # rulebook цикла обучения (R2.3): list|show|verify
     "risk": "tb.control.risk_cmd",  # уровни риска (WP16): risk level show|set|list|check, risk init-key
     "notify": "tb.lifecycle.notify_cli",  # уведомления ОС: status|on|off|set|test (WP-N)
     "setup": "tb.setup_cli",        # первый запуск и помощник настройки: среда, зависимости, ключи, токены, LLM (вопросы только в терминале)
@@ -99,6 +100,7 @@ USAGE = """использование: ./tb <группа> <команда> [а�
   memory <similar|stats|add|show|sync|migrate|coverage|verify|review-queue|review|lesson|backtest|compare> ...   память случаев: похожие ситуации, уроки-гипотезы, ретро-проверка, доля пустых признаков (WP15a, WP15b, R1)
   labels <status|stats [--by policy|type]|coverage|show KEY|backfill --since D|rerun --policy ID --since D|backup|verify> [--text]   фабрика меток и теневые политики (R1): backfill и rerun только ставят сигналы в очередь, размечает сервис labels
   knowledge <verify [--quick]|backup|restore [--from FILE]|stats|disable-v2|migrate-v2a> [--text]   база знаний v2 (R2): цепочки и целостность, проверенные копии, восстановление по протоколу (docs/RUNBOOK.md)
+  rulebook <list|show [R-NNNN|RL0001]|verify> [--text]   rulebook цикла обучения (R2): версии, правила, режим применения, проверка цепочки (только чтение)
   day <status|list|report [ID]|checklist|preflight> [--json]   жизненный цикл дня: состояние, итоги, сухой прогон чек-листа закрытия, preflight (WP14; только чтение)
   notify <status|on|off|set КАТЕГОРИЯ on|off|set quiet HH:MM-HH:MM|set quiet off|test>   уведомления ОС: мастер, категории, тихие часы (docs/NOTIFICATIONS.md)
   control <token new|status|gates|audit|cmd|run>   плоскость управления: ключ, токен входа, гейты live, аудит, сервис ctl (WP12)
