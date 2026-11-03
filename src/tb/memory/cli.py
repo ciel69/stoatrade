@@ -181,6 +181,12 @@ def cmd_review(a, root, cfg):
     return 0
 
 
+def _bad_src(msg):
+    """Команда владельца неприменима к уроку меток (R2, Requirement 5.12): JSON с кодом BAD_SRC, код возврата 2."""
+    _out({"ok": False, "code": "BAD_SRC", "error": msg})
+    return 2
+
+
 def cmd_lesson(a, root, cfg):
     now = time.time()
     act = a.action
@@ -199,10 +205,20 @@ def cmd_lesson(a, root, cfg):
         _out(l)
     elif act == "add":
         d = _read_json(a.file)
+        if not isinstance(d, dict):
+            raise ValueError("add: нужен объект {cond, claim, confirmed?}")
+        ev = d.get("evidence") if isinstance(d.get("evidence"), dict) else {}
+        if d.get("evidence_src") == "labels" or ev.get("src") == "labels":
+            return _bad_src("add: уроки меток создаёт только цикл обучения")
         l = lessons.create(root, d.get("cond"), d.get("claim"), "owner", cases.load(root), cfg, now, status="confirmed" if d.get("confirmed") is True else "hyp")
         _out({"ok": True, "lesson_id": l["lesson_id"], "status": l["status"]})
     elif act in ("confirm", "reject", "expire", "merge"):
-        l = lessons.owner_set(root, a.id, act, cfg, now, into=a.into)
+        try:
+            l = lessons.owner_set(root, a.id, act, cfg, now, into=a.into)
+        except lessons.LessonRefused as e:
+            if e.code != "BAD_SRC":
+                raise
+            return _bad_src(str(e))
         _out({"ok": True, "lesson_id": l["lesson_id"], "status": l["status"]})
     elif act == "refresh":
         _out({"changes": lessons.refresh(root, cases.load(root), cfg, now, dry_run=a.dry_run)})

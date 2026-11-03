@@ -20,7 +20,7 @@
   "rulebook": {"max_active_rules": 10},
   "watch": {"looks": [50, 100, 200], "weekly_window": 200, "alpha_watch": 0.05, "alpha_watch_weekly": 0.001, "rollback_delta_r": 0.1,
             "disable_trade_loss_share": 0.4, "disable_min_considered": 30, "starvation_window_days": 7},
-  "intervals": {"observe_s": 900, "verdict_s": 3600, "watch_s": 3600, "reconcile_s": 3600, "hypref_s": 3600, "daily_after": "00:05Z"},
+  "intervals": {"observe_s": 900, "verdict_s": 3600, "watch_s": 3600, "reconcile_s": 3600, "hypref_s": 3600, "daily_after": "00:20Z"},
   "hypref": {"window_days": 14},
   "second_iteration": {"prefilter_signals": 5000, "prefilter_cases": 2000,
                        "port": {"llm_job_ttl_s": 900, "claim_ttl_s": 120, "llm_wait_s": 600},
