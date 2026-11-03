@@ -7,7 +7,11 @@ promotion auto|off   аварийная остановка (off) или возв
                      до записи, после записи файл перечитывается загрузчиком (при расхождении прежний текст возвращается). Битый конфиг не
                      правится (код 1). При изменении — learn_events actor=OWNER (если база доступна). Сервис цикла перечитывает конфиг сам.
 
-Вывод: JSON одной строкой (--text: кратко). Коды: 0 успех; 1 конфиг битый или не записан; 2 ошибка использования.
+gate [--json]        гейт этапа R2 (Requirements 15.8, 15.9; tb.learnloop.gate): ступени A и B, «да/нет» с причиной по каждому условию по
+                     накопленной истории базы знаний (только чтение). Вывод по умолчанию — текст, --json — JSON одной строкой. Коды: 0 оценка
+                     выполнена (пройден гейт или нет — поле ok); 1 база недоступна (нет базы, нет таблиц цикла, идёт восстановление, ошибка чтения).
+
+Вывод promotion: JSON одной строкой (--text: кратко). Коды: 0 успех; 1 конфиг битый или не записан; 2 ошибка использования.
 """
 import argparse
 import json
@@ -137,16 +141,28 @@ def cmd_promotion(a, root):
     return 0
 
 
+def cmd_gate(a, root):
+    from tb.learnloop import gate as GT
+    rep = GT.run(root)
+    if a.json:
+        _out(rep)
+    else:
+        _out(rep, True, GT.render(rep))
+    return 1 if rep.get("db") not in (None, "OK") else 0
+
+
 def build_parser():
-    p = argparse.ArgumentParser(prog="tb learn", description="цикл обучения: аварийный режим продвижения (R2)")
+    p = argparse.ArgumentParser(prog="tb learn", description="цикл обучения: аварийный режим продвижения, гейт этапа (R2)")
     sub = p.add_subparsers(dest="cmd")
     pr = sub.add_parser("promotion", help="режим автопродвижения: показать или auto|off")
     pr.add_argument("mode", nargs="?", choices=LC.PROMOTION_MODES)
     pr.add_argument("--text", action="store_true")
+    gt = sub.add_parser("gate", help="гейт этапа R2: ступени A и B с причиной по каждому условию (только чтение)")
+    gt.add_argument("--json", action="store_true")
     return p
 
 
-HANDLERS = {"promotion": cmd_promotion}
+HANDLERS = {"promotion": cmd_promotion, "gate": cmd_gate}
 
 
 def main(argv, root=None):

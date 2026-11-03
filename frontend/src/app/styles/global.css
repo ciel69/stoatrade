@@ -14,3 +14,16 @@ button { font: inherit; }
 .page { width: 100%; max-width: var(--page-max); margin: 0 auto; padding: var(--space-5); display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); }
 .page > * { min-width: 0; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Вкладка «Память» (Requirement 13.7): при prefers-reduced-motion: reduce вычисленные длительности переходов и анимаций не больше 10 мс —
+   на самой вкладке, в окне «Принимаю риски» и в подсказках, пока вкладка открыта. Остальные страницы этим правилом не затронуты. */
+@media (prefers-reduced-motion: reduce) {
+  .memory-page, .memory-page *, .memory-page *::before, .memory-page *::after,
+  body:has(.memory-page) .backdrop, body:has(.memory-page) .backdrop *, body:has(.memory-page) .toasts *, body:has(.memory-page) .tip-pop {
+    transition-duration: 0s !important;
+    transition-delay: 0s !important;
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    animation-iteration-count: 1 !important;
+  }
+}

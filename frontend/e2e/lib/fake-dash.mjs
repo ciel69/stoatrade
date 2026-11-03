@@ -24,11 +24,13 @@ export class FakeDash {
    * @param {object} o.hello содержимое hello.ctl
    * @param {number} [o.heartbeatMs] период пульса `link` (0: выключен)
    */
-  constructor({ topics, hello, heartbeatMs = 0 }) {
+  constructor({ topics, hello, memory, heartbeatMs = 0 }) {
     this.state = new Map()
     this.seq = new Map()
     for (const [k, v] of Object.entries(topics)) this.state.set(k, v)
     this.hello = hello
+    /** hello.memory (вкладка «Память»: CSRF соединения, аварийные действия, id предупреждений); как у сервера, когда действий нет: {actions: []}. */
+    this.memory = memory ?? { actions: [] }
     this.heartbeatMs = heartbeatMs
     this.sockets = new Set()
     this.connects = 0
@@ -113,7 +115,7 @@ export class FakeDash {
 
   _snapshot(ws) {
     ws.send(this._msg('hello', {
-      topics: [...this.state.keys()].sort(), tick_s: 1, heartbeat_s: 15, server_ts: Date.now() / 1000, mode: 'paper', modes: ['paper', 'live', 'testnet', 'all'], ctl: this.hello,
+      topics: [...this.state.keys()].sort(), tick_s: 1, heartbeat_s: 15, server_ts: Date.now() / 1000, mode: 'paper', modes: ['paper', 'live', 'testnet', 'all'], ctl: this.hello, memory: this.memory,
     }, 0))
     for (const [topic] of this.state) ws.send(this._msg(topic, this.state.get(topic)))
   }

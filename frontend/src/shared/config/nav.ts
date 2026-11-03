@@ -41,7 +41,7 @@ export const NAV_GROUPS: NavGroup[] = [
         to: '/trading/trades', label: 'Торговля', icon: 'M5 4h14v16H5zM9 9h6M9 13h6M9 17h3', zone: 'trades', base: '/trading', badge: 'day',
         tabs: [{ to: '/trading/trades', label: 'Сделки' }, { to: '/trading/plans', label: 'Планы' }, { to: '/trading/ideas', label: 'Идеи' }, { to: '/trading/day', label: 'День', badge: 'day' }, { to: '/trading/experiments', label: 'Эксперименты' }],
       },
-      { to: '/brain/decisions', label: 'Мозг', icon: 'M4 6h16M4 12h10M4 18h6M17 14l2.5 2.5L23 12', zone: 'brain', base: '/brain', tabs: [{ to: '/brain/decisions', label: 'Решения' }, { to: '/brain/brief', label: 'Досье' }, { to: '/brain/learning', label: 'Учится ли мозг' }] },
+      { to: '/brain/decisions', label: 'Мозг', icon: 'M4 6h16M4 12h10M4 18h6M17 14l2.5 2.5L23 12', zone: 'brain', base: '/brain', tabs: [{ to: '/brain/decisions', label: 'Решения' }, { to: '/brain/brief', label: 'Досье' }, { to: '/brain/learning', label: 'Учится ли мозг' }, { to: '/brain/memory', label: 'Память' }] },
       { to: '/system/control', label: 'Система', icon: 'M12 3v9m5.7-6.7a8 8 0 1 1-11.4 0', zone: 'system', base: '/system', tabs: [{ to: '/system/control', label: 'Управление' }, { to: '/system/settings', label: 'Настройки' }, { to: '/system/notify', label: 'Уведомления' }] },
     ],
   },
