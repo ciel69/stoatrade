@@ -66,7 +66,7 @@ PM_TOOL_SPECS = [
     _spec("pm_extend_hold", "Extend the planned holding time (on milestone hold_expiring / hold_expired). No timer closes the position: only you, the stop or the targets; "
                             "pm_hold = keep. minutes: the new total max_hold_min (up to 2x; without stop at breakeven at most 240 for scalp, 1440 for intraday).",
           {"minutes": {"type": "integer", "minimum": 1, "maximum": 43200}}, ("minutes",)),
-    _spec("pm_hold_plan", "Pause your own plan."),
+    _spec("pm_hold_plan", "Pause your own plan BEFORE entry (forbids the entry). Not for a plan in a position: there use pm_hold."),
     _spec("pm_release_plan", "Lift your own pause."),
     _spec("pm_escalate", "Hand over to the owner.", {"reason_code": {"type": "string", "enum": ["SECRET_REQUEST", "NEED_OWNER", "DATA_GAP"]}}, ("reason_code",)),
 ]
@@ -114,7 +114,7 @@ ES_TOOL_NOTE = ("\n\nTOOL MODE (this run). Act by calling exactly ONE tool: es_t
                 "No ok candidate fits: es_skip or es_watch. If a call is rejected with codes, fix it with another call; after one action succeeded stop.")
 
 PM_TOOL_NOTE = ("\n\nTOOL MODE (this run). Act by calling exactly ONE tool: pm_hold, pm_move_stop, pm_partial_close, pm_close, pm_cancel, pm_amend, pm_extend_hold, pm_hold_plan, pm_release_plan or pm_escalate "
-                "(reason is a code from the enum, why is a short note with numbers from the brief; plan and rev are filled in by the platform). The tool is executed immediately and "
+                "(reason is a code from the enum, why is a short note with numbers from the brief; the plan is filled in by the platform). The tool is executed immediately and "
                 "the run ends. Do not output JSON. If a call is rejected with codes, fix it with another call.")
 
 
@@ -500,7 +500,7 @@ class Runner(object):
                 self._journal(job, role, agent_id, None, "skip", pre, "вход невозможен по данным досье: %s" % pre, meta, None, meter, assign)
                 return out
         ctx["_run"] = {"job": job, "agent": agent_id, "assign": assign, "meter": meter}
-        for attempt in range(2):                      # второй проход только при устаревшей ревизии плана (STALE)
+        for _attempt in range(1):                     # один проход (повтор по устаревшей ревизии STALE убран 2026-11-03: rev модель не задаёт)
             llm = self._llm(role, text, meta, assign, team, meter, ctx)
             if llm["obj"] is None:
                 out.update(outcome="no_action", code=llm["code"], profile=llm.get("profile"))
@@ -516,18 +516,7 @@ class Runner(object):
                 res = llm["result"]
                 out.update(outcome=res["outcome"], code=res["code"], profile=llm["profile"], decision=llm["obj"].get("decision"))
                 return out
-            stale = self._stale(role, llm["obj"], ctx)
-            if stale and attempt == 0:
-                try:
-                    text, ctx = self._input(role, job, agent_id, meta)
-                except DossierError:
-                    break
-                continue
-            if stale:
-                out.update(outcome="no_action", code="STALE", profile=llm["profile"])
-                self._journal(job, role, agent_id, llm["obj"], "skip", "STALE", "устаревшая ревизия плана", meta, llm, meter, assign)
-                return out
-            break
+            break           # ревизию плана модель не задаёт (2026-11-03): проверки «устаревшей ревизии» в ответе модели больше нет, исполнитель судит по текущему плану
         res = self._execute(role, llm["obj"], job, agent_id, dict(meta, profile=llm["profile"], fallback_from=llm.get("fallback_from")), ctx, llm, meter)
         out.update(outcome=res["outcome"], code=res["code"], profile=llm["profile"], decision=(llm["obj"] or {}).get("decision"))
         return out
@@ -542,7 +531,7 @@ class Runner(object):
         """-> (текст запроса, ctx). Для decision_json с brief:event досье собирает раннер; для tools-ролей модель сама зовёт инструменты."""
         seqs = [s for s in (job.get("seqs") or []) if isinstance(s, int)]
         first, last = (min(seqs), max(seqs)) if seqs else (0, 0)
-        ctx = {"plan": job.get("plan"), "event_seq": last, "brief_rev": None, "brief_id": None, "protect": self.health.protect_on}
+        ctx = {"plan": job.get("plan"), "event_seq": last, "brief_id": None, "protect": self.health.protect_on}
         info = {"job": job["id"], "plan": job.get("plan"), "sym": job.get("sym"), "types": job.get("types"), "kinds": job.get("kinds"), "seq_first": first, "seq_last": last,
                 "events_n": job.get("count")}
         if role.output_schema == "casereview/1":
@@ -581,7 +570,6 @@ class Runner(object):
             if len(ids) == 1:
                 ctx["plan"] = info["plan"] = ids[0]
         ctx["brief_id"] = b.get("brief_id")
-        ctx["brief_rev"] = self._plan_rev(b, ctx.get("plan"))
         if role.output_schema == "pm/1":
             ctx.update({k: v for k, v in validate.pm_context(b, ctx.get("plan"), info).items() if k != "plan"})
         elif role.output_schema == "entry/1":
@@ -624,19 +612,6 @@ class Runner(object):
         if learned:
             after["learned_after"] = learned
         return "<case>%s</case>\n<after_decision>%s</after_decision>" % (common.dumps(head), common.dumps(after))
-
-    @staticmethod
-    def _plan_rev(brief, plan):
-        if not plan:
-            return None
-        for key in ("plans", "positions"):
-            for it in brief.get(key) or []:
-                if isinstance(it, dict) and plan in (it.get("id"), it.get("plan")) and isinstance(it.get("rev"), int):
-                    return it["rev"]
-        return None
-
-    def _stale(self, role, obj, ctx):
-        return bool(role.output_schema == "pm/1" and ctx.get("brief_rev") is not None and obj.get("rev") != ctx["brief_rev"])
 
     # ---- вызов модели по цепочке профилей
     def _llm(self, role, text, meta, assign, team, meter, ctx):
@@ -918,7 +893,7 @@ class Runner(object):
                 args["patch"] = a.get("patch")
             elif d == "escalate":
                 args["reason_code"] = a.get("reason_code")
-            obj = {"schema": "tb.pm/1", "event_seq": ctx["event_seq"], "plan": plan, "rev": ctx.get("brief_rev") if ctx.get("brief_rev") is not None else 1, "decision": d,
+            obj = {"schema": "tb.pm/1", "event_seq": ctx["event_seq"], "plan": plan, "decision": d,
                    "args": args, "why": "%s: %s" % (name, a.get("reason") or "OTHER"), "conf": 0.7, "next": "event"}
             errs = schema_mod.validate(role.schema, obj) or sem(obj)
             if not errs and protect and DECISION_TOOLS.get(d) in PROTECT_BLOCKED:
@@ -929,7 +904,7 @@ class Runner(object):
             res = self._execute(role, obj, run["job"], run["agent"], dict(meta), ctx, llm_info, run["meter"])
             state["done"] = {"decision": d, "obj": obj, "result": res, "tool": name, "reason": a.get("reason"), "why": a.get("why")}
             return {"ok": res["outcome"] in ("decision", "hold"), "outcome": res["outcome"], "code": res["code"]}
-        tl = [dict(t) for t in PM_TOOL_SPECS]
+        tl = [dict(t) for t in PM_TOOL_SPECS if not (ctx.get("has_position") is True and t["name"] == "pm_hold_plan")]      # план в позиции на паузу не ставится (2026-11-03)
         base = req
         req = req.copy(system=(req.system or "") + PM_TOOL_NOTE, tools=tl, tool_choice="auto")
         lr = self._run_tools_once(client, req, run_tool, state, max_rounds=max(3, role.max_rounds), schema=None,
@@ -1020,8 +995,7 @@ class Runner(object):
         args = {"id": obj["plan"], "reason": why or d, "event_seq": ctx["event_seq"], "wait_s": 8}
         if ctx.get("brief_id"):
             args["brief_id"] = ctx["brief_id"]
-        if d in ("move_stop", "amend"):
-            args["rev"] = obj["rev"]
+        # ревизию плана мозг не передаёт (решение владельца 2026-11-03): шлюз и исполнитель проверяют stop/amend по ТЕКУЩЕМУ плану, rev из ответа модели игнорируется
         if d == "move_stop":
             args["to"] = "be" if a["to"] == "be" else _num_str(a["to"])
         elif d == "partial_close":
@@ -1185,8 +1159,6 @@ class Runner(object):
             rec["args"] = {"sym": sym}
         if obj:
             rec["args"] = dict(rec.get("args") or {}, **({"decision": obj.get("decision")} if obj.get("decision") else {}))
-            if isinstance(obj.get("rev"), int):
-                rec["rev"] = obj["rev"]
         try:
             decisions.append(rec, root=self.root)
         except (ValueError, OSError, TimeoutError):
@@ -1207,8 +1179,6 @@ class Runner(object):
                "res": {"ok": True, "code": "WHY" if why else "NO_WHY"}}
         if job.get("plan"):
             rec["plan"] = job["plan"]
-        if isinstance(obj.get("rev"), int):
-            rec["rev"] = obj["rev"]
         try:
             decisions.append(rec, root=self.root)
         except (ValueError, OSError, TimeoutError):

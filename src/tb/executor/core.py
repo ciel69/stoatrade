@@ -29,6 +29,28 @@ from tb.logic.candles import CandleBook, MarketView, tf_min
 VERSION = "v2.0-wp5"
 ACTIVE = ("armed", "entered", "managing")
 IN_POS = ("entered", "managing")
+
+
+def close_qty(want, remaining, step, min_qty=None, full_req=False):
+    """Объём закрытия по шагу и минимальному лоту биржи -> (qty, full).
+
+    Доля округляется вниз к шагу. Доля меньше минимального лота (lot = max(шаг, min_qty)) раньше давала 0 и отказ E_STATUS_FORBIDS
+    (инцидент ETH 2026-11-03: остаток 0.01 при шаге 0.01, frac 0.5): теперь неделимый остаток (меньше двух лотов) закрывается целиком,
+    делимый закрывается одним минимальным лотом. Это только снижение риска, больше остатка не закрывается.
+
+    >>> close_qty(0.005, 0.01, 0.01), close_qty(0.003, 0.05, 0.01), close_qty(0.07, 0.14, 0.01)
+    ((0.01, True), (0.01, False), (0.07, False))
+    """
+    step = float(step or 0) or 1e-12
+    remaining = float(remaining)
+    qty = min(remaining, G.floor_step(want, step))
+    full = bool(full_req) or qty >= remaining - step / 2.0
+    lot = max(step, float(min_qty or 0))
+    if not full and remaining > 0 and qty < lot - step / 2.0:
+        if remaining < 2.0 * lot - step / 2.0:
+            return remaining, True
+        qty = lot
+    return (remaining if full else qty), full
 EPS = 1e-9
 SEEN_MAX = 5000
 KLINE_TFS = (1, 5, 15, 60)
@@ -948,6 +970,8 @@ class Executor(object):
         rt["status"] = new
         if new in plan_schema.TERMINAL:
             rt["ts"]["closed"] = round(self.clock(), 3)
+        if new in IN_POS:
+            self.drop_pause_in_position(p, "ENTRY")
         try:
             self.store.save_rt(p["spec"]["id"], rt, sync=True)
         except (OSError, ValueError, KeyError):
@@ -955,6 +979,21 @@ class Executor(object):
         self.decide("transition", new, plan=p["spec"]["id"], why="%s %s->%s" % (why, old, new))
         if new in plan_schema.TERMINAL:
             self.plans.pop(p["spec"]["id"], None)
+        return True
+
+    PAUSE_REASONS = ("brain", "manual")       # пауза плана (команда hold); системные причины hold (position_drift и т.п.) снимает только исполнитель
+
+    def drop_pause_in_position(self, p, why):
+        """План в позиции на паузе не стоит (решение владельца 2026-11-03, SPEC_V2 I8): пауза мозга/владельца снимается при входе и у планов, которые уже
+        стоят в позиции с паузой (старое состояние после перезапуска), с записью решения. Системный hold остаётся: на позиции он запрещает только добор.
+        -> True, если пауза снята (rt изменён, сохранение за вызывающим)."""
+        rt = p["rt"]
+        if not rt.get("hold") or rt.get("hold_reason") not in self.PAUSE_REASONS:
+            return False
+        reason = rt.get("hold_reason")
+        rt["hold"], rt["hold_reason"] = None, None
+        self.decide("event", "hold_released", plan=p["spec"]["id"], args={"hold": reason}, res={"ok": True, "code": "HOLD_IN_POSITION"},
+                    why="HOLD_IN_POSITION:%s пауза плана в позиции снята: защита и управление работают всегда" % why)
         return True
 
     def _arm(self, p, recovered=False):
@@ -1008,6 +1047,8 @@ class Executor(object):
         sym = spec["symbol"]
         view = self.view(sym)
         self._track_path(p, view)
+        if self.drop_pause_in_position(p, "TICK"):         # план, вставший в позицию с паузой до исправления (2026-11-03): пауза снимается на первом тике
+            self.save(p, sync=True)
         if self._lifecycle(p, now):
             return
         if rt["status"] == "entered":
@@ -1208,8 +1249,7 @@ class Executor(object):
                 qty = remaining * float(a["frac_remaining"])
             else:
                 qty = float(pos["entries"][0]["qty"]) * float(a.get("frac_initial", 0))
-        qty = min(remaining, G.floor_step(qty, step))
-        full = qty >= remaining - step / 2.0 or (a["type"] == "close" and float(a.get("frac", 1.0)) >= 0.999)
+        qty, full = close_qty(qty, remaining, step, ins.get("min_qty"), a["type"] == "close" and float(a.get("frac", 1.0)) >= 0.999)
         if qty <= 0 and not full:
             return False
         if full and self.act.close_inflight(p):      # закрытие уже в пути: без повторов на каждом тике (иначе ордер снимается раньше исполнения и позиция висит)

@@ -387,14 +387,23 @@ class MoveStopTest(unittest.TestCase):
         self.assertAlmostEqual(stops(res)[0]["to"], 100.5)
         self.assertEqual(set(res["rt_patch"]["rules"]), {"a_be", "b_lock"})
 
-    def test_hold_and_stale_price_freeze_stops_not_closes(self):
+    def test_hold_on_position_keeps_protection_stale_price_freezes(self):
+        # было (test_hold_and_stale_price_freeze_stops_not_closes): при hold стоп не двигался. Решение владельца 2026-11-03 и SPEC_V2 I8:
+        # hold на позиции не блокирует защитный перенос стопа и закрытия; стоп стоит только при устаревшей цене (NO_DATA)
         p = long_plan(manage=[
             {"id": "be", "when": {"kind": "pnl_r", "gte": 1.0}, "do": {"action": "move_stop", "to": "breakeven"}},
             {"id": "cl", "when": {"kind": "pnl_r", "gte": 1.0}, "do": {"action": "close", "frac": 0.5, "reason": "rule"}}])
-        res = R.evaluate_manage(p, managing_rt(hold="reconciling"), view(102.0), T0, LIM)
-        self.assertEqual([a["type"] for a in res["actions"]], ["close"])
+        for h in ("reconciling", "position_drift", "brain"):
+            res = R.evaluate_manage(p, managing_rt(hold=h), view(102.0), T0, LIM)
+            self.assertEqual([a["type"] for a in res["actions"]], ["move_stop", "close"], h)
+            self.assertNotIn("NO_DATA", [x["code"] for x in res["skipped"]], h)
         res = R.evaluate_manage(p, managing_rt(), view(102.0, ts=T0 - 60), T0, LIM)             # устаревшая цена: pnl_r не вычислим
         self.assertEqual(res["actions"], [])
+
+    def test_stale_price_move_stop_is_no_data(self):
+        p = long_plan(manage=[{"id": "be", "do": {"action": "move_stop", "to": "breakeven"}}])         # без условия: дойдёт до проверки цены
+        res = R.evaluate_manage(p, managing_rt(hold="brain"), view(102.0, ts=T0 - 60), T0, LIM)
+        self.assertEqual((res["actions"], [x["code"] for x in res["skipped"]]), ([], ["NO_DATA"]))
 
 
 class TrailTest(unittest.TestCase):
@@ -595,7 +604,9 @@ class OtherActionsTest(unittest.TestCase):
         res = R.evaluate_manage(p, rt, view(101.5), T0, lim)
         self.assertEqual((res["actions"][0]["type"], res["actions"][0]["risk_frac"]), ("add", 0.5))
         self.assertEqual(R.evaluate_manage(p, managing_rt(adds={"n": 1}), view(101.5), T0, lim)["skipped"][0]["code"], "MAX_ADDS")
-        self.assertEqual(R.evaluate_manage(p, managing_rt(hold="x"), view(101.5), T0, lim)["actions"], [])
+        res = R.evaluate_manage(p, managing_rt(hold="x"), view(101.5), T0, lim)
+        self.assertEqual((res["actions"], [x["code"] for x in res["skipped"]]), ([], ["HOLD"]))     # добор при hold: код HOLD, не NO_DATA (2026-11-03)
+        self.assertIn("HOLD", R.SKIP_CODES)
         self.assertEqual(R.evaluate_manage(p, rt, view(101.4), T0, lim)["actions"], [])
 
     def test_max_times_cooldown_once(self):
@@ -780,6 +791,22 @@ class AutoProtectTest(unittest.TestCase):
         self.assertEqual(len(s), 1)
         self.assertGreater(s[0]["to"], 100.0)
         self.assertLess(s[0]["to"], 100.8)
+
+    def test_breakeven_with_brain_hold_in_position(self):
+        """Инцидент PL-1103-ETH-02 (2026-11-03): rt.hold="brain" у плана в managing, +0.7R...+0.91R, auto_be пропускался как NO_DATA. Теперь безубыток ставится."""
+        for h in ("brain", "position_drift", "private_ws"):
+            rt = managing_rt(hold=h)
+            rt["pos"]["best_px"] = 100.8
+            res = R.evaluate_manage(long_plan(), rt, view(100.8), T0, self.AP)
+            s = stops(res)
+            self.assertEqual(len(s), 1, h)
+            self.assertGreater(s[0]["to"], 100.0)
+            self.assertEqual(res["skipped"], [], h)
+
+    def test_mfe_lock_works_under_hold(self):
+        rt = managing_rt(hold="blind")
+        rt["pos"]["best_px"] = 102.0
+        self.assertAlmostEqual(stops(R.evaluate_manage(long_plan(), rt, view(101.6), T0, self.AP))[0]["to"], 101.0, 2)
 
     def test_mfe_lock_keeps_half_of_peak_long_and_short(self):
         rt = managing_rt()

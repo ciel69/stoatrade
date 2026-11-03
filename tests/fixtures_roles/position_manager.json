@@ -2462,22 +2462,21 @@
    },
    "expect": {
     "decision_in": [
-     "hold_plan",
      "escalate",
      "hold"
     ]
    },
    "forbid": [
-    "decision:release_plan"
+    "decision:release_plan",
+    "decision:hold_plan"
    ],
    "golden": {
     "schema": "tb.pm/1",
     "event_seq": 1863,
     "plan": "PL-1028-SOL-01",
-    "rev": 3,
-    "decision": "hold_plan",
+    "decision": "hold",
     "args": {},
-    "why": "связь потеряна, стоп на бирже работает | down 60 с | пауза плана",
+    "why": "связь потеряна, стоп на бирже работает | down 60 с | план в позиции на паузу не ставится, держу",
     "conf": 0.8,
     "next": "event"
    },

@@ -19,11 +19,11 @@ bus, decisions, ideas, expstats, journal); слои проверяет `tests/te
 | `list_plans` | read | чтение | status, mode, limit |
 | `show_plan` | read | чтение | *id, rev, events, decisions |
 | `submit_plan` | plan.submit | запись | *plan, reason, wait_s, event_seq, brief_id |
-| `amend_plan` | plan.manage | запись | *id, *rev, *patch, *reason, wait_s, event_seq, brief_id |
-| `stop_plan` | plan.manage | запись | *id, *rev, *to, *reason, wait_s, event_seq, brief_id |
+| `amend_plan` | plan.manage | запись | *id, *patch, *reason, wait_s, event_seq, brief_id |
+| `stop_plan` | plan.manage | запись | *id, *to, *reason, wait_s, event_seq, brief_id |
 | `close_plan` | plan.manage | запись | *id, frac, *reason, wait_s, event_seq, brief_id |
 | `cancel_plan` | plan.manage | запись | *id, *reason, wait_s, event_seq, brief_id |
-| `hold_plan` | plan.manage | запись | *id, *reason, wait_s, event_seq, brief_id |
+| `hold_plan` | plan.manage | запись | *id, *reason, wait_s, event_seq, brief_id (только до входа; план в позиции: `E_STATUS_FORBIDS`) |
 | `release_plan` | plan.manage | запись | *id, *reason, wait_s, event_seq, brief_id |
 | `add_idea` | idea.write | запись | *sym, *side, *note, level, stop, tp, tag |
 | `revise_idea` | idea.write | запись | *id, *action (keep/update/cancel), candidate (для update: номер ok-кандидата `brief.cands`; цены берёт код) |
@@ -50,7 +50,7 @@ bus, decisions, ideas, expstats, journal); слои проверяет `tests/te
 - `limits` (только СУЖАЮТ guard и exec_limits; ослабить риск-профиль шлюз не может): `max_risk_usdt`, `max_risk_pct` (риск плана = guard_preview.risk_usdt * size_mult, в % капитала;
   не удалось посчитать = отказ), `symbols` (список или `["*"]`, пусто = ничего), `modes` (`paper`/`live`; новый агент только paper; план без `mode` у paper-агента становится paper),
   `max_size_mult`, `allow_add` (добор/пирамидинг, по умолчанию запрещён; также в `shadow_variants`), `calls_per_min` (в памяти процесса), `plans_per_hour` (по аудиту, переживает перезапуск).
-- Дополнительно: `how.type=adopt` через submit запрещён; при активном KILL submit отклоняется сразу; `stop_plan` принимает только более строгий стоп; `amend_plan` сначала прогоняется
+- Дополнительно: `how.type=adopt` через submit запрещён; при активном KILL submit отклоняется сразу; `stop_plan` принимает только более строгий стоп; `amend_plan` и `stop_plan` без ревизии: шлюз и исполнитель проверяют их по текущему плану (2026-11-03); `amend_plan` сначала прогоняется
   офлайн через `plan_schema.amend` (расширение стопа в позиции, рост риска, смена символа, устаревший rev дают отказ до очереди); операции над чужим символом или режимом отклоняются.
 - Порядок проверок: агент известен и включён -> инструмент существует -> право -> лимит частоты -> схема входа (лишние поля отбрасываются и считаются в `dropped_fields`, длинные строки и
   неверные форматы отклоняются) -> ограничения агента -> обработчик -> фильтр выхода -> аудит. Коды отказа: `E_AGENT_UNKNOWN`, `E_AGENT_DISABLED`, `E_TOOL_UNKNOWN`, `E_TOOL_DENIED`,

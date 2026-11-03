@@ -721,7 +721,7 @@ def h_amend(ctx, a):
     sign = 1 if spec.get("side") == "long" else -1
     live = {"exch_stop": cur if pos else None, "position": pos, "stop_at_or_better_be": bool(pos and cur and avg and (cur - avg) * sign >= 0)}
     try:
-        new, iss = plan_schema.amend(spec, patch, status, live, a["rev"], ctx.now)
+        new, iss = plan_schema.amend(spec, patch, status, live, spec.get("rev"), ctx.now)     # ревизию мозг не присылает: проверка по текущему плану
     except NotImplementedError:
         raise ToolError("E_NOT_READY", "схема плана недоступна", status="unavailable")
     errs = [i for i in iss if i.get("severity") == "error"]
@@ -731,7 +731,7 @@ def h_amend(ctx, a):
     ok_tr, code_tr = _registry.trading_allowed(ctx.root, new.get("mode"), ctx.now, ctx.agent.id)
     if not ok_tr and not (pos and _tightening(spec, new)):
         raise ToolError(code_tr, "%s: ослабляющее изменение плана недоступно (ужесточение разрешено)" % _registry.TRADING_CODES.get(code_tr, "торговля недоступна"), "mode", "denied")
-    return _send(ctx, "amend", a, plan_id=a["id"], rev=a["rev"], payload=patch, reason=reason)
+    return _send(ctx, "amend", a, plan_id=a["id"], payload=patch, reason=reason)       # без rev_expected: исполнитель проверяет по текущему плану (01 п. 1.7)
 
 
 def _tightening(old, new):
@@ -753,12 +753,21 @@ def h_stop(ctx, a):
         cur = common.num((rt.get("pos") or {}).get("cur_stop")) or common.num((spec.get("stop") or {}).get("price"))
         if cur is not None and not (to > cur if spec.get("side") == "long" else to < cur):
             raise ToolError("E_STOP_WIDEN", "новый стоп %s не строже текущего %s: расширять стоп нельзя" % (to, cur), "to")
-    return _send(ctx, "stop", a, plan_id=a["id"], rev=a["rev"], payload={"to": to}, reason=reason)
+    return _send(ctx, "stop", a, plan_id=a["id"], payload={"to": to}, reason=reason)        # без rev_expected: исполнитель берёт только строже текущего стопа
 
 
 def h_close(ctx, a):
     _plan_scope(ctx, a["id"])
     return _send(ctx, "close", a, plan_id=a["id"], payload={"frac": a.get("frac", 1.0)}, reason=_need_reason(a))
+
+
+def h_hold(ctx, a):
+    """Пауза плана только до входа (решение владельца 2026-11-03): план в позиции на паузу не ставится, исполнитель отказал бы тем же кодом."""
+    spec, rt = _plan_scope(ctx, a["id"])
+    reason = _need_reason(a)
+    if common.plan_status({"spec": spec, "rt": rt}) in ("entered", "managing") or (common.num((rt.get("pos") or {}).get("qty")) or 0) > 0:
+        raise ToolError("E_STATUS_FORBIDS", "план в позиции на паузу не ставится: стоп, безубыток и управление работают всегда; пауза только до входа", "id")
+    return _send(ctx, "hold", a, plan_id=a["id"], reason=reason)
 
 
 def _simple(op):
@@ -840,20 +849,20 @@ _reg(Tool("submit_plan", "Submit a new trading plan (schema tb.plan/1; see the p
           "margin. Entry/stop/targets are prices in quote currency. Answer: ok true/false, or ok null = queued (do not resend).",
           dict({"plan": _obj("The plan object (tb.plan/1)."), "reason": REASON}, **{k: v for k, v in CMD_COMMON.items() if k != "reason"}), "plan.submit", h_submit,
           required=["plan"], out=("cmd_id", "plan_id", "rev", "guard_preview", "executor", "gateway_actor"), write=True))
-_reg(Tool("amend_plan", "Amend a plan with a JSON Merge Patch against revision rev. Stops can only be tightened in a position; risk can only go down. Validated "
-          "offline and again by the executor.",
-          dict({"id": PLAN_ID, "rev": _i("Current plan rev (stale rev is rejected).", 1, 10 ** 6), "patch": _obj("JSON Merge Patch (RFC 7386) of plan fields.")}, **CMD_COMMON),
-          "plan.manage", h_amend, required=["id", "rev", "patch", "reason"], out=("cmd_id", "plan_id", "rev", "guard_preview", "executor"), write=True))
+_reg(Tool("amend_plan", "Amend a plan with a JSON Merge Patch of the current plan (no revision needed: it is checked against the current plan). Stops can only be "
+          "tightened in a position; risk can only go down. Validated offline and again by the executor.",
+          dict({"id": PLAN_ID, "patch": _obj("JSON Merge Patch (RFC 7386) of plan fields.")}, **CMD_COMMON),
+          "plan.manage", h_amend, required=["id", "patch", "reason"], out=("cmd_id", "plan_id", "rev", "guard_preview", "executor"), write=True))
 _reg(Tool("stop_plan", "Tighten the stop of a plan to a price (quote currency) or to breakeven ('be'). Only stricter than the current stop is accepted.",
-          dict({"id": PLAN_ID, "rev": _i("Current plan rev.", 1, 10 ** 6), "to": {"type": "string", "description": "Price like '143.2' or 'be'.", "maxLength": 24,
-                                                                              "pattern": r"^(be|[0-9]+(\.[0-9]+)?)$", "free": False}}, **CMD_COMMON),
-          "plan.manage", h_stop, required=["id", "rev", "to", "reason"], out=("cmd_id", "plan_id", "rev", "executor"), write=True))
+          dict({"id": PLAN_ID, "to": {"type": "string", "description": "Price like '143.2' or 'be'.", "maxLength": 24,
+                                      "pattern": r"^(be|[0-9]+(\.[0-9]+)?)$", "free": False}}, **CMD_COMMON),
+          "plan.manage", h_stop, required=["id", "to", "reason"], out=("cmd_id", "plan_id", "rev", "executor"), write=True))
 _reg(Tool("close_plan", "Close the position of a plan (reduce-only, market) fully or by fraction frac in (0,1].",
           dict({"id": PLAN_ID, "frac": _n("Fraction of the remaining position, 0 < frac <= 1.", 0.0001, 1.0)}, **CMD_COMMON), "plan.manage", h_close,
           required=["id", "reason"], out=("cmd_id", "plan_id", "rev", "executor"), write=True))
 _reg(Tool("cancel_plan", "Cancel a plan before entry (removes the resting order). A plan in a position cannot be cancelled: use close_plan.",
           dict({"id": PLAN_ID}, **CMD_COMMON), "plan.manage", _simple("cancel"), required=["id", "reason"], out=("cmd_id", "plan_id", "rev", "executor"), write=True))
-_reg(Tool("hold_plan", "Pause a plan: forbids entry and adding until released.", dict({"id": PLAN_ID}, **CMD_COMMON), "plan.manage", _simple("hold"),
+_reg(Tool("hold_plan", "Pause a plan before entry: forbids entry until released. A plan in a position cannot be paused (stop, breakeven and management always work).", dict({"id": PLAN_ID}, **CMD_COMMON), "plan.manage", h_hold,
           required=["id", "reason"], out=("cmd_id", "plan_id", "rev", "executor"), write=True))
 _reg(Tool("release_plan", "Release a pause set by the brain on a plan (a hold set by the executor or the owner cannot be released).",
           dict({"id": PLAN_ID}, **CMD_COMMON), "plan.manage", _simple("release"), required=["id", "reason"], out=("cmd_id", "plan_id", "rev", "executor"), write=True))
