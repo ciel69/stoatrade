@@ -45,7 +45,8 @@ class TestShipped(unittest.TestCase):
 
     def test_shipped_values(self):
         cfg = C.load_strict(paths.DEFAULT_ROOT)
-        self.assertEqual(cfg["promotion"]["mode"], "off")          # поставка разработки; "auto" — шаг приёмки (задача 23)
+        self.assertEqual(cfg["promotion"]["mode"], "auto")         # решение владельца 6 (2026-11-03): включено в поставке
+        self.assertIs(cfg["enabled"], True)
         self.assertIs(cfg["allow_size_rules"], False)
         self.assertEqual(cfg["verify"]["holdout_days"], 7)
         self.assertEqual(cfg["trial"]["n_target"], 150)
@@ -91,14 +92,14 @@ class TestLoad(Root):
         self.write(shipped())
         cfg, errs = C.load(self.root)
         self.assertEqual(errs, [])
-        self.assertFalse(C.is_enabled(cfg))              # в поставке разработки выключен; включает шаг приёмки (задача 23)
+        self.assertTrue(C.is_enabled(cfg))               # решение владельца 6: включён в поставке
         self.assertEqual(cfg, shipped())
-        on = shipped()
-        on["enabled"] = True
-        self.write(on)
+        off = shipped()
+        off["enabled"] = False
+        self.write(off)
         cfg, errs = C.load(self.root)
         self.assertEqual(errs, [])
-        self.assertTrue(C.is_enabled(cfg))
+        self.assertFalse(C.is_enabled(cfg))
 
     def test_no_file_disables(self):
         cfg, errs = C.load(self.root)
