@@ -331,7 +331,7 @@ DAY_STEP = "day"                         # learn_events: сводка закры
 BAD_EVENT_CODES = ("CHAIN_BROKEN", "DB_CORRUPT", "WATCH_STALE")
 SERIES_GROUPS = ("observe", "verdict", "watch")
 WORK_WINDOW_H = 7 * 24
-READY_CONDS = ("DAYS", "BAD_EVENTS", "WATCH", "STEP_ERRORS", "BACKUP", "INTEGRITY")
+READY_CONDS = ("DAYS", "BAD_EVENTS", "WATCH", "STEP_ERRORS", "BACKUP", "FREEZE", "INTEGRITY")
 
 
 def _meta_json(conn, key):
@@ -405,6 +405,17 @@ def work_window_start(conn, now, hours=WORK_WINDOW_H, days=None, acc=None):
     return start
 
 
+def _freeze(conn, root, cfg, now):
+    """Заморозка продвижения (вторая итерация, Requirement 18.5; learnloop.brainref.freeze). Любая ошибка -> не вычислена (не блокирует)."""
+    try:
+        from tb.learnloop import brainref as BR
+        return BR.freeze(conn, root, cfg, now)
+    except Exception as e:  # noqa: BLE001 - заморозка вторична: сбой расчёта не блокирует продвижение
+        if store2.is_corruption(e):
+            raise
+        return {"known": False, "frozen": False, "why": "ERROR:" + type(e).__name__}
+
+
 def promotion_ready(conn, cfg, now, root=None, state=None, check_db=True):
     """Условия готовности продвижения (все одновременно, Requirement 10.6):
     DAYS        среди последних warmup_window_days засчитываемых суток не меньше warmup_days полных проходов;
@@ -412,6 +423,9 @@ def promotion_ready(conn, cfg, now, root=None, state=None, check_db=True):
     WATCH       аренда сторожа runtime/watch_lease.json не старше watch_fresh_h (аренды нет — не готово: до сторожа задачи 16 всегда так);
     STEP_ERRORS нет серии из step_error_max подряд STEP_ERROR шагов наблюдения, вердикта и сторожа за 24 часа;
     BACKUP      последняя проверенная копия (state/backups/knowledge-*-<причина>.sqlite) не старше backup_max_age_h;
+    FREEZE      (вторая итерация, Requirement 18.5) заморозка по числу сделок мозга и сигналов tradable=1 (brainref.freeze); при истории сделок
+                короче 21 суток или без корня не вычисляется (details.freeze.known=false, freeze_unknown) и не блокирует; вердикт испытания
+                не теряется — правило ждёт с wait=READY;
     INTEGRITY   PRAGMA integrity_check без ошибок (последним и только если остальное выполнено; check_db=False — не проверять).
     -> {"ok", "failed": [условия], "details": {...}}. Режим promotion.mode здесь не учитывается (его проверяет шаг продвижения)."""
     now = int(time.time() if now is None else now)
@@ -458,6 +472,10 @@ def promotion_ready(conn, cfg, now, root=None, state=None, check_db=True):
     det["backup"] = {"age_s": None if last is None else now - last}
     if last is None or now - last > int(p["backup_max_age_h"]) * 3600:
         failed.append("BACKUP")
+    fz = _freeze(conn, root, cfg, now)
+    det["freeze"] = fz
+    if fz.get("known") and fz.get("frozen"):
+        failed.append("FREEZE")
     if not check_db:
         det["integrity"] = "skipped"
     elif failed:

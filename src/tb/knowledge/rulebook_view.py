@@ -7,7 +7,8 @@ active(root, now)      действующая версия и её правил�
 resolve_event(...)     событие scanner_signal монеты для признаков правил: event_seq (только задание раннера, проверка монеты, вида и возраста)
                        или последнее событие монеты вида из scope не старше event_max_age_s; хвост текущего файла шины и предыдущий
                        ротированный, только если его последняя запись моложе event_max_age_s (ротация core/bus.py:451-470).
-rule_eval_fields(...)  поля записи decisions kind="note", what="rule_eval" (без shadow_hits).
+rule_eval_fields(...)  поля записи decisions kind="note", what="rule_eval"; shadow_hits (вторая итерация, Requirement 18.7) — правила trial и
+                       активные в режиме без применения, которые отсекли бы решение (shadow_rules / shadow_hits; решение не меняют).
 
 Кеш в памяти — только данные версии (правила) по (seq, h) последней версии и seq последней строки rule_rows; кеша правил в файлах нет.
 Слой: не импортирует tb.learnloop, tb.venues, tb.executor, tb.control, tb.llm, tb.brain, tb.gateway (его зовут brain/cands.py и gateway/catalog.py).
@@ -192,11 +193,13 @@ def active_from_conn(conn):
     """Действующая версия на соединении: {"ver", "seq", "rules": [годные active], "invalid": [rule_id]}. Правило версии применяется, только если
     его последняя ревизия active и оно годно по learn_rules.validate_rule (неизвестный вид отклоняется и при чтении)."""
     if not ready(conn):
-        return {"ver": None, "seq": None, "rules": [], "invalid": []}
+        return {"ver": None, "seq": None, "rules": [], "invalid": [], "trial": []}
     v = last_version(conn)
-    if v is None:
-        return {"ver": None, "seq": None, "rules": [], "invalid": []}
     latest = rules_latest(conn)
+    trial = sorted((row_rule(r) for r in latest.values() if r.get("status") == "trial"), key=lambda x: str(x["rule_id"]))
+    trial = [r for r in trial if not LR.validate_rule(dict(r, status="active"))]
+    if v is None:
+        return {"ver": None, "seq": None, "rules": [], "invalid": [], "trial": trial}
     rules, invalid = [], []
     for rid in v["rule_ids"] if isinstance(v["rule_ids"], list) else []:
         row = latest.get(rid)
@@ -209,7 +212,7 @@ def active_from_conn(conn):
             continue
         rules.append(r)
     rules.sort(key=lambda x: x["rule_id"])
-    return {"ver": v["ver"], "seq": v["seq"], "rules": rules, "invalid": sorted(invalid)}
+    return {"ver": v["ver"], "seq": v["seq"], "rules": rules, "invalid": sorted(invalid), "trial": trial}
 
 
 def _load(root):
@@ -249,7 +252,7 @@ def active(root=None, now=None, hours=None):
     ошибка чтения, сигнал повреждения или прерванное восстановление) > LEASE. Правила версии отдаются и в режиме без применения, если база
     читается (для блока досье и страницы); при недоступной базе rules пусты."""
     now = time.time() if now is None else now
-    view = {"ver": None, "rules": [], "apply": False, "why": "DB", "kinds": [], "invalid": []}
+    view = {"ver": None, "rules": [], "apply": False, "why": "DB", "kinds": [], "invalid": [], "trial": []}
     switch_on = read_switch(root)
     restoring = KM.restoring(root)
     db_ok = False
@@ -262,11 +265,12 @@ def active(root=None, now=None, hours=None):
         except sqlite3.Error:
             data = None
         if data is not None:
-            view.update(ver=data["ver"], rules=[dict(r) for r in data["rules"]], invalid=list(data["invalid"]))
+            view.update(ver=data["ver"], rules=[dict(r) for r in data["rules"]], invalid=list(data["invalid"]),
+                        trial=[dict(r) for r in data.get("trial") or []])
             db_ok = data["ver"] is not None
     if KM.read_corrupt(root) is not None or os.path.exists(KM.restore_failed_path(root)):
         db_ok = False
-    view["kinds"] = LR.scope_kinds(view["rules"])
+    view["kinds"] = LR.scope_kinds(view["rules"] + [dict(r, status="active") for r in view["trial"]])
     if not switch_on:
         view["why"] = "SWITCH"
     elif restoring:
@@ -403,12 +407,32 @@ def resolve_event(root, sym, event_seq, now, kinds, max_age_s=None):
 
 # ---------------------------------------------------------------- запись rule_eval
 
-RULE_EVAL_KEYS = ("role", "cands_ok_n", "event_seq", "rule_hits", "rule_eval_ids", "feat_missing_ids", "rulebook_ver", "plan")
+RULE_EVAL_KEYS = ("role", "cands_ok_n", "event_seq", "rule_hits", "rule_eval_ids", "feat_missing_ids", "rulebook_ver", "plan", "shadow_hits")
+
+
+def shadow_rules(view):
+    """Правила совпадений без применения (вторая итерация, Requirement 18.7): правила trial и, в режиме без применения (apply=false), активные
+    правила версии. -> список правил в форме для learn_rules.apply (status="active": оцениваются, но решение не меняют)."""
+    view = view if isinstance(view, dict) else {}
+    out = [dict(r, status="active") for r in view.get("trial") or [] if isinstance(r, dict)]
+    if not view.get("apply"):
+        out += [dict(r, status="active") for r in view.get("rules") or [] if isinstance(r, dict)]
+    return out
+
+
+def shadow_hits(view, cand, feats, ctx=None):
+    """Идентификаторы правил shadow_rules(view), которые отсекли бы решение (cand, feats). Нет таких правил -> []. Решение не меняется."""
+    rules = shadow_rules(view)
+    if not rules:
+        return []
+    res = LR.apply(rules, cand, feats, dict(ctx or {}, apply=True))
+    return sorted(set(res.get("hits") or []))
 
 
 def rule_eval_fields(view, result, ctx):
     """Поля basis записи decisions kind="note", what="rule_eval" (Requirement 7.7): role, cands_ok_n, event_seq, rule_hits, rule_eval_ids,
-    feat_missing_ids, rulebook_ver, plan. view — active(root), result — learn_rules.apply, ctx — {"role", "cands_ok_n", "event"|"event_seq", "plan"}."""
+    feat_missing_ids, rulebook_ver, plan, shadow_hits (вторая итерация, Requirement 18.7: result["shadow_hits"], иначе []).
+    view — active(root), result — learn_rules.apply (+ shadow_hits), ctx — {"role", "cands_ok_n", "event"|"event_seq", "plan"}."""
     ctx = ctx or {}
     result = result or {}
     ev = ctx.get("event")
@@ -417,4 +441,5 @@ def rule_eval_fields(view, result, ctx):
     return {"role": ctx.get("role"), "cands_ok_n": cok if isinstance(cok, int) and not isinstance(cok, bool) else None,
             "event_seq": seq if isinstance(seq, int) and not isinstance(seq, bool) else None,
             "rule_hits": list(result.get("hits") or []), "rule_eval_ids": list(result.get("eval") or []),
-            "feat_missing_ids": list(result.get("missing") or []), "rulebook_ver": (view or {}).get("ver"), "plan": ctx.get("plan")}
+            "feat_missing_ids": list(result.get("missing") or []), "rulebook_ver": (view or {}).get("ver"), "plan": ctx.get("plan"),
+            "shadow_hits": list(result.get("shadow_hits") or [])}

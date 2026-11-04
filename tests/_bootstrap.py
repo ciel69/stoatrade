@@ -23,6 +23,10 @@ os.environ["TB_STATE_DIR_CONTROL"] = tempfile.mkdtemp(prefix="tbpend_ctl_")
 os.environ["TB_STATE_DIR_BRAIN"] = tempfile.mkdtemp(prefix="tbpend_brain_")
 os.environ["TB_KEYS_DIR"] = tempfile.mkdtemp(prefix="tbpend_keys_")
 
+# Модули, которые при импорте читают config/ проекта в константы (hyps.HYP_FAMILIES из config/hypotheses.json), импортируются здесь, до любого
+# теста с временным TB_ROOT: иначе значение зависело бы от того, какой тест первым импортировал модуль в процессе (параллельный ./tb test).
+from tb.core import hyps as _hyps  # noqa: E402,F401
+
 
 # ---------------------------------------------------------------- устойчивость набора (WP-интеграция)
 # 1. localhost-сокет: если в окружении (песочница чата) нельзя поднять и открыть сокет на 127.0.0.1, тесты с локальным сервером ПРОПУСКАЮТСЯ с понятным сообщением,
@@ -74,6 +78,15 @@ def require_localhost():
     ok, why = localhost_ok()
     if not ok:
         raise _unittest.SkipTest("локальный сокет 127.0.0.1 недоступен в этом окружении (%s): тест с локальным сервером пропущен" % why)
+
+
+def ws_connect(uri, **kw):
+    """Клиент websockets для тестов дашборда: очередь входящих без предела (max_queue=None).
+    Сервер шлёт снимок из ~17 сообщений; если тест прочитал не все, при пределе очереди (16) клиент перестаёт читать сокет, не видит ответный
+    кадр закрытия и ждёт close_timeout (10 с) на каждом соединении. Боевой сервер и браузер это не затрагивает."""
+    from websockets.asyncio.client import connect
+    kw.setdefault("max_queue", None)
+    return connect(uri, **kw)
 
 
 TEST_TIMEOUT_S = float(os.environ.get("TB_TEST_TIMEOUT", "180"))

@@ -2,8 +2,8 @@
 
 Ретро-тест берётся из tb.memory.backtest (closed_trades + walk_forward), формулы не дублируются. Тяжёлый walk-forward идёт в фоне через
 tb.learn.cache.Flight (один поток на ключ), ожидание ограничено memory.budget_s; не уложились: status=computing, результат кладётся в кеш
-на memory.ttl_s по ключу (корень, режим, подпись cases.jsonl на момент начала), повторный build отдаёт готовое.
-Сделок больше memory.max_trades: walk_forward не запускается (too_many_for_request). Файлы не меняются, state/lessons.jsonl не читается.
+на memory.ttl_s по ключу (корень, режим, подпись хранилища случаев на момент начала: cases.jsonl или case_rows по store), повторный build
+отдаёт готовое. Сделок больше memory.max_trades: walk_forward не запускается (too_many_for_request). Файлы не меняются, уроки не читаются.
 """
 import threading
 import time
@@ -32,11 +32,11 @@ def _empty():
 
 
 def _sig(root):
-    return load._stat(memcases.cases_path(root))
+    return memcases.signature(root)          # store="jsonl": (размер, mtime_ns) cases.jsonl, как прежде; "sqlite": последняя строка case_rows
 
 
 def flight_key(root, mode):
-    """Ключ Flight/кеша расчёта: (корень, режим, подпись cases.jsonl). По нему report/dashapi ждут готовности блока `computing`."""
+    """Ключ Flight/кеша расчёта: (корень, режим, подпись хранилища случаев). По нему report/dashapi ждут готовности блока `computing`."""
     return "mem|%s|%s|%s" % (root, mode, _sig(root))
 
 

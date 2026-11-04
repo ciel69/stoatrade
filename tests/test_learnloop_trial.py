@@ -469,6 +469,80 @@ class TestVerdict(Base):
         self.assertIsNone(RL.blocked(self.c, LR.block_h(SPREAD, "lower"), NOW + D))
 
 
+class TestViolationsCondition(Base):
+    """Вторая итерация (задача 31; Requirement 18.6): условие по нарушениям при вердикте promote по записям rule_eval с правилом в shadow_hits.
+    fail -> reject TRIAL_REJECT (причина VIOLATIONS); not_evaluable и not_evaluable_link продвижение не блокируют."""
+
+    def start(self):
+        self.fill(T0, 7 * 24)
+        self.lesson()
+        self.assertEqual(len(self.register()["registered"]), 1)
+        t = self.only_trial()
+        self.fill(t["start_ts"], 160)
+        return t
+
+    def journal(self, rid, t0, plans):
+        from tb.core import decisions as DJ
+        for i, p in enumerate(plans):
+            DJ.append({"actor": "brain:chat", "kind": "note", "what": "rule_eval", "why": "t", "t": t0 + i * 60,
+                       "basis": {"shadow_hits": [rid], "plan": p, "event_seq": None}}, root=self.root)
+
+    def trades(self, t0, n, viol, prefix="PL", i0=0):
+        from _memory_helpers import mk
+        from tb.memory import cases
+        for i in range(n):
+            c = mk(i0 + i, sym="V%d" % (i0 + i), r=-0.2, mode="paper", ts=cases.iso(t0 + (i0 + i) * 600), err=["chase"] if viol else [])
+            c["refs"]["plan"] = "%s-%d" % (prefix, i0 + i)
+            cases.append_new(c, root=self.root)
+
+    def run_at(self, t):
+        return TR.run_verdicts(self.c, self.cfg, cut(t["start_ts"] + 150 * H, self.cfg), root=self.root, mcfg=self.mcfg)
+
+    def test_fail_rejects(self):
+        t = self.start()
+        s = t["start_ts"]
+        self.trades(s + H, 35, viol=True)                                  # сделки под правилом испытания — все с нарушениями
+        self.trades(s + H, 35, viol=False, prefix="OK", i0=100)            # остальные сделки мозга без нарушений
+        self.journal(t["rule_id"], s + H, ["PL-%d" % i for i in range(35)])
+        res = self.run_at(t)
+        self.assertEqual([(r["verdict"], r["code"], r["reason"]) for r in res], [("reject", "TRIAL_REJECT", "VIOLATIONS")])
+        n = TR.get(self.c, t["trial_id"])["numbers"]
+        self.assertEqual((n["violations"]["code"], n["violations"]["n"], n["a_ok"], n["b_ok"]), ("fail", 35, True, True))
+        self.assertEqual(V.rule(self.c, t["rule_id"])["status"], "rejected")
+
+    def test_ok_promotes(self):
+        t = self.start()
+        s = t["start_ts"]
+        self.trades(s + H, 35, viol=False)
+        self.trades(s + H, 35, viol=True, prefix="BAD", i0=100)
+        self.journal(t["rule_id"], s + H, ["PL-%d" % i for i in range(35)])
+        res = self.run_at(t)
+        self.assertEqual([(r["verdict"], r["code"]) for r in res], [("promote", "READY")])
+        self.assertEqual(TR.get(self.c, t["trial_id"])["numbers"]["violations"]["code"], "ok")
+
+    def test_not_evaluable_does_not_block(self):
+        for case in ("none", "few", "link"):
+            with self.subTest(case=case):
+                Base.setUp(self)
+                t = self.start()
+                s = t["start_ts"]
+                if case == "few":
+                    self.trades(s + H, 10, viol=True)
+                    self.journal(t["rule_id"], s + H, ["PL-%d" % i for i in range(10)])
+                elif case == "link":
+                    self.journal(t["rule_id"], s + H, ["PL-X%d" % i for i in range(40)])     # планы без случаев: связи нет
+                res = self.run_at(t)
+                self.assertEqual([(r["verdict"], r["code"]) for r in res], [("promote", "READY")])
+                want = {"none": "not_evaluable", "few": "not_evaluable", "link": "not_evaluable_link"}[case]
+                self.assertEqual(TR.get(self.c, t["trial_id"])["numbers"]["violations"]["code"], want)
+
+    def test_without_root_unchanged(self):
+        t = self.start()
+        res = TR.run_verdicts(self.c, self.cfg, cut(t["start_ts"] + 150 * H, self.cfg))
+        self.assertEqual([(r["verdict"], r["code"]) for r in res], [("promote", "READY")])
+        self.assertNotIn("violations", TR.get(self.c, t["trial_id"])["numbers"])
+
+
 class TestMarginal(Base):
     def test_active_set_rows_not_counted(self):
         """Свойство 25: прогоны, отсечённые активным набором критерия (range >= 5), не входят ни в предельные хиты, ни в базу, ни в долю потери."""

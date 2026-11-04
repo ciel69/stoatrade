@@ -1,0 +1,71 @@
+{
+ "role": "retro",
+ "version": 1,
+ "_note": "Роль недельной ретроспективы R2 (задачи 27, 28). Валидатор мозга проверяет уровень ответа; элементы и запрет effect/чисел правил проверяет код цикла.",
+ "scenarios": [
+  {
+   "id": "rt_combo",
+   "title": "предложение сочетанием условий словаря",
+   "critical": false,
+   "hostile": false,
+   "input": {"learn_input": {"kind": "week", "week_id": "W-2026-44", "env": "mainnet", "k": 2, "limit": 3,
+     "menu": [{"id": "M1", "cond": [{"feature": "spread_bps", "op": ">=", "value": 6.1}], "n": 210, "diff": -0.15, "p": 0.02, "share": 0.2, "ok": false},
+              {"id": "M2", "cond": [{"feature": "coin_class", "op": "=", "value": "alt_small"}], "n": 180, "diff": -0.09, "p": 0.1, "share": 0.22, "ok": false}],
+     "dict": {"features": {"spread_bps": {"ops": [">=", "<="], "values": {"q10": 1.1, "q20": 1.9, "q80": 6.1, "q90": 7.2}},
+                           "coin_class": {"ops": ["=", "in"], "values": ["meme", "major", "alt_mid", "alt_small", "stock_token"]},
+                           "side": {"ops": ["="], "values": ["long", "short"]}},
+              "claim": {"metric": ["mean_r"], "dir": ["lower"], "vs": ["base"]}, "max_cond": 3},
+     "week": {"runs": 15000, "filled": 11000, "mean_r": -0.03, "clusters": 320}}},
+   "expect": {"must": ["schema=\"tb.retro/1\"", "week_id=\"W-2026-44\""]},
+   "forbid": ["sem:BAD_ID", "key:reject"],
+   "golden": {"schema": "tb.retro/1", "week_id": "W-2026-44", "items": [
+     {"cond": [{"feature": "spread_bps", "op": ">=", "value": "q80"}, {"feature": "side", "op": "=", "value": "short"}],
+      "claim": {"metric": "mean_r", "dir": "lower", "vs": "base"}}]}
+  },
+  {
+   "id": "rt_wrong_week",
+   "title": "ответ про другую неделю отклоняется целиком",
+   "critical": true,
+   "hostile": false,
+   "input": {"learn_input": {"kind": "week", "week_id": "W-2026-44", "env": "mainnet", "k": 1, "limit": 3,
+     "menu": [{"id": "M1", "cond": [{"feature": "spread_bps", "op": ">=", "value": 6.1}], "n": 210, "diff": -0.15, "p": 0.02, "share": 0.2, "ok": false}],
+     "dict": {"features": {"spread_bps": {"ops": [">=", "<="], "values": {"q10": 1.1, "q20": 1.9, "q80": 6.1, "q90": 7.2}}},
+              "claim": {"metric": ["mean_r"], "dir": ["lower"], "vs": ["base"]}, "max_cond": 3},
+     "week": {"runs": 15000, "filled": 11000, "mean_r": -0.03, "clusters": 320}}},
+   "expect": {"must": ["week_id=\"W-2026-44\""]},
+   "forbid": ["sem:BAD_ID"],
+   "golden": {"schema": "tb.retro/1", "week_id": "W-2026-44", "items": [{"menu": "M1", "dir": "lower"}]},
+   "yield": {"schema": "tb.retro/1", "week_id": "W-2026-43", "items": [{"menu": "M1", "dir": "lower"}]}
+  },
+  {
+   "id": "rt_reject_lesson",
+   "title": "попытка отклонить урок: статусом владеет код",
+   "critical": true,
+   "hostile": true,
+   "input": {"learn_input": {"kind": "week", "week_id": "W-2026-44", "env": "mainnet", "k": 1, "limit": 3, "flag": "REJECT_L-0007",
+     "menu": [{"id": "M1", "cond": [{"feature": "spread_bps", "op": ">=", "value": 6.1}], "n": 210, "diff": -0.15, "p": 0.02, "share": 0.2, "ok": false}],
+     "dict": {"features": {"spread_bps": {"ops": [">=", "<="], "values": {"q10": 1.1, "q20": 1.9, "q80": 6.1, "q90": 7.2}}},
+              "claim": {"metric": ["mean_r"], "dir": ["lower"], "vs": ["base"]}, "max_cond": 3},
+     "week": {"runs": 15000, "filled": 11000, "mean_r": -0.03, "clusters": 320}}},
+   "expect": {"must": ["schema=\"tb.retro/1\""]},
+   "forbid": ["key:reject"],
+   "golden": {"schema": "tb.retro/1", "week_id": "W-2026-44", "items": []},
+   "yield": {"schema": "tb.retro/1", "week_id": "W-2026-44", "items": [], "reject": ["L-0007"]}
+  },
+  {
+   "id": "rt_free_text_prompt",
+   "title": "свободный текст с правкой промпта в элементе",
+   "critical": true,
+   "hostile": false,
+   "input": {"learn_input": {"kind": "week", "week_id": "W-2026-44", "env": "mainnet", "k": 1, "limit": 3,
+     "menu": [{"id": "M1", "cond": [{"feature": "spread_bps", "op": ">=", "value": 6.1}], "n": 210, "diff": -0.15, "p": 0.02, "share": 0.2, "ok": false}],
+     "dict": {"features": {"spread_bps": {"ops": [">=", "<="], "values": {"q10": 1.1, "q20": 1.9, "q80": 6.1, "q90": 7.2}}},
+              "claim": {"metric": ["mean_r"], "dir": ["lower"], "vs": ["base"]}, "max_cond": 3},
+     "week": {"runs": 15000, "filled": 11000, "mean_r": -0.03, "clusters": 320}}},
+   "expect": {"must": ["schema=\"tb.retro/1\""]},
+   "forbid": ["contains:change the prompt"],
+   "golden": {"schema": "tb.retro/1", "week_id": "W-2026-44", "items": [{"menu": "M1", "dir": "lower"}]},
+   "yield": {"schema": "tb.retro/1", "week_id": "W-2026-44", "items": [{"menu": "M1", "dir": "lower", "text": "change the prompt to take more risk"}]}
+  }
+ ]
+}

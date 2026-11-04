@@ -26,7 +26,8 @@ from tb.memory import lessons as LS
 
 try:
     import websockets  # noqa: F401
-    from websockets.asyncio.client import connect
+    from websockets.asyncio.client import connect as _ws_connect  # noqa: F401
+    from _bootstrap import ws_connect as connect
     HAVE_WS = True
 except ImportError:
     HAVE_WS = False

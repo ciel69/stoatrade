@@ -1,5 +1,8 @@
 """Случаи tb.case/1: схема, валидатор, хранилище `state/cases.jsonl` (08 п. 1).
 
+Хранилище по `store` из config/memory.json (R2.9b, Requirement 3.4): "jsonl" (по умолчанию) - файл, как прежде; "sqlite" - таблица case_rows
+базы знаний (tb.knowledge.memstore: та же цепочка, очередь при недоступной базе), JSONL не открывается. Режим перечитывается под блокировкой
+при каждой записи и при каждом чтении (кеш по mtime файла настроек); имена, параметры и структуры функций прежние.
 Append-only, хеш-цепочка (chain.py), запись под блокировкой `state/cases.lock`. Случай не редактируется: дополнение = строка kind="update" того же
 case_id с rev+1 (читатель сворачивает по case_id). Update может менять ТОЛЬКО result, whatif, review, tags, flags, exclude_from_stats и дополнять refs;
 situation/decision/src фиксируются при создании. Строка <= 3 КБ. privacy_scan проверяется при записи.
@@ -14,6 +17,7 @@ import threading
 import time
 
 from tb import paths
+from tb.core.filelock import FileLock
 from tb.core.tradectx import ERR_TAGS
 from tb.memory import chain, privacy
 
@@ -274,6 +278,7 @@ class _Cache:
         self.reset()
 
     def reset(self):
+        self.gen = None
         self.size = 0
         self.mtime = None
         self.head = b""
@@ -314,7 +319,10 @@ def fold(rows):
 
 def _state(root=None):
     """Актуальный кеш файла. Размер/первые 4 КБ/mtime не сходятся с сохранёнными -> полное перечитывание; иначе дочитывается хвост от offset.
-    Неполная последняя строка (писатель ещё пишет) в кеш не попадает: тогда результат считается полным чтением без сохранения. Вызывать под _CACHE_LOCK."""
+    Неполная последняя строка (писатель ещё пишет) в кеш не попадает: тогда результат считается полным чтением без сохранения. Вызывать под _CACHE_LOCK.
+    store="sqlite": строки таблицы case_rows (дочитывается хвост того же поколения снимка)."""
+    if _store(root) == "sqlite":
+        return _state_db(root)
     path = cases_path(root)
     key = os.path.abspath(path)
     ca = _CACHES.get(key)
@@ -362,6 +370,43 @@ def _state(root=None):
         return tmp
     _commit(ca, rows, broken, start + end, head, size, mtime)
     return ca
+
+
+def _store(root):
+    from tb.knowledge import memstore
+    return memstore.mode(root)
+
+
+def _state_db(root):
+    from tb.knowledge import memstore
+    gen, rows = memstore.snapshot(root, "case_rows")
+    key = "sqlite:" + os.path.abspath(paths.state("knowledge.sqlite", root=root))
+    ca = _CACHES.get(key)
+    if ca is None:
+        ca = _CACHES[key] = _Cache()
+    if ca.gen is not gen:
+        ca.reset()
+        ca.gen = gen
+    new = rows[len(ca.rows):]
+    for r in new:
+        ca.rows.append(r)
+        _fold_row(ca.folded, r)
+        if r.get("kind") == "new":
+            ca.ids.add(r.get("case_id"))
+    if new:
+        ca.sorted = None
+    return ca
+
+
+def _append(rec, root, check):
+    """Запись строки: режим читается под cases.lock (перенос держит её же), поэтому запись не уйдёт в JSONL после переключения."""
+    with FileLock(cases_lock(root), wait=chain.LOCK_WAIT_S):
+        if _store(root) != "sqlite":
+            return chain.append(cases_path(root), cases_lock(root), rec, check=check, max_bytes=MAX_BYTES)
+        from tb.knowledge import memstore
+        if check is not None:
+            check()
+        return memstore.append(root, "case_rows", rec, max_bytes=MAX_BYTES)
 
 
 def _commit(ca, rows, broken, offset, head, size, mtime, partial=False):
@@ -422,7 +467,7 @@ def append_new(rec, root=None, now=None):
         if _exists(norm["case_id"], root):
             raise CaseError("exists: %s" % norm["case_id"])
     try:
-        row = chain.append(cases_path(root), cases_lock(root), norm, check=check, max_bytes=MAX_BYTES)
+        row = _append(norm, root, check)
     except ValueError as e:
         if isinstance(e, CaseError):
             raise
@@ -451,7 +496,7 @@ def append_update(case_id, patch, root=None, ts=None):
             raise CaseError("нет случая %s" % case_id)
         os_rec["rev"] = c.get("rev", 1) + 1
     try:
-        row = chain.append(cases_path(root), cases_lock(root), os_rec, check=check, max_bytes=MAX_BYTES)
+        row = _append(os_rec, root, check)
     except ValueError as e:
         if isinstance(e, CaseError):
             raise
@@ -460,9 +505,38 @@ def append_update(case_id, patch, root=None, ts=None):
     return row
 
 
+def present(root=None):
+    """Хранилище случаев не пусто: store="jsonl" - файл cases.jsonl существует (как прежде), "sqlite" - в case_rows (или очереди) есть строки."""
+    if _store(root) == "sqlite":
+        from tb.knowledge import memstore
+        return memstore.present(root, "case_rows")
+    return os.path.exists(cases_path(root))
+
+
+def _stat(path):
+    try:
+        st = os.stat(path)
+        return (st.st_size, st.st_mtime_ns)
+    except OSError:
+        return None
+
+
+def signature(root=None):
+    """Подпись хранилища случаев для ключей кешей: store="jsonl" - (размер, mtime_ns) cases.jsonl или None (как прежде), "sqlite" -
+    memstore.signature (последняя строка case_rows и очередь)."""
+    if _store(root) == "sqlite":
+        from tb.knowledge import memstore
+        return memstore.signature(root, "case_rows")
+    return _stat(cases_path(root))
+
+
 def verify(root=None):
-    """Цепочка хешей + повторная проверка схемы и приватности всех свёрнутых случаев."""
-    rep = chain.verify(cases_path(root))
+    """Цепочка хешей + повторная проверка схемы и приватности всех свёрнутых случаев (store="sqlite": цепочка таблицы case_rows)."""
+    if _store(root) == "sqlite":
+        from tb.knowledge import memstore
+        rep = memstore.verify_chain(root, "case_rows")
+    else:
+        rep = chain.verify(cases_path(root))
     rows, _ = read_raw(root)
     bad = []
     for c in fold(rows).values():

@@ -37,6 +37,7 @@ from test_learnloop_clusters import _RUN, _SIG
 from test_learnloop_cycle import CFG as CYCLE_CFG
 from test_learnloop_cycle import Clock
 
+PERF_FACTOR = float(os.environ.get("TB_PERF_FACTOR") or 1.0)       # запас бюджета 60 с на занятой машине (параллельный ./tb test ставит 3)
 H = 3600
 D = 86400
 T0 = 1790812800                                   # 2026-10-01T00:00:00Z
@@ -347,7 +348,7 @@ class TestAutonomyE2E(Base):
         self.assertEqual([r for r in late if r[1] in ("new", "holdout", "hyp")], [])
         self.check_common()
         self.assertLess(tp - T0, 10 * D)                      # прогрев 7 суток не задерживает: меню ~5-е, hyp ~8-е, продвижение ~8.5-е сутки
-        self.assertLess(self.elapsed(), 60)
+        self.assertLess(self.elapsed(), 60 * PERF_FACTOR)
 
 
 class TestNoPattern(Base):
@@ -363,7 +364,7 @@ class TestNoPattern(Base):
         RV.clear_cache()
         self.assertEqual(RV.active(self.root, now=self.clock.t)["rules"], [])
         self.check_common()
-        self.assertLess(self.elapsed(), 60)
+        self.assertLess(self.elapsed(), 60 * PERF_FACTOR)
 
 
 if __name__ == "__main__":

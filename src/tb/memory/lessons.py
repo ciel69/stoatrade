@@ -1,5 +1,8 @@
 """Уроки как гипотезы: `state/lessons.jsonl` (08 п. 4). Формулировки из шаблонов (cond + claim), без свободного текста.
 
+Хранилище по `store` из config/memory.json (R2.9b): "jsonl" (по умолчанию) - файл, как прежде; "sqlite" - таблица lesson_rows базы знаний
+(tb.knowledge.memstore), JSONL не открывается; режим перечитывается под lessons.lock при каждой записи.
+
 Файл append-only с хеш-цепочкой (chain.py), каждая строка = полное состояние урока (rev растёт, kind new|update). Статусы:
 hyp -> confirmed (n_closed>=30 и >=5 дней и >=2 режимов, либо >=15 с эффектом |diff|>t*se с поправкой Бонферрони на число активных уроков, либо решение
 владельца), rejected (новые случаи опровергают или владелец), expired (срок годности без подтверждений), merged (дубликат по условию).
@@ -9,8 +12,14 @@ hyp -> confirmed (n_closed>=30 и >=5 дней и >=2 режимов, либо >
 
 R2: уроки меток (evidence.src="labels", создаёт цикл learnloop через create(..., created_by="code", evidence_src="labels", evidence_extra)) живут отдельно:
 refresh их не видит, conf не затухает, expires_ts = null до confirmed, статусы меняет только transition; бюджет propose и лимит max_active считаются по группам.
+
+R2 вторая итерация (Requirement 18.1–18.4): справочные уроки мозга (evidence.src="brain", evidence.ref=true; create(..., ref=True)) создаёт шаг
+tb.learnloop.brainref; правил не порождают, applicable их не показывает, refresh пересчитывает как уроки мозга (критерий режимов — ref_regime_ok).
+Фильтр режима пула lessons.pool_mode (null | "paper", по умолчанию null — прежнее поведение) действует в pool и тем самым в stats, propose,
+from_hint и refresh.
 """
 import math
+import os
 import time
 
 from tb import paths
@@ -217,10 +226,23 @@ def _val(metric, c):
     return 1.0 if errs else 0.0
 
 
+POOL_MODES = (None, "paper")
+
+
+def pool_mode(cfg):
+    """Фильтр режима пула (R2 вторая итерация, Requirement 18.3): config/memory.json lessons.pool_mode — null (по умолчанию: все режимы,
+    прежнее поведение) или "paper". Неизвестное значение — null."""
+    v = (cfg.get("lessons") or {}).get("pool_mode")
+    return v if v in POOL_MODES else None
+
+
 def pool(all_cases, cfg):
-    """Закрытые сделки, которым разрешено поднимать и подтверждать уроки (не исключены, mem!=off, версия правил допустима)."""
+    """Закрытые сделки, которым разрешено поднимать и подтверждать уроки (не исключены, mem!=off, версия правил допустима); при lessons.pool_mode
+    только случаи этого режима (src.mode). Фильтр общий для stats, propose, from_hint и refresh."""
     ok = similar.allowed_rules(cfg)
-    return [c for c in all_cases if agg.closed_r(c) is not None and cases.eligible(c, cfg) and (c.get("src") or {}).get("rules_ver") in ok]
+    md = pool_mode(cfg)
+    return [c for c in all_cases if agg.closed_r(c) is not None and cases.eligible(c, cfg) and (c.get("src") or {}).get("rules_ver") in ok
+            and (md is None or (c.get("src") or {}).get("mode") == md)]
 
 
 def baseline(metric, vs, pool_cases):
@@ -282,6 +304,8 @@ def conf_for(lesson, st, cfg):
     cap = lc.get("conf_cap_hyp", 0.9)
     if lesson.get("created_by") == "reviewer" and not (n >= lc.get("min_n_propose", 4) and supports(lesson, st)):
         cap = min(cap, lc.get("conf_cap_reviewer", 0.3))
+    if is_ref(lesson) and (lesson.get("evidence") or {}).get("via"):     # справочный урок по кандидату модели (Requirement 18.2)
+        cap = min(cap, lc.get("conf_cap_reviewer", 0.3))
     if lesson["status"] == "confirmed":
         cap = 0.95
     return round(min(c, cap), 3)
@@ -290,6 +314,16 @@ def conf_for(lesson, st, cfg):
 def is_labels(lesson):
     """Урок меток (R2): evidence.src == "labels". Уроки без src и с src="brain" — уроки мозга."""
     return ((lesson or {}).get("evidence") or {}).get("src") == "labels"
+
+
+def is_ref(lesson):
+    """Справочный урок мозга (R2 вторая итерация, Requirement 18.1): evidence.src="brain" и evidence.ref=true. Правил не порождает (испытания
+    регистрируются только для уроков меток), мозгу не показывается (applicable и списки уроков его пропускают)."""
+    ev = (lesson or {}).get("evidence") or {}
+    return ev.get("ref") is True and ev.get("src") == "brain"
+
+
+REF_KEYS = ("src", "ref", "via")                     # поля evidence справочного урока, которые пересчёт refresh сохраняет
 
 
 def _num(x):
@@ -318,13 +352,78 @@ def conf_eff(lesson, now, cfg):
 
 # ---------------------------------------------------------------- хранилище
 
+def _store(root):
+    from tb.knowledge import memstore
+    return memstore.mode(root)
+
+
+def _rows(root):
+    """Строки хранилища уроков по store (R2.9b): "jsonl" - lessons.jsonl (отсутствующий файл = пусто), "sqlite" - таблица lesson_rows."""
+    if _store(root) == "sqlite":
+        from tb.knowledge import memstore
+        return memstore.snapshot(root, "lesson_rows")[1]           # общие с кешем снимка: read_all отдаёт копии
+    return chain.read(lessons_path(root))[0]
+
+
+def _tail(root):
+    if _store(root) == "sqlite":
+        from tb.knowledge import memstore
+        return memstore.tail(root, "lesson_rows")
+    return chain.tail(lessons_path(root))
+
+
+def _append(root, rec):
+    """Запись строки; режим читается под lessons.lock (перенос держит её же)."""
+    with FileLock(lessons_lock(root), wait=chain.LOCK_WAIT_S):
+        if _store(root) != "sqlite":
+            return chain.append(lessons_path(root), lessons_lock(root), rec, max_bytes=LINE_MAX)
+        from tb.knowledge import memstore
+        return memstore.append(root, "lesson_rows", rec, max_bytes=LINE_MAX)
+
+
+def read_raw(root=None):
+    """-> (строки хранилища уроков по порядку, число битых строк): "jsonl" - chain.read(lessons.jsonl), "sqlite" - копии строк lesson_rows
+    (битых строк в таблице нет: 0)."""
+    if _store(root) == "sqlite":
+        return [_json_copy(r) for r in _rows(root)], 0
+    return chain.read(lessons_path(root))
+
+
+def present(root=None):
+    """Хранилище уроков есть: "jsonl" - файл lessons.jsonl существует (как прежде), "sqlite" - в lesson_rows (или очереди) есть строки."""
+    if _store(root) == "sqlite":
+        from tb.knowledge import memstore
+        return memstore.present(root, "lesson_rows")
+    return os.path.isfile(lessons_path(root))
+
+
+def signature(root=None):
+    """Подпись хранилища уроков для ключей кешей: "jsonl" - (размер, mtime_ns) lessons.jsonl или None (как прежде), "sqlite" -
+    memstore.signature (последняя строка lesson_rows и очередь)."""
+    if _store(root) == "sqlite":
+        from tb.knowledge import memstore
+        return memstore.signature(root, "lesson_rows")
+    return cases._stat(lessons_path(root))
+
+
+def verify(root=None):
+    """Цепочка хешей уроков в активном хранилище -> {"ok","n","bad_seq","broken"}: "jsonl" - chain.verify(lessons.jsonl) (как прежде),
+    "sqlite" - цепочка таблицы lesson_rows (broken - битые строки очереди)."""
+    if _store(root) == "sqlite":
+        from tb.knowledge import memstore
+        return memstore.verify_chain(root, "lesson_rows")
+    return chain.verify(lessons_path(root))
+
+
 def read_all(root=None):
     """-> {lesson_id: последнее состояние} (битые строки пропущены)."""
-    rows, _ = chain.read(lessons_path(root))
+    rows = _rows(root)
     out = {}
     for r in rows:
         if r.get("schema") == SCHEMA and r.get("lesson_id"):
             out[r["lesson_id"]] = r
+    if out and _store(root) == "sqlite":
+        out = dict((k, _json_copy(v)) for k, v in out.items())
     return out
 
 
@@ -348,7 +447,7 @@ def _write(root, rec):
     errs = privacy.privacy_scan(rec)
     if errs:
         raise ValueError("; ".join(errs))
-    return chain.append(lessons_path(root), lessons_lock(root), rec, max_bytes=LINE_MAX)
+    return _append(root, rec)
 
 
 def _hist(l, now, status, reason):
@@ -367,7 +466,7 @@ class LessonRefused(ValueError):
 
 def _line_bytes(root, rec):
     """Точный размер строки rec в lessons.jsonl (с txt, seq, prev, h); вызывать под lessons.lock, иначе seq может устареть."""
-    seq, last_h, _nl = chain.tail(lessons_path(root))
+    seq, last_h, _nl = _tail(root)
     out = dict(rec, txt=render_txt(rec), seq=seq + 1, prev=last_h, h="0" * 16)
     return len(chain.canon(out).encode("utf-8"))
 
@@ -415,19 +514,26 @@ def _json_copy(x):
     return x
 
 
-def create(root, cond, claim, created_by, all_cases, cfg, now, evidence_ids=None, status="hyp", evidence_src="brain", evidence_extra=None):
+def create(root, cond, claim, created_by, all_cases, cfg, now, evidence_ids=None, status="hyp", evidence_src="brain", evidence_extra=None,
+           ref=False, via=None):
     """Создаёт урок-гипотезу. ValueError при неверном cond/claim.
 
     evidence_src="brain" (по умолчанию): evidence считается кодом по случаям мозга (stats), как прежде.
     evidence_src="labels" (R2, Requirement 5.6): только created_by="code" и status="hyp"; stats() не вызывается, evidence = evidence_extra + src="labels",
     conf по числам меток (не выше conf_cap_reviewer), expires_ts = None (срок появится при confirmed); лимит max_active считается по группе labels (BUDGET);
     размер строки проверяется до записи (усечение списков идентификаторов, иначе EVIDENCE_TOO_BIG).
+    ref=True (R2 вторая итерация, Requirement 18.1, 18.2): справочный урок мозга — evidence.src="brain", evidence.ref=true (via — источник
+    кандидата, например "llm": conf не выше conf_cap_reviewer); только created_by="code" и evidence_src="brain".
     lesson_id выдаётся под lessons.lock в одном захвате с записью (Requirement 5.7)."""
     errs = validate_cond(cond) + validate_claim(claim)
     if created_by not in CREATORS:
         errs.append("created_by не из %s" % list(CREATORS))
     if evidence_src not in SOURCES:
         errs.append("evidence_src не из %s" % list(SOURCES))
+    if ref and (evidence_src != "brain" or created_by != "code"):
+        errs.append("справочный урок: только created_by=code и evidence_src=brain")
+    if via is not None and (not ref or not isinstance(via, str) or not via.isalnum() or len(via) > 16):
+        errs.append("via: короткий идентификатор источника и только для справочного урока")
     labels = evidence_src == "labels"
     if labels and created_by != "code":
         errs.append("урок меток создаёт только код (created_by=code)")
@@ -446,6 +552,10 @@ def create(root, cond, claim, created_by, all_cases, cfg, now, evidence_ids=None
         l["evidence"] = _public_ev(st)
         if evidence_ids:
             l["evidence"]["cases"] = [i for i in evidence_ids][:20]
+        if ref:
+            l["evidence"].update(src="brain", ref=True)
+            if via:
+                l["evidence"]["via"] = via
         l["conf"] = conf_for(l, st, cfg)
         l["expires_ts"] = now + (lc.get("ttl_confirmed_days", 90) if status == "confirmed" else lc.get("ttl_hyp_days", 30)) * DAY
     l["history"] = [{"ts": l["ts"], "status": status, "reason_code": "NEW"}]
@@ -541,6 +651,39 @@ def owner_set(root, lesson_id, action, cfg, now, into=None):
     raise ValueError("action: confirm|reject|expire|merge")
 
 
+def ref_regime_ok(lesson, all_cases, cfg, st=None):
+    """Критерий режимов справочного урока мозга (Requirement 18.4): считается только по случаям с известным режимом (не None/unknown) —
+    не меньше confirm_min_regimes разных режимов; если доля известного режима ниже lessons.regime_cover_min (0.5), критерий заменяется на
+    «тот же знак отклонения от базы в обеих половинах периода (по времени) и случаи в >= 2 разных неделях ISO»."""
+    lc = cfg.get("lessons") or {}
+    pl = pool(all_cases, cfg)
+    m = sorted((c for c in pl if matches(lesson["cond"], c)), key=lambda c: (c["ts"], c["case_id"]))
+    if not m:
+        return False
+    regs = [(c.get("situation") or {}).get("regime") for c in m]
+    known = [r for r in regs if r not in (None, "unknown")]
+    if len(known) / float(len(m)) >= lc.get("regime_cover_min", 0.5):
+        return len(set(known)) >= lc.get("confirm_min_regimes", 2)
+    base = baseline(lesson["claim"]["metric"], lesson["claim"]["vs"], pl)
+    if base is None or len(m) < 2:
+        return False
+    half = len(m) // 2
+    lower = lesson["claim"]["dir"] == "lower"
+
+    def sign_ok(part):
+        xs = [_val(lesson["claim"]["metric"], c) for c in part]
+        d = sum(xs) / len(xs) - base
+        return d < 0 if lower else d > 0
+
+    import datetime
+    weeks = set()
+    for c in m:
+        t = similar.ts_epoch(c["ts"])
+        if t is not None:
+            weeks.add(datetime.datetime.fromtimestamp(t, datetime.timezone.utc).isocalendar()[:2])
+    return sign_ok(m[:half]) and sign_ok(m[half:]) and len(weeks) >= 2
+
+
 def refresh(root, all_cases, cfg, now, dry_run=False):
     """Пересчёт активных уроков по случаям: evidence, conf, статус, срок, противоречия, слияние, вытеснение. -> список изменений [{lesson_id, change, reason}].
     Уроки меток (evidence.src="labels") не видны целиком: ни пересчёта, ни k_active, ни противоречий, слияния и вытеснения (Requirement 6.2);
@@ -555,6 +698,9 @@ def refresh(root, all_cases, cfg, now, dry_run=False):
     for l in sorted(act, key=lambda x: x["lesson_id"]):
         st = stats(l, all_cases, cfg, created_ts=l.get("created_ts"))
         ev = _public_ev(st)
+        if is_ref(l):                                                 # справочный урок остаётся справочным (src, ref, via)
+            old_ev = l.get("evidence") or {}
+            ev.update((k, old_ev[k]) for k in REF_KEYS if k in old_ev)
         status, reason = l["status"], "REFRESH"
         ttl = (lc.get("ttl_confirmed_days", 90) if l["status"] == "confirmed" else lc.get("ttl_hyp_days", 30)) * DAY
         expires = l.get("expires_ts") or now + ttl
@@ -573,6 +719,8 @@ def refresh(root, all_cases, cfg, now, dry_run=False):
             status, reason = "rejected", "CONTRADICTED"               # эффект сменил знак на достаточной выборке
         elif l["status"] == "hyp" and supports(l, st):
             ok_days, ok_reg = st["_days"] >= lc.get("confirm_days", 5), st["_regimes"] >= lc.get("confirm_min_regimes", 2)
+            if is_ref(l):
+                ok_reg = ref_regime_ok(l, all_cases, cfg, st)
             by_n = st["n_closed"] >= lc.get("confirm_n", 30)
             by_fast = False
             if st["n_closed"] >= lc.get("confirm_n_fast", 15) and st["se"]:
@@ -698,11 +846,12 @@ def from_hint(hint, root, all_cases, cfg, now):
 def applicable(lessons, feats, now, cfg, limit=None):
     """Активные уроки, условия которых выполнены признаками запроса, по убыванию conf_eff (скрытые ниже hide_below не берутся).
     -> [{id, st, n, conf, txt, contradicts}] для brief и инструмента шлюза; у уроков меток дополнительно src="labels" (обе группы в одном списке).
-    expires_ts здесь не читается (null = «без срока»): сроки исполняют refresh (мозг) и сверка статусов (метки)."""
+    expires_ts здесь не читается (null = «без срока»): сроки исполняют refresh (мозг) и сверка статусов (метки).
+    Справочные уроки мозга (evidence.ref=true, Requirement 18.1) мозгу не показываются."""
     lc = cfg.get("lessons") or {}
     out = []
     for l in lessons:
-        if l["status"] not in ACTIVE or not matches_features(l["cond"], feats):
+        if l["status"] not in ACTIVE or is_ref(l) or not matches_features(l["cond"], feats):
             continue
         ce = conf_eff(l, now, cfg)
         if ce < lc.get("hide_below", 0.15):

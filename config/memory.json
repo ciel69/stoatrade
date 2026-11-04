@@ -10,6 +10,7 @@
   "enabled": true,
   "agents_off": [],
   "show_in_live": false,
+  "store": "jsonl",
   "tick": {"enabled": true, "interval_s": 60},
   "brief": {"max_tokens": 450, "cases_max": 6, "cases_min": 3, "lessons_max": 3, "start_days": 14},
   "tool": {"max_bytes": 2048, "calls_per_hour": 30, "k_max": 10, "cases_max": 8, "lessons_max": 10},
@@ -21,7 +22,8 @@
     "min_coverage": 0.6,
     "max_age_days": 90,
     "scope": "same_mode",
-    "rules": "cur"
+    "rules": "cur",
+    "labels": false
   },
   "warn": {"insufficient": 5, "low_n": 30},
   "weights": {

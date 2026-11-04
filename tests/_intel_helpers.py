@@ -95,7 +95,8 @@ class IntelCase(unittest.TestCase):
         out = {}
         for sub in ("runtime/intel", "state/bus"):
             d = os.path.join(REAL_ROOT, *sub.split("/"))
-            out[sub] = sorted(os.listdir(d)) if os.path.isdir(d) else None
+            # .lock и *.tmp.* живая платформа владельца создаёт на миг при каждой записи (шина, xflow.json): это не след теста
+            out[sub] = sorted(n for n in os.listdir(d) if n != ".lock" and ".tmp." not in n) if os.path.isdir(d) else None
         return out
 
     def _check_real(self):

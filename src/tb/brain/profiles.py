@@ -191,7 +191,7 @@ def role_rows(root=None, now=None):
         eff.update(ro.get("params") or {})
         spent = by_role.get(rid) or {}
         bud = (ro.get("budget") or {}).get("day_usd")
-        out.append({"role": rid, "scope": scope, "team": team, "live_risk": bool(r.live_risk) if r else None, "io": r.io if r else None, "known": r is not None,
+        out.append({"role": rid, "scope": scope, "team": team, "live_risk": bool(r.live_risk) if r else None, "io": r.io if r else None, "known": r is not None, "assigned": bool(ch),
                     "primary": prim, "fallback": [prof_info(x) for x in (ch.get("fallback") or [])] if ch else [],
                     "live_ok": all(conf.profiles[x].live_ok for x in ([ch["primary"]] + list(ch.get("fallback") or [])) if x in conf.profiles) if ch else None,
                     "params_override": ro.get("params") or {}, "params_effective": eff, "budget": {"day_usd": bud},
@@ -200,7 +200,10 @@ def role_rows(root=None, now=None):
     for tid, t in sorted(a.teams.items()):
         for rid, ch in sorted(t["roles"].items()):
             row(rid, "team", tid, ch)
-    for rid, ch in sorted(a.shared_roles.items()):
+    # общие роли, известные коду, но без назначения (поставка без профиля или active.json старше роли): строка «не назначена» (primary None), назначается brain.role chain
+    shared = dict((rid, None) for rid, sc in conf_mod.ROLE_SCOPE.items() if sc == "shared")
+    shared.update(a.shared_roles)
+    for rid, ch in sorted(shared.items()):
         row(rid, "shared", None, ch)
     return {"roles": out, "live_team": a.live_team, "rev": a.rev, "source": a.source, "mode": swap.day_mode(root), "errors": conf.errors}
 

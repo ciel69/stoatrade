@@ -10,6 +10,20 @@
                   урок hyp через lessons.create(created_by="code", evidence_src="labels") или dropped с кодом (чёрный список — только
                   NO_OOS_SIGN, NOT_SIGNIFICANT, N_TOO_SMALL, SAMPLE_CHANGED на cooldown_days).
 Статусы lesson_candidates: new -> holdout -> hyp | dropped; new -> dropped. Все шаги идемпотентны.
+
+Вторая итерация (задача 27; Requirements 12.2–12.5, 16.3, 17.1, 17.2, 17.4–17.6): кандидаты модели (источник llm) через файловый порт (port.py).
+  llm_request     вход роли кодом: меню окна поиска с номерами M1..Mk и числами скрининга, словарь (признаки, операторы, значения; пороги
+                  числовых признаков — токены q10/q20/q80/q90 со значениями квантилей окна), сводка суток; только числа и идентификаторы.
+  submit_review   задание роли (day: day_reviewer за прошедшие сутки UTC; week: retro, шаг — задача 28) или llm=false (LLM_FALSE с кодом
+                  port.available), если демона, пробы или роли нет; цикл продолжает кодом.
+  accept_llm      приём ответа: уровень ответа (schema, day_id/week_id, неизвестное поле верхнего уровня) отклоняет ответ целиком; уровень элемента —
+                  BAD_SCHEMA, NOT_IN_DICT, DUPLICATE, TOO_MANY (сверх 5 у ревью дня и 3 у ретроспективы, по порядку), BLOCKED (чёрный список),
+                  TOO_BROAD и коды скрининга — только элемент. Принятый элемент проходит скрининг окна поиска (K = K меню + число своих условий модели),
+                  claim с effect считает код; прошедшие — lesson_candidates(status=new, src=llm) и далее тот же путь accept/holdout/испытание.
+  collect         шаг каждого прохода: готовые ответы -> accept_llm, просроченные (llm_wait_s) -> LLM_FALSE TIMEOUT, чистка порта.
+Задача 31 (Requirement 18.2): словарь входа получает раздел ref — признаки, непроверяемые на метках (brainref.ref_dictionary); элемент с таким
+  признаком не отклоняется NOT_IN_DICT, а идёт на справочную проверку по выборке мозга (brainref.check_candidate): урок evidence.src="brain",
+  ref=true, via="llm" (rep["ref"]) или отказ N_TOO_SMALL; кандидатом lesson_candidates такой элемент не становится и правил не порождает.
 """
 import datetime
 import json
@@ -17,10 +31,13 @@ import json
 from tb.knowledge import rulebook_view as RV
 from tb.knowledge import store2
 from tb.labels import store as LST
+from tb.learnloop import brainref as BR
 from tb.learnloop import clusters as CL
 from tb.learnloop import menu as MN
+from tb.learnloop import port as PT
 from tb.learnloop import rules as RL
 from tb.learnloop import verify as VF
+from tb.logic import learn_cond as LCD
 from tb.logic import learn_rules as LR
 from tb.memory import lessons as LS
 
@@ -279,13 +296,14 @@ def _existing_lesson(root, cand_id):
 def lesson_evidence(c, disc, hold_win, nums):
     """evidence_extra урока меток: выборки обоих окон (границы, cut_ts, хеш 16 hex), числа скрининга и holdout, до 5 кластеров."""
     scr = (c["evidence"] or {}).get("screen") or {}
-    return {"cand": c["id"], "menu": c["menu_id"],
+    extra = {"via": c["src"]} if c.get("src") and c["src"] != SRC else {}          # кандидат модели (src=llm): источник виден в уроке
+    return dict(extra, **{"cand": c["id"], "menu": c["menu_id"],
             "sample": {"policy": disc["policy"], "policy_ver": disc["policy_ver"], "ctx_ver": disc["ctx_ver"], "env_norm": disc["env_norm"],
                        "disc": {"a": disc["a"], "b": disc["b"], "cut_ts": disc["cut_ts"], "h": disc["h"]},
                        "hold": {"a": hold_win["a"], "b": hold_win["b"], "cut_ts": hold_win["cut_ts"], "h": hold_win["hash"]}},
             "screen": {"n": scr.get("n"), "diff": scr.get("diff"), "p": scr.get("p"), "k": c["k_space"]},
             "n_closed": nums["n"], "diff": nums["diff"], "se": nums["se"], "p": nums["p"], "k_h": nums["k_h"],
-            "excl_share": hold_win["excl_share"], "last_ts": store2.iso(hold_win["b"]), "clusters": list(nums["clusters"][:5])}
+            "excl_share": hold_win["excl_share"], "last_ts": store2.iso(hold_win["b"]), "clusters": list(nums["clusters"][:5])})
 
 
 def check_holdouts(conn, root, now, cfg, policy=None, mcfg=None, env="mainnet"):
@@ -332,3 +350,365 @@ def check_holdouts(conn, root, now, cfg, policy=None, mcfg=None, env="mainnet"):
         store2.update_row(conn, "lesson_candidates", c["id"], {"status": "hyp", "lesson_id": l["lesson_id"], "evidence": ev})
         out.append((c["id"], "hyp", l["lesson_id"]))
     return out
+
+
+# ---------------------------------------------------------------- кандидаты модели (вторая итерация)
+
+LLM_SRC = "llm"
+LLM_FALSE, LLM_SUBMIT, LLM_PENDING, LLM_OK, LLM_REJECT = "LLM_FALSE", "LLM_SUBMIT", "LLM_PENDING", "LLM", "LLM_REJECT"
+LLM_KINDS = {
+    "day": {"role": "day_reviewer", "schema": "tb.lesson_cand/1", "id": "day_id", "limit": 5, "prefix": "LD", "step": "day_review"},
+    "week": {"role": "retro", "schema": "tb.retro/1", "id": "week_id", "limit": 3, "prefix": "LW", "step": "retro"},
+}
+Q_TOKENS = (("q10", 0.1), ("q20", 0.2), ("q80", 0.8), ("q90", 0.9))
+LLM_CAT = tuple(LCD.MENU_CAT) + ("side",)         # utc_session — Requirement 18.8 (вторая итерация, после замера мощности)
+CLAIM_DICT = {"metric": ("mean_r",), "dir": (SIDE,), "vs": ("base",)}
+ITEM_MENU_KEYS = frozenset(("menu", "dir"))
+ITEM_COND_KEYS = frozenset(("cond", "claim"))
+# коды отказа элемента (Requirement 17.4) и прочие коды элемента
+BAD_SCHEMA, NOT_IN_DICT, DUPLICATE, TOO_MANY, BLOCKED, TOO_BROAD = "BAD_SCHEMA", "NOT_IN_DICT", "DUPLICATE", "TOO_MANY", "BLOCKED", "TOO_BROAD"
+BAD_ID = "BAD_ID"
+
+
+class ItemRejected(Exception):
+    def __init__(self, code):
+        Exception.__init__(self, code)
+        self.code = code
+
+
+def day_id(now):
+    """Идентификатор прошедших суток UTC (ревью дня после смены суток): D-YYYYMMDD."""
+    d = datetime.datetime.fromtimestamp((int(now) // CL.DAY - 1) * CL.DAY, datetime.timezone.utc)
+    return "D-" + d.strftime("%Y%m%d")
+
+
+def week_id(now):
+    """Идентификатор прошедшей недели ISO (ретроспектива после смены недели): W-YYYY-WW."""
+    d = datetime.datetime.fromtimestamp(int(now) - 7 * CL.DAY, datetime.timezone.utc).isocalendar()
+    return "W-%04d-%02d" % (d[0], d[1])
+
+
+def llm_dictionary(win, cfg):
+    """Словарь для модели по выборке окна поиска: числовые признаки меню с заполнением >= feat_cover_min — операторы >=, <= и пороги-токены
+    (значения квантилей окна считает код); coin_class и side — значения словаря learn_cond; claim — только mean_r / lower / base."""
+    p = VF.prepared(win)
+    n = len(p["m"])
+    cover_min = float(cfg["verify"]["feat_cover_min"])
+    feats = {}
+    for f in LCD.MENU_NUM:
+        xs = [x for x in VF.column(p, f) if LCD.is_num(x)]
+        if not xs or len(xs) / float(n) < cover_min:
+            continue
+        feats[f] = {"ops": list(LCD.NUM_OPS), "values": dict((t, MN._qv(MN.quantile(xs, q))) for t, q in Q_TOKENS)}
+    for f in LLM_CAT:
+        vals = list(LCD.menu_cat_values(f))
+        feats[f] = {"ops": ["="] if f == "side" else list(LCD.CAT_OPS), "values": vals}
+    return {"features": feats, "claim": dict((k, list(v)) for k, v in CLAIM_DICT.items()), "max_cond": LCD.MAX_COND}
+
+
+def _day_numbers(conn, env, a, b):
+    row = conn.execute("SELECT COUNT(*), SUM(filled), AVG(CASE WHEN filled=1 THEN r_net END), COUNT(DISTINCT cluster) FROM cluster_runs "
+                       "WHERE env_norm=? AND t0>=? AND t0<?", (env, int(a), int(b))).fetchone()
+    return {"runs": int(row[0] or 0), "filled": int(row[1] or 0), "mean_r": None if row[2] is None else round(float(row[2]), 4), "clusters": int(row[3] or 0)}
+
+
+def llm_request(conn, root, now, cfg, kind="day", policy=None, env="mainnet", extra=None):
+    """Вход роли (только числа, перечисления, идентификаторы). -> (payload | None, код NO_DATA | NO_MENU | None)."""
+    spec = LLM_KINDS[kind]
+    now = int(now)
+    policy = policy or CL.load_policy(root, cfg)
+    win, code = discovery_window(conn, now, cfg, policy, env)
+    if win is None:
+        return None, code
+    menu = MN.build_menu(win, cfg, blocked=_blocked(conn, now), side=SIDE)
+    items = []
+    for i, (it, sc) in enumerate(MN.screen_menu(win, menu, cfg, SIDE)):
+        items.append({"id": "M%d" % (i + 1), "cond": it["cond"], "n": sc["n"], "diff": sc["diff"], "p": sc["p"], "share": it["share"], "ok": bool(sc["ok"])})
+    pid = day_id(now) if kind == "day" else week_id(now)
+    dic = llm_dictionary(win, cfg)
+    try:                                                  # вторая итерация (задача 31): непроверяемые на метках признаки — справочная проверка
+        dic["ref"] = BR.ref_dictionary(root, now, cfg)
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    payload = {"kind": kind, spec["id"]: pid, "env": env, "k": menu["k"], "menu": items, "dict": dic, "limit": spec["limit"]}
+    if kind == "day":
+        d0 = (now // CL.DAY - 1) * CL.DAY
+        payload["day"] = _day_numbers(conn, env, d0, d0 + CL.DAY)
+    payload.update(extra or {})
+    return PT.clean(payload), None
+
+
+def _log(conn, step, code, now, ref=None, body=None):
+    store2.log_event(conn, step, code, "code", ref=ref, body=body, now=now)
+
+
+def _pending_same(root, kind, pid):
+    for jid, job in PT.own(root):
+        m = job.get("meta") or {}
+        if m.get("kind") == kind and m.get("id") == pid:
+            return jid
+    return None
+
+
+def submit_review(conn, root, now, cfg, kind="day", policy=None, env="mainnet", extra=None):
+    """Задание роли через порт или llm=false. -> {"code": LLM_SUBMIT | LLM_PENDING | LLM_FALSE | NO_DATA | NO_MENU, "why", "job", "id"}."""
+    spec = LLM_KINDS[kind]
+    now = int(now)
+    pid = day_id(now) if kind == "day" else week_id(now)
+    ok, why = PT.available(root, now, spec["role"])
+    if not ok:
+        _log(conn, spec["step"], LLM_FALSE, now, ref=pid, body={"llm": False, "why": why})
+        return {"code": LLM_FALSE, "why": why, "id": pid, "job": None}
+    jid = _pending_same(root, kind, pid)
+    if jid:
+        return {"code": LLM_PENDING, "why": None, "id": pid, "job": jid}
+    payload, code = llm_request(conn, root, now, cfg, kind, policy, env, extra)
+    if payload is None:
+        return {"code": code, "why": code, "id": pid, "job": None}
+    jid = PT.submit(root, spec["role"], payload, now, cfg, meta={"kind": kind, "id": pid, "env": env})
+    _log(conn, spec["step"], LLM_SUBMIT, now, ref=pid, body={"job": jid, "k": payload.get("k")})
+    return {"code": LLM_SUBMIT, "why": None, "id": pid, "job": jid}
+
+
+# ---- проверка ответа
+
+def check_answer(obj, kind, expect_id):
+    """Уровень ответа (Requirement 17.4): объект, schema, day_id/week_id, только ключи schema, id, items. -> (items | None, код | None)."""
+    spec = LLM_KINDS[kind]
+    if not isinstance(obj, dict) or obj.get("schema") != spec["schema"] or not isinstance(obj.get("items"), list):
+        return None, BAD_SCHEMA
+    if set(obj) - {"schema", spec["id"], "items"}:
+        return None, BAD_SCHEMA
+    if obj.get(spec["id"]) != expect_id:
+        return None, BAD_ID
+    return obj["items"], None
+
+
+def _num_value(v, vals):
+    """Порог числового признака: токен словаря (q80) -> значение квантиля; число принимается, только если совпадает со значением словаря."""
+    if isinstance(v, str) and v in vals:
+        return vals[v]
+    if LCD.is_num(v) and v in vals.values():
+        return float(v)
+    raise ItemRejected(NOT_IN_DICT)
+
+
+def _cond_part(c, feats, ref=None):
+    """Часть условия по словарю: признак из features (проверяем на метках) или, если его там нет, из ref (непроверяемый на метках признак,
+    справочная проверка по выборке мозга). -> (часть, справочная ли)."""
+    if not isinstance(c, dict) or set(c) != {"feature", "op", "value"}:
+        raise ItemRejected(BAD_SCHEMA)
+    f, op, v = c["feature"], c["op"], c["value"]
+    is_ref = False
+    if isinstance(f, str) and f not in feats and f in (ref or {}):
+        feats, is_ref = ref, True
+    if not isinstance(f, str) or f not in feats or op not in feats[f]["ops"]:
+        raise ItemRejected(NOT_IN_DICT)
+    vals = feats[f]["values"]
+    if isinstance(vals, dict):
+        return {"feature": f, "op": op, "value": _num_value(v, vals)}, is_ref
+    if op == "in":
+        if not isinstance(v, list) or not v or len(v) > LCD.MAX_IN or len(set(map(str, v))) != len(v) or any(not isinstance(x, str) or x not in vals for x in v):
+            raise ItemRejected(NOT_IN_DICT)
+        return {"feature": f, "op": op, "value": sorted(v)}, is_ref
+    if isinstance(v, bool) and v in vals:                 # логический признак справочного словаря
+        return {"feature": f, "op": op, "value": v}, is_ref
+    if not isinstance(v, str) or v not in vals:
+        raise ItemRejected(NOT_IN_DICT)
+    return {"feature": f, "op": op, "value": v}, is_ref
+
+
+REF = "REF"                                               # pick справочного кандидата (непроверяемый на метках признак, Requirement 18.2)
+
+
+def check_item(it, menu, dic):
+    """Уровень элемента. -> (cond, id меню | None | REF); ItemRejected(BAD_SCHEMA | NOT_IN_DICT). effect и числа правила модель не задаёт.
+    Признак вне features, но из словаря ref (вторая итерация, задача 31) делает кандидата справочным: pick=REF, условие проверяется по словарю
+    уроков (memory.lessons.validate_cond), дальше — справочная проверка по выборке мозга (learnloop.brainref.check_candidate)."""
+    if not isinstance(it, dict):
+        raise ItemRejected(BAD_SCHEMA)
+    keys = set(it)
+    if "menu" in keys:
+        if not keys <= ITEM_MENU_KEYS:
+            raise ItemRejected(BAD_SCHEMA)
+        if it.get("dir", SIDE) not in CLAIM_DICT["dir"]:
+            raise ItemRejected(NOT_IN_DICT)
+        mid = it["menu"]
+        if not isinstance(mid, str) or mid not in menu:
+            raise ItemRejected(NOT_IN_DICT)
+        return [dict(x) for x in menu[mid]], mid
+    if "cond" not in keys or not keys <= ITEM_COND_KEYS:
+        raise ItemRejected(BAD_SCHEMA)
+    cl = it.get("claim", {})
+    if not isinstance(cl, dict) or not set(cl) <= set(CLAIM_DICT):
+        raise ItemRejected(BAD_SCHEMA)
+    if any(cl[k] not in CLAIM_DICT[k] for k in cl):
+        raise ItemRejected(NOT_IN_DICT)
+    raw = it["cond"]
+    if not isinstance(raw, list) or not (1 <= len(raw) <= int(dic.get("max_cond") or LCD.MAX_COND)):
+        raise ItemRejected(BAD_SCHEMA)
+    feats = dic.get("features") or {}
+    ref = dic.get("ref") if isinstance(dic.get("ref"), dict) else None
+    parts = [_cond_part(c, feats, ref) for c in raw]
+    cond = [p for p, _r in parts]
+    if len(set(c["feature"] for c in cond)) != len(cond):
+        raise ItemRejected(BAD_SCHEMA)
+    if any(r for _p, r in parts):
+        if LS.validate_cond(cond):
+            raise ItemRejected(NOT_IN_DICT)
+        return sorted(cond, key=lambda c: c["feature"]), REF
+    if LCD.validate_cond(cond):
+        raise ItemRejected(NOT_IN_DICT)
+    return LR.canon_cond(cond), None
+
+
+def _new_keys(conn, env):
+    out = set()
+    for c in candidates(conn, status=("new",), env=env):
+        if isinstance(c["cond"], list) and c["cond"]:
+            out.update(cand_keys(c))
+    return out
+
+
+def accept_llm(conn, root, now, cfg, kind, job, answer, policy=None, env=None):
+    """Приём ответа модели (job — своё задание порта: вход, меню, словарь; answer — output ответа демона).
+    -> {"code": LLM | LLM_REJECT | NO_DATA | NO_MENU, "why", "menu_id", "accepted": [(i, id кандидата)], "rejected": [(i, код)]}."""
+    spec = LLM_KINDS[kind]
+    now = int(now)
+    payload = job.get("payload") or {}
+    env = env or payload.get("env") or "mainnet"
+    pid = payload.get(spec["id"])
+    jid = job.get("id")
+    rep = {"code": None, "why": None, "menu_id": "%s-%s-%s" % (spec["prefix"], env, pid), "accepted": [], "rejected": []}
+    items, code = check_answer(answer, kind, pid)
+    if items is None:
+        rep.update(code=LLM_REJECT, why=code)
+        _log(conn, spec["step"], LLM_REJECT, now, ref=pid, body={"job": jid, "why": code})
+        return rep
+    policy = policy or CL.load_policy(root, cfg)
+    win, wcode = discovery_window(conn, now, cfg, policy, env)
+    if win is None:
+        rep.update(code=wcode, why=wcode, rejected=[(i, wcode) for i in range(len(items))])
+        _log(conn, spec["step"], wcode, now, ref=pid, body={"job": jid, "n": len(items)})
+        return rep
+    menu = dict((m["id"], m["cond"]) for m in payload.get("menu") or [] if isinstance(m, dict) and isinstance(m.get("id"), str) and isinstance(m.get("cond"), list))
+    dic = payload.get("dict") or {}
+    live = active_hashes(conn, root) | _new_keys(conn, env)
+    seen, valid, refs = set(), [], []
+    for i, it in enumerate(items):
+        if i >= spec["limit"]:
+            rep["rejected"].append((i, TOO_MANY))
+            continue
+        try:
+            cond, pick = check_item(it, menu, dic)
+        except ItemRejected as e:
+            rep["rejected"].append((i, e.code))
+            continue
+        if pick == REF:
+            key = frozenset(LS._cond_set(cond))
+            if key in seen:
+                rep["rejected"].append((i, DUPLICATE))
+                continue
+            seen.add(key)
+            refs.append((i, cond))
+            continue
+        c = {"cond": cond, "claim": {"dir": SIDE}}
+        keys = cand_keys(c)
+        if any(k in seen for k in keys) or is_dup(c, live):
+            rep["rejected"].append((i, DUPLICATE))
+            continue
+        seen.update(keys)
+        if cand_blocked(conn, c, now) is not None:
+            rep["rejected"].append((i, BLOCKED))
+            continue
+        valid.append((i, cond, pick))
+    k = int(payload.get("k") or 0) + sum(1 for v in valid if v[2] is None)       # своё условие модели расширяет просмотренное пространство
+    k = max(k, 1)
+    p = VF.prepared(win)
+    n_rows = len(p["m"])
+    broad = float(cfg["trial"]["max_trade_loss_share"])
+    smp = CL.sample(win)
+    rows = []
+    for i, cond, pick in valid:
+        hits = VF.hit_vector(p, cond)
+        share = sum(hits) / float(n_rows) if n_rows else 0.0
+        if share > broad:
+            rep["rejected"].append((i, TOO_BROAD))
+            continue
+        tc = VF.tc_from_hits(p, hits)
+        sc = VF.screen(win, cond, k, cfg, SIDE, tc=tc)
+        if not sc["ok"]:
+            rep["rejected"].append((i, sc["code"]))
+            continue
+        ev = {"disc": smp, "screen": {"n": sc["n"], "diff": sc["diff"], "se": sc["se"], "p": sc["p"], "thr": round(sc["thr"], 8), "k": sc["k"],
+                                      "halves": sc["halves"], "share": round(share, 4)}, "excl_share": win["excl_share"],
+              "llm": {"job": jid, "role": spec["role"], "i": i, "pick": pick}}
+        claim = {"metric": "mean_r", "dir": SIDE, "vs": "base", "effect": VF.effect(tc)}
+        rows.append((i, {"menu_id": rep["menu_id"], "src": LLM_SRC, "cond": cond, "claim": claim, "env_norm": env, "ctx_ver": win["ctx_ver"], "k_space": k,
+                         "p_screen": sc["p"], "status": "new", "code": None, "evidence": ev, "ts": now}))
+    rep["ref"] = []
+    for i, cond in refs:                                  # справочная проверка по выборке мозга (Requirement 18.2): урок ref или N_TOO_SMALL
+        try:
+            res = BR.check_candidate(root, cond, {"dir": SIDE}, now, cfg, via=LLM_SRC)
+        except (OSError, ValueError, KeyError, TypeError):
+            res = {"code": BR.N_TOO_SMALL, "lesson_id": None}
+        if res["code"] == BR.REF_OK:
+            rep["ref"].append((i, res["lesson_id"]))
+        else:
+            rep["rejected"].append((i, res["code"]))
+    rep["rejected"].sort()
+    with LST.tx(conn):
+        if rows:
+            store2.insert_rows(conn, "lesson_candidates", [r for _i, r in rows], ignore_dup=True)
+        ids = dict((cand_h(c), c["id"]) for c in candidates(conn, env=env) if c["menu_id"] == rep["menu_id"] and c["src"] == LLM_SRC)
+        for i, r in rows:
+            rep["accepted"].append((i, ids.get(cand_h(r))))
+        body = {"job": jid, "k": k, "accepted": [i for i, _ in rep["accepted"]], "rejected": [[i, c] for i, c in rep["rejected"]]}
+        if rep["ref"]:
+            body["ref"] = [[i, lid] for i, lid in rep["ref"]]
+        _log(conn, spec["step"], LLM_OK, now, ref=pid, body=body)
+    rep["code"] = LLM_OK
+    return rep
+
+
+# ---- шаги цикла
+
+def collect(conn, root, now, cfg, policy=None):
+    """Каждый проход: ответы готовых заданий -> accept_llm; неудачные ответы и просрочка llm_wait_s -> LLM_FALSE (llm=false); чистка порта.
+    Задание удаляется после обработки (повтор прохода ничего не добавляет). -> {"code": "OK", "done": [(jid, код)], "sweep": {...}}."""
+    now = int(now)
+    out = []
+    for jid, job in PT.own(root):
+        m = job.get("meta") or {}
+        kind = m.get("kind")
+        if kind not in LLM_KINDS:
+            continue
+        spec = LLM_KINDS[kind]
+        st = PT.status(root, jid, now, cfg, job)
+        if st in ("waiting", "claimed"):
+            continue
+        try:
+            if st == "done":
+                res = PT.result(root, jid)
+                if res["ok"]:
+                    out.append((jid, accept_llm(conn, root, now, cfg, kind, job, res["output"], policy=policy)["code"]))
+                else:
+                    _log(conn, spec["step"], LLM_FALSE, now, ref=m.get("id"), body={"llm": False, "why": res["err"] or "ERR", "job": jid})
+                    out.append((jid, LLM_FALSE))
+            else:
+                _log(conn, spec["step"], LLM_FALSE, now, ref=m.get("id"), body={"llm": False, "why": PT.TIMEOUT, "job": jid})
+                out.append((jid, LLM_FALSE))
+        finally:
+            PT.done(root, jid)
+    return {"code": "OK", "done": out, "sweep": PT.sweep(root, now, cfg)}
+
+
+def step_day_review(ctx):
+    """Суточный шаг ревью дня (флаг: роль доступна через port.available, иначе LLM_FALSE — сутки помечены llm=false, цикл идёт кодом)."""
+    rep = submit_review(ctx.conn, ctx.root, ctx.now, ctx.cfg, "day", policy=ctx.policy)
+    return {"code": rep["code"], "why": rep["why"], "id": rep["id"], "job": rep["job"]}
+
+
+def step_llm_collect(ctx):
+    rep = collect(ctx.conn, ctx.root, ctx.now, ctx.cfg, policy=ctx.policy)
+    return {"code": "OK", "done": len(rep["done"])}

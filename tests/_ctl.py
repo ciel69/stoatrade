@@ -31,6 +31,29 @@ def iso(ts):
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
 
 
+def _patch_wait(test, pick):
+    orig = client.wait_result
+
+    def wait(cid, root=None, **kw):
+        kw["timeout"] = pick(float(kw.get("timeout", 4.0)))
+        return orig(cid, root, **kw)
+    client.wait_result = wait
+    test.addCleanup(setattr, client, "wait_result", orig)
+
+
+def short_ctl_wait(test, timeout=0.3):
+    """На время теста client.wait_result ждёт не дольше timeout (ctl в тесте не запущен: ответа не будет, итог тот же E_CTL_DOWN/504).
+    Боевой таймаут дашборда (4 с) не меняется; тесты с живым ctl эту замену не ставят."""
+    _patch_wait(test, lambda t: min(t, timeout))
+
+
+def patient_ctl_wait(test, stop, timeout=15.0):
+    """Тест с живым ctl в фоновом потоке (pump до stop): ответ ждётся не меньше timeout. Под нагрузкой параллельного ./tb test поток ctl может
+    не успеть за боевые 4 с, и тест получил бы E_CTL_DOWN вместо проверяемого ответа; при живом ctl ответ приходит раньше, ожидание не растёт.
+    Поток остановлен (stop выставлен: проверка «ctl не отвечает») -> таймаут вызывающего без изменений."""
+    _patch_wait(test, lambda t: t if stop.is_set() else max(t, timeout))
+
+
 class Env(object):
     """root + keys; env TB_KEYS_DIR / TB_ROOT выставляются на время теста."""
 

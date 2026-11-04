@@ -1,6 +1,6 @@
 {
  "version": 1,
- "_note": "Желаемая начальная конфигурация API-мозга (WP11-C2). После первой смены модели действует подписанный state/brain/active.json (./tb brain reload --from-config возвращает к этому файлу). Метку live_ok ставит ТОЛЬКО владелец после отчёта eval. Секретов нет.",
+ "_note": "Желаемая начальная конфигурация API-мозга (WP11-C2). После первой смены модели действует подписанный state/brain/active.json (./tb brain reload --from-config возвращает к этому файлу). Метку live_ok ставит ТОЛЬКО владелец после отчёта eval. Роли цикла обучения day_reviewer и retro поставляются без профиля (не назначены, модель не вызывается, llm=false): профиль назначает владелец (./tb brain role chain shared.day_reviewer --primary <профиль> или «Настройки» дашборда). Секретов нет.",
  "profiles": {
   "ds-flash": {
    "provider": "deepseek",

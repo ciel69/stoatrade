@@ -4,7 +4,7 @@ import re
 import unittest
 
 import _bootstrap  # noqa: F401
-from _memory_helpers import mk
+from _memory_helpers import mk, put_cases
 from test_brief import Base, NOW, iso, w
 from test_memory_lessons import CL, NC
 from tb import paths
@@ -37,8 +37,7 @@ class MemBase(Base):
                       {"status": "armed", "ts": {"created": NOW - 600, "armed": NOW - 600}})
 
     def put(self, lst):
-        for c in lst:
-            cases.append_new(c, root=self.root)
+        put_cases(self.root, lst)
 
     def cfg_file(self, **kw):
         c = memcfg.load()

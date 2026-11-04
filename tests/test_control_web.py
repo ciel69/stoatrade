@@ -40,11 +40,15 @@ def body(o):
 
 
 class Base(unittest.TestCase):
+    ctl_down = True             # ctl не запущен: challenge ждёт ответа 0,3 с вместо 4 с и отдаёт тот же 504 (TestFlowThroughCtl запускает ctl и ждёт как в бою)
+
     def setUp(self):
         self.e = _ctl.Env(self)
         self.e.good_live()
         self.web = ctlweb.CtlWeb(self.e.root)
         self.now = NOW
+        if self.ctl_down:
+            _ctl.short_ctl_wait(self)
 
     def login(self, token=None, now=None, **hover):
         return self.web.post("/api/ctl/login", hdr(**hover), body({"token": token or self.e.token}), PORT, self.now if now is None else now)
@@ -212,6 +216,8 @@ class TestRequestChecks(Base):
 
 
 class TestFlowThroughCtl(Base):
+    ctl_down = False
+
     def setUp(self):
         Base.setUp(self)
         self.e.good_exec(profile="paper")
@@ -219,6 +225,7 @@ class TestFlowThroughCtl(Base):
         self.stop = threading.Event()
         self.addCleanup(self.stop.set)
         _ctl.pump(self.c, self.stop)
+        _ctl.patient_ctl_wait(self, self.stop)
         self.real_now = __import__("time").time
         self.now = self.real_now()
 

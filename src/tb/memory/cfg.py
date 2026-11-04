@@ -26,6 +26,10 @@ def load(root=None):
     return d
 
 
+# Ключ "store" в config/memory.json - только переходная совместимость для корня проекта (R2.9b): источник правды о хранилище случаев и
+# уроков - маркер state/memory.store корня (tb.knowledge.memstore.mode). Отсюда store не пишется.
+
+
 def cfg_hash(cfg):
     """Хеш настроек (для предрегистрации A/B: параметры фиксируются до старта)."""
     return hashlib.sha256(json.dumps(cfg, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:12]

@@ -261,8 +261,11 @@ def _parse_target(args, assign):
     else:
         head, rname = None, role
     changes = []
-    if head == "shared" or (head is None and rname in assign.shared_roles and rname not in ((assign.teams.get(assign.live_team) or {}).get("roles") or {})):
-        if rname not in assign.shared_roles:
+    # общая роль, известная коду (conf.ROLE_SCOPE), но без записи в назначениях (active.json создан до её появления или поставка без профиля):
+    # «не назначена», и её можно назначить обычным путём; прочие цепочки при этом не меняются
+    known_shared = rname in assign.shared_roles or conf_mod.ROLE_SCOPE.get(rname) == "shared"
+    if head == "shared" or (head is None and known_shared and rname not in ((assign.teams.get(assign.live_team) or {}).get("roles") or {})):
+        if not known_shared:
             return None, None, "общая роль неизвестна"
         changes.append({"team": None, "role": rname, "scope": "shared"})
     elif head in assign.teams or head is None:
@@ -579,7 +582,7 @@ def use(root, args, now=None, by="ctl", phrase_ok=False, rollback=False):
                 new.live_team = c["to"]
             else:
                 tgt = new.shared_roles if c["team"] is None else new.teams[c["team"]]["roles"]
-                old = tgt[c["role"]]
+                old = tgt.get(c["role"]) or {}          # общая роль без назначения: первая запись цепочки
                 tgt[c["role"]] = {"primary": c["to"], "fallback": [x for x in old.get("fallback", []) if x != c["to"]]}
         rev = _next_rev(root, cur.rev)
         _write_rev(root, new, rev, by, "rollback" if rollback else "use", now, key, cur.rev)
@@ -623,8 +626,10 @@ def set_chain(root, args, now=None, by="ctl", phrase_ok=False):
             return _result(False, "E_SWAP_TARGET", err or "нужна ровно одна роль")
         c = changes[0]
         tgt = cur.shared_roles if c["team"] is None else cur.teams[c["team"]]["roles"]
-        old = tgt[c["role"]]
+        old = tgt.get(c["role"]) or {"primary": None, "fallback": []}     # общая роль без назначения («не назначена»)
         new_primary = args.get("primary") or old["primary"]
+        if not new_primary:
+            return _result(False, "E_SWAP_PROFILE", "роль %s не назначена: задайте основной профиль (primary)" % c["role"])
         fb = args["fallback"] if "fallback" in args else [x for x in old.get("fallback", []) if x != new_primary]
         if not isinstance(fb, list) or len(fb) > 4 or len(set(fb)) != len(fb) or new_primary in fb or any(not isinstance(x, str) for x in fb):
             return _result(False, "E_SWAP_PROFILE", "запасные профили: список до 4 без повторов и без основного")
@@ -656,9 +661,9 @@ def set_chain(root, args, now=None, by="ctl", phrase_ok=False):
         tgt[c["role"]] = {"primary": new_primary, "fallback": list(fb)}
         rev = _next_rev(root, cur.rev)
         _write_rev(root, new, rev, by, "chain", now, key, cur.rev)
-        rec = append_swap(root, {"rev": rev, "prev_rev": cur.rev, "kind": "use", "tier": 0, "target": [c["role"]], "from": ",".join([old["primary"]] + list(old.get("fallback", []))),
+        rec = append_swap(root, {"rev": rev, "prev_rev": cur.rev, "kind": "use", "tier": 0, "target": [c["role"]], "from": ",".join([old["primary"] or "-"] + list(old.get("fallback", []))),
                                  "to": ",".join([new_primary] + list(fb)), "by": by, "phrase_ok": False, "gates": [], "warnings_accepted": [], "result": "ok", "op": "chain"}, now)
-    _emit_swap(root, "chain", old["primary"], new_primary, rev, by, now)
+    _emit_swap(root, "chain", old["primary"] or "-", new_primary, rev, by, now)
     return _result(True, "OK", "цепочка роли %s сохранена (ревизия %d)" % (c["role"], rev), rev=rev, prev_rev=cur.rev, role=c["role"], primary=new_primary, fallback=list(fb), seq=rec["seq"])
 
 

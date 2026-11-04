@@ -5,7 +5,8 @@
   * сервисом ctl каждый цикл через `tick()` (не чаще `tick.interval_s` из config/memory.json, по умолчанию 60 с; сбой не роняет ctl);
   * раннером мозга перед разбором закрытия (`sync_now`), чтобы случай для ревьюера точно существовал;
   * вручную `./tb memory sync`.
-Ничего не торгует, сети нет; пишет только cases.jsonl и lessons.jsonl своего корня. Отдельного сервиса платформы не требуется.
+Ничего не торгует, сети нет; пишет только случаи и уроки своего корня (через фасад memory.cases / memory.lessons: cases.jsonl и lessons.jsonl
+при store="jsonl", таблицы case_rows / lesson_rows при "sqlite"). Отдельного сервиса платформы не требуется.
 """
 import json
 import os
@@ -72,7 +73,7 @@ def sync_now(root=None, now=None, cfg=None, lessons_too=True, skip_unchanged=Tru
     except (OSError, ValueError, KeyError, TypeError):
         pass
     snap = snapshot(root)
-    if skip_unchanged and _saved_snapshot(root) == snap and os.path.exists(cases.cases_path(root)):
+    if skip_unchanged and _saved_snapshot(root) == snap and cases.present(root):       # хранилище по store (R2.9b): при sqlite файла нет
         return {"written": 0, "new": {}, "errors": [], "skipped": True}
     rep = migrate.migrate(root, dry_run=False, cfg=cfg, final_only=True)
     if not rep.get("errors"):

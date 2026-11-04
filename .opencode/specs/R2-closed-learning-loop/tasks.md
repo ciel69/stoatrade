@@ -214,56 +214,59 @@
   - Зависит от: 9, 19, 20, 22
   - _Requirements: 1.4, 15.8_
 
-- [ ] 24. Вторая итерация: перенос случаев и уроков `knowledge.migrate_v2b`, фасад, экспорт, очередь записей (волна 13)
+- [x] 24. Вторая итерация: перенос случаев и уроков `knowledge.migrate_v2b`, фасад, экспорт, очередь записей (волна 13)
   - `case_rows`, `lesson_rows` с цепочкой; `migrate --dry-run`; `migrate` (проверка остановки платформы `PLATFORM_RUNNING`, копии, блокировки, транзакция, сверка `fold`, откат, переименование в `*.pre-r29`, `store="sqlite"`); писатели перечитывают `store` на каждой записи; проверка отсутствия JSONL после переключения; `export-jsonl` и возврат на `jsonl` только после него; правила от `store` не зависят; очередь `knowledge.spool.jsonl` и `replay-spool`; восстановление после `CHAIN_BROKEN` через `restore` и `replay-spool`; отсутствующий `lessons.jsonl` = пусто
   - критерии приёмки: прежние тесты `memory` проходят без правок при обоих `store`; расхождение откатывает перенос; записи после переключения возвращаются экспортом
   - тесты `tests/test_knowledge_migrate.py`: свойство 4 для обоих режимов, параллельный писатель, спул, экспорт после новых записей
   - Зависит от: 4, 23
   - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8_
 
-- [ ] 25. Вторая итерация: поиск похожих по меткам и решениям `tb.knowledge.similar` (волна 13)
+- [x] 25. Вторая итерация: поиск похожих по меткам и решениям `tb.knowledge.similar` (волна 13)
   - `nearest` с предотбором (метки: `type`/`side`/`utc_session`, последние 5000 по `t0`, индекс `(type, side, t0)`; случаи: последние 2000 по `t_ts` режима и типа), мерой `memory.similar.similarity`; ответ ≤ 2 КБ; `similar.labels=false` по умолчанию
   - критерии приёмки: при `source="brain"` ответ равен прежнему `memory.similar.select`; на 100 000 сигналов и 20 000 случаев `both` ≤ 200 мс
   - тесты `tests/test_knowledge_similar.py`: равенство, пропуски, размер, скорость при `TB_SLOW_TESTS=1`
   - Зависит от: 4, 23
   - _Requirements: 3.9, 3.10, 3.11, 3.12_
 
-- [ ] 26. Вторая итерация: переключение боевых данных и RUNBOOK (волна 14)
-  - порядок: `migrate --dry-run`, `./tb down`, копии, `migrate`, `./tb up`, `./tb knowledge verify`; возврат через `export-jsonl`; запись в `docs/RUNBOOK.md`
+- [x] 26. Вторая итерация: переключение боевых данных и RUNBOOK (волна 14)
+  - порядок: `migrate --dry-run`, `./tb down`, копии, `migrate`, индекс поиска похожих `knowledge.similar.migrate_v2s` (задача 25; идемпотентно, до этого поиск по меткам работает через `ix_sig_type` медленнее), `./tb up`, `./tb knowledge verify`; возврат через `export-jsonl`; запись в `docs/RUNBOOK.md`
+  - до переключения перевести на фасад `tb.knowledge.memstore` прямых читателей JSONL (найдено при приёмке задачи 24): `memory/tick.py` (проверяет наличие `cases.jsonl` — при sqlite запускал бы `memory.migrate` каждую минуту), `memory/cli.py` (`./tb memory verify` по цепочке `lessons.jsonl`), `memory/diagnose.py:_lessons_state`, `learn/load.py` (ключ кеша по размерам файлов); прогнать `migrate` и `export-jsonl` на полной копии `state/` вместе с `knowledge.sqlite`
   - критерии приёмки: `verify` без разрывов, статус зелёный, мозг получает досье, возврат проверен на копии
   - тесты `tests/test_knowledge_cutover.py` на фикстуре; ручной прогон отчётом
   - Зависит от: 24, 2
   - _Requirements: 3.3, 3.4, 3.5_
 
-- [ ] 27. Вторая итерация: порт заданий, роли `day_reviewer`, `retro`, обработчик в демоне API-мозга (волна 14)
+- [x] 27. Вторая итерация: порт заданий, роли `day_reviewer`, `retro`, обработчик в демоне API-мозга (волна 14)
   - `tb.learnloop.port` (`L-*.json`, `kind="learnloop"`, TTL `deadline_ts` = `llm_job_ttl_s`, захват O_EXCL с обновлением аренды каждые 30 с и `claim_ttl_s` для брошенных, таймаут ожидания результата `llm_wait_s`, `.result.json`), `brain/learnjobs.py` (свой `pending` по `kind`, так как `lifejobs.pending` отбирает только `lifecycle`), подключение в `brain/api_daemon.py` рядом с `lifejobs.step`/`reset_claims`/`prune` (проверено по коду: `reset_claims` снимает все `.claim` без результата, `lifejobs.prune(root, now, keep_s=259200.0)` удаляет любые `L-*.json`/`L-*.claim` старше 3 суток независимо от `kind`, поэтому TTL меньше 3 суток, тест на это); деградация `llm=false` без демона или при недоступной пробе; роли в `config/brain.json:shared_roles`, `brain/conf.py:ROLE_SCOPE`, `brain/validate.py:SCHEMAS`, `brain/evalrun.py:ROLES`, `config/roles/`; схема `tb.lesson_cand/1`, двухуровневая валидация, кандидаты с источником `llm` (`effect` считает код); учёт `state/llm_calls.jsonl` по роли и строка в `brief.economics`; профиль модели из настроек платформы (решение владельца 4), при недоступности `llm=false`
   - критерии приёмки: частично невалидный ответ даёт принятых кандидатов и коды отказов; недоступность модели не останавливает кодовую ветку; `tb.learnloop` не импортирует `tb.brain`/`tb.gateway`/`tb.llm`
   - тесты `tests/test_learnloop_port.py`, `tests/test_brain_learnjobs.py`, `tests/test_learnloop_candidates_llm.py`, фикстуры `tests/fixtures_roles/day_reviewer.json`, `retro.json`
   - Зависит от: 23
   - _Requirements: 16.3, 17.1, 17.2, 17.3, 17.4, 17.5, 17.6, 17.7, 17.8_
 
-- [ ] 28. Вторая итерация: недельная ретроспектива `tb.learnloop.retro` (волна 15)
+- [x] 28. Вторая итерация: недельная ретроспектива `tb.learnloop.retro` (волна 15)
   - `retro_digest` (сводка недели кодом), схема `tb.retro/1` (выбор из меню или `cond + claim`, без параметров и без отклонения уроков), предложения идут кандидатами в проверку и испытание
   - критерии приёмки: правки промптов, числа правил и свободный текст отклоняются; недоступная модель не останавливает цикл; правило не создаётся без испытания
   - тесты `tests/test_learnloop_retro.py`
   - Зависит от: 27
   - _Requirements: 12.1, 12.2, 12.3, 12.4, 12.5_
 
-- [ ] 29. Вторая итерация: размерные правила `size_cap`, `require_confirm` (волна 15)
+- [x] 29. Вторая итерация: размерные правила `size_cap`, `require_confirm` (волна 15)
   - выполняется во второй итерации и только при `allow_size_rules=true` (по решению владельца 3 выключено; включение и разрешения по уровням риска задаёт владелец отдельным указанием); `size_cap` (параметр в (0,1)), испытание по снимкам со снижением R пропорционально; `require_confirm` требует парной политики на тех же сигналах (добавляется отдельным блоком R1.3/R4) и до этого не порождается
   - критерии приёмки: при `allow_size_rules=false` вид не создаётся и не применяется; размер не выше потолка уровня риска
   - тесты `tests/test_logic_learn_rules_size.py`
   - Зависит от: 3, 23
   - _Requirements: 8.2_
 
-- [ ] 30. Документация второй итерации (волна 16)
+- [x] 30. Документация второй итерации (волна 16)
   - `docs/ARCHITECTURE.md`, `docs/BRAIN.md`, `docs/RUNBOOK.md`, `docs/ROADMAP.md` (статусы), `docs/spec_v2/08_case_memory.md`; полный `./tb test`
+  - промпт роли `day_reviewer` (`config/roles/day_reviewer.md`) дополнить разделом словаря `dict.ref` (признаки, проверяемые справочно по сделкам мозга; найдено при приёмке задачи 31)
+  - записать ограничения второй итерации: меню по сессиям (`second_iteration.session_menu`) выключено, пока испытание не получит критерий Уэлча (иначе `UNREACHABLE_N`); `lessons.pool_mode="paper"` не выставлен (тесты memory читают проектный `config/memory.json`); `shadow_hits` нет в таблице `rule_evals` (условие по нарушениям читает журнал решений)
   - критерии приёмки: документы согласованы со спекой; тесты зелёные
   - тесты: полный `./tb test`
   - Зависит от: 25, 26, 28, 29, 31
   - _Requirements: 17.7_
 
-- [ ] 31. Вторая итерация: справочные уроки мозга, заморозка, условие по нарушениям, `shadow_hits`, меню по сессиям `tb.learnloop.brainref` (волна 15)
+- [x] 31. Вторая итерация: справочные уроки мозга, заморозка, условие по нарушениям, `shadow_hits`, меню по сессиям `tb.learnloop.brainref` (волна 15)
   - шаг справочных уроков (`lessons.propose` по пулу мозга с порогами `second_iteration.brain_ref`, копия `cfg`, `evidence.ref=true`, `applicable` их мозгу не показывает, бюджет `lessons.max_new_per_day`); справочная проверка кандидатов модели с непроверяемым признаком (`N_TOO_SMALL` при нехватке); фильтр `lessons.pool_mode` (`null` по умолчанию, боевое `"paper"` после проверки тестов); критерий режимов по покрытию; заморозка продвижения по числу сделок и сигналов как дополнительное условие `promotion_ready` (при истории короче 21 суток не вычисляется); поле `shadow_hits` в `rule_eval` и разметке кандидатов; условие по нарушениям в критерии испытания по записям `rule_eval` (`brain_hits_min`, `not_evaluable`, `not_evaluable_link`); условия `utc_session` в меню с тестом Уэлча при достижимой мощности по замеру
   - критерии приёмки: прежние тесты `memory` проходят без правок при `pool_mode=null`; справочные уроки правил не порождают; заморозка откладывает продвижение без потери вердикта; `not_evaluable` и `not_evaluable_link` не блокируют продвижение; меню по сессиям включается только при мощности ≥ цели задачи 9
   - тесты `tests/test_learnloop_brainref.py`, дополнение `tests/test_learnloop_promote.py`, `tests/test_learnloop_trial.py`, `tests/test_learnloop_verify.py`

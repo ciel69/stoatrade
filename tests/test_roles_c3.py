@@ -30,7 +30,8 @@ class RolesAndPrompts(unittest.TestCase):
 
     def test_all_roles_load_without_errors(self):
         self.assertEqual(self.reg.errors, [])
-        self.assertEqual(sorted(self.reg.roles), ["day_auditor", "entry_scout", "morning_analyst", "news_reader", "position_manager", "reviewer"])
+        self.assertEqual(sorted(self.reg.roles), ["day_auditor", "day_reviewer", "entry_scout", "morning_analyst", "news_reader", "position_manager", "retro",
+                                                  "reviewer"])                                  # day_reviewer, retro: роли цикла обучения R2 (задача 27)
 
     def test_versions_and_first_line(self):
         for rid in NEW_ROLES:

@@ -11,6 +11,8 @@ verify / stats   integrity_check, цепочки, индексы и тригге
 make_backup      проверенная копия state/backups/knowledge-YYYYMMDDTHHMMSS-<reason>.sqlite без перезаписи, ротация по причинам, SRC_CORRUPT
 restore          протокол замены файла (маркер, подтверждения писателей, выбор копии, переименование с -wal/-shm, подстановка, meta.copy_ts/restore_ts)
 disable_v2       выход из режима v2 (копия, затем удаление маркера) при learnloop.enabled=false
+migrate_v2b / apply_v2b, verify_line_chain  (R2.9b) таблицы case_rows/lesson_rows (ключ meta.knowledge_v2b_ver) и их цепочки; verify и check_copy
+                 проверяют их (CHAIN_BROKEN - красный), непустая очередь state/knowledge.spool.jsonl - жёлтый SPOOL_PENDING
 
 Соединение то же, что у сервиса меток (labels.store.open_rw: WAL, busy_timeout). Автовосстановление как сервис - задача 10, она вызывает restore(auto=True).
 """
@@ -217,6 +219,104 @@ def migrate_v2a(conn, root=None, enabled=False, explicit=False, backup=True, now
         raise KnowledgeMigrationError(S2.KNOWLEDGE_MIGRATION, "миграция v2a не применена: %s: %s" % (e.__class__.__name__, e)) from e
     _write_v2_marker(root, now)
     return cur
+
+
+def version_v2b(conn):
+    try:
+        return int(_meta_get(conn, S2.META_V2B_KEY) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def ready_v2b(conn):
+    """Таблицы случаев и уроков (v2b) на месте."""
+    return version_v2b(conn) >= S2.V2B_VER and all(_has_table(conn, t) for t in S2.MEM_TABLES)
+
+
+def apply_v2b(conn):
+    """DDL v2b внутри уже открытой вызывающим транзакции (перенос случаев делает схему и строки одной транзакцией). -> версия."""
+    if version_v2b(conn) >= S2.V2B_VER:
+        return version_v2b(conn)
+    if not _has_table(conn, "meta"):
+        conn.execute("CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT)")
+    for s in S2.V2B:
+        conn.execute(s)
+    _meta_set(conn, S2.META_V2B_KEY, str(S2.V2B_VER))
+    return S2.V2B_VER
+
+
+def migrate_v2b(conn, root=None, backup=True, now=None, sleep=time.sleep):
+    """Создать таблицы case_rows / lesson_rows (ключ meta.knowledge_v2b_ver) одной транзакцией; копия premigrate перед изменением.
+    Сбой -> ROLLBACK и KnowledgeMigrationError. Строки переносит tb.knowledge.migrate2. -> версия v2b."""
+    if version_v2b(conn) >= S2.V2B_VER:
+        return version_v2b(conn)
+    if backup and os.path.exists(db_path(root)):
+        try:
+            make_backup(root, "premigrate", now=now, sleep=sleep)
+        except (KnowledgeError, OSError, sqlite3.Error) as e:
+            raise KnowledgeMigrationError(S2.KNOWLEDGE_MIGRATION, "копия перед миграцией v2b не сделана: %s" % e) from e
+    try:
+        with LST.tx(conn):
+            ver = apply_v2b(conn)
+    except Exception as e:
+        raise KnowledgeMigrationError(S2.KNOWLEDGE_MIGRATION, "миграция v2b не применена: %s: %s" % (e.__class__.__name__, e)) from e
+    return ver
+
+
+# ---------------------------------------------------------------- цепочки case_rows / lesson_rows (строки JSONL)
+
+def line_of(row):
+    """Строка таблицы v2b ({seq, body, prev, h, ...}) -> строка прежнего JSONL (dict с seq/prev/h)."""
+    d = json.loads(row["body"])
+    d["seq"], d["prev"], d["h"] = row["seq"], row["prev"], row["h"]
+    return d
+
+
+def line_ok(row, prev, table):
+    """Строка v2b цела: prev = h предыдущей, h = хеш строки, ключ и rev в body совпадают с колонками."""
+    try:
+        d = line_of(row)
+    except (ValueError, TypeError):
+        return False
+    key = S2.MEM_KEY[table]
+    return row["prev"] == prev and row["h"] == CH.make_hash(prev, d) and d.get(key) == row.get(key) and d.get("rev") == row.get("rev")
+
+
+def mem_rows(conn, table, after_seq=0):
+    cur = conn.execute("SELECT * FROM %s WHERE seq > ? ORDER BY seq" % table, (int(after_seq),))
+    cols = [c[0] for c in cur.description]
+    return [dict(zip(cols, r)) for r in cur.fetchall()]
+
+
+def verify_line_chain(conn, table, tail_only=False):
+    """-> {"ok", "n", "bad_seq"}: цепочка строк case_rows / lesson_rows (tail_only - только последняя строка, для быстрого статуса)."""
+    if not _has_table(conn, table):
+        return {"ok": True, "n": 0, "bad_seq": None}
+    if tail_only:
+        cur = conn.execute("SELECT * FROM %s ORDER BY seq DESC LIMIT 1" % table)
+        cols = [c[0] for c in cur.description]
+        r = cur.fetchone()
+        if r is None:
+            return {"ok": True, "n": 0, "bad_seq": None}
+        r = dict(zip(cols, r))
+        return {"ok": line_ok(r, r["prev"], table), "n": None, "bad_seq": None if line_ok(r, r["prev"], table) else r["seq"]}
+    prev, last_seq, n = GENESIS, 0, 0
+    for r in mem_rows(conn, table):
+        if r["seq"] <= last_seq or not line_ok(r, prev, table):
+            return {"ok": False, "n": n, "bad_seq": r["seq"]}
+        prev, last_seq, n = r["h"], r["seq"], n + 1
+    return {"ok": True, "n": n, "bad_seq": None}
+
+
+def spool_path(root=None):
+    return paths.state(S2.SPOOL_NAME, root=root)
+
+
+def spool_pending(root=None):
+    try:
+        return os.path.getsize(spool_path(root)) > 0
+    except OSError:
+        return False
 
 
 # ---------------------------------------------------------------- цепочка rulebook_versions
@@ -442,11 +542,14 @@ def _red(codes):
 def verify(root=None, quick=False, counts=True, now=None):
     """Проверка базы знаний (./tb knowledge verify, ./tb status): маркеры, integrity_check (quick_check при quick), цепочки, индексы и триггеры v2a,
     размеры таблиц. -> {"ok", "color", "codes", "reasons", ...}. Красный: DB_CORRUPT, CHAIN_BROKEN, RESTORING, RESTORE_FAILED, SCHEMA_MISMATCH;
-    жёлтый: NOT_READY (маркер v2 без таблиц), AUTO_RESTORED (7 суток после автовосстановления)."""
+    жёлтый: NOT_READY (маркер v2 без таблиц; store=sqlite без файла или таблиц v2b), AUTO_RESTORED (7 суток после автовосстановления),
+    SPOOL_PENDING, JSONL_APPEARED (store=sqlite, а cases.jsonl / lessons.jsonl есть в state/), STORE_IN_CONFIG (store корня проекта взят из
+    config/memory.json без маркера state/memory.store). rep["store"] - активное хранилище случаев и уроков, rep["store_src"] - его источник
+    (marker | config-compat | default)."""
     now = time.time() if now is None else now
     path = db_path(root)
     rep = {"ok": True, "color": "green", "codes": [], "reasons": [], "v2": KM.has_v2(root), "db": os.path.exists(path), "restoring": KM.restoring(root),
-           "ver": 0, "ready": False, "integrity": None, "chains": {}, "schema": None, "tables": {}, "size_mb": None, "restore": None}
+           "ver": 0, "ready": False, "v2b": False, "integrity": None, "chains": {}, "schema": None, "tables": {}, "size_mb": None, "restore": None}
 
     def add(code, why):
         if code not in rep["codes"]:
@@ -455,6 +558,18 @@ def verify(root=None, quick=False, counts=True, now=None):
 
     if rep["db"]:
         rep["size_mb"] = round(os.path.getsize(path) / 1048576.0, 2)
+    if spool_pending(root):
+        add(S2.SPOOL_PENDING, "база знаний: в очереди state/%s есть записи случаев/уроков: ./tb knowledge replay-spool" % S2.SPOOL_NAME)
+    from tb.knowledge import memstore                     # ленивый импорт: memstore импортирует этот модуль
+    rep["store"], rep["store_src"] = memstore.mode_info(root)
+    if rep["store_src"] == "config-compat":
+        add(S2.STORE_IN_CONFIG, "store=%s взят из config/memory.json (STORE_IN_CONFIG, переходное состояние): выполните ./tb knowledge store-marker"
+            % rep["store"])
+    if rep["store"] == "sqlite":                          # R2.9b: после переключения JSONL не открываются и не должны появляться
+        extra = [n for n in (S2.MEM_FILE[t] for t in S2.MEM_TABLES) if os.path.exists(paths.state(n, root=root))]
+        if extra:
+            add(S2.JSONL_APPEARED, "store=sqlite, но в state/ есть %s (JSONL_APPEARED): кто-то пишет в обход фасада; см. RUNBOOK, раздел R2.9b"
+                % ", ".join(extra))
     failed = KM.read_json(KM.restore_failed_path(root))
     if isinstance(failed, dict):
         add(S2.RESTORE_FAILED, "база знаний: восстановление прервано (%s), нужен ./tb knowledge restore" % failed.get("code"))
@@ -467,6 +582,8 @@ def verify(root=None, quick=False, counts=True, now=None):
     if not rep["db"]:
         if rep["v2"]:
             add(S2.DB_CORRUPT, "база знаний: файла нет при маркере state/knowledge.v2 (пустая база не создаётся): ./tb knowledge restore")
+        elif rep["store"] == "sqlite":
+            add(S2.NOT_READY, "store=sqlite, но файла базы знаний нет (NOT_READY): записи случаев и уроков идут в очередь")
         return _finish(rep)
     try:
         conn = LST.open_ro(root)
@@ -495,8 +612,21 @@ def verify(root=None, quick=False, counts=True, now=None):
                     add(S2.SCHEMA_MISMATCH, "база знаний: нет индексов/триггеров v2a: %s" % ",".join(miss["indexes"] + miss["triggers"]))
             elif rep["v2"]:
                 add(S2.NOT_READY, "база знаний: маркер v2 есть, таблиц цикла нет (NOT_READY): цикл не стартует")
+            rep["v2b"] = ready_v2b(conn)
+            if rep.get("store") == "sqlite" and not rep["v2b"]:
+                add(S2.NOT_READY, "store=sqlite, но таблиц case_rows/lesson_rows нет (NOT_READY): записи случаев и уроков идут в очередь")
+            if rep["v2b"]:                              # вторая итерация: цепочки случаев и уроков (быстрый статус - только хвост)
+                for t in S2.MEM_TABLES:
+                    rep["chains"][t] = ch = verify_line_chain(conn, t, tail_only=quick)
+                    if not ch["ok"]:
+                        add(S2.CHAIN_BROKEN, "база знаний: цепочка %s разорвана на seq=%s (CHAIN_BROKEN): записи идут в очередь, восстановление - "
+                                             "./tb knowledge restore и replay-spool" % (t, ch["bad_seq"]))
+                names = set(r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type IN ('index', 'trigger')"))
+                miss = [x for x in S2.V2B_INDEXES + S2.V2B_TRIGGERS if x not in names]
+                if miss:
+                    add(S2.SCHEMA_MISMATCH, "база знаний: нет индексов/триггеров v2b: %s" % ",".join(miss))
             if counts:
-                for t in ("signals", "outcomes", "policy_runs") + S2.TABLES:
+                for t in ("signals", "outcomes", "policy_runs") + S2.TABLES + S2.MEM_TABLES:
                     if _has_table(conn, t):
                         rep["tables"][t] = conn.execute("SELECT COUNT(*) FROM %s" % t).fetchone()[0]
             rs = {k: _meta_get(conn, k) for k in (S2.META_COPY_TS, S2.META_RESTORE_TS, S2.META_RESTORE_MODE, S2.META_RESTORE_SRC)}
@@ -530,7 +660,8 @@ def status_check(root=None, now=None, ttl_s=STATUS_TTL_S):
     if not (KM.has_v2(root) or KM.restoring(root) or os.path.exists(KM.restore_failed_path(root))):
         return None
     key = os.path.abspath(paths.state(root=root))
-    cheap = (KM.has_v2(root), KM.restoring(root), os.path.exists(KM.corrupt_path(root)), os.path.exists(KM.restore_failed_path(root)), os.path.exists(db_path(root)))
+    cheap = (KM.has_v2(root), KM.restoring(root), os.path.exists(KM.corrupt_path(root)), os.path.exists(KM.restore_failed_path(root)), os.path.exists(db_path(root)),
+             os.path.exists(paths.state(S2.STORE_MARKER, root=root)))
     hit = _STATUS_CACHE.get(key)
     if hit and hit[1] == cheap and 0 <= now - hit[0] < ttl_s:
         return hit[2]
@@ -612,7 +743,11 @@ def check_copy(path):
         ch = verify_chain(c)
         if not ch["ok"]:
             return False, S2.CHAIN_BROKEN, ch
-        return True, None, {"ver": version(c), "labels_ver": _meta_get(c, "labels_schema_ver")}
+        for t in S2.MEM_TABLES:
+            ch = verify_line_chain(c, t)
+            if not ch["ok"]:
+                return False, S2.CHAIN_BROKEN, dict(ch, table=t)
+        return True, None, {"ver": version(c), "labels_ver": _meta_get(c, "labels_schema_ver"), "v2b": version_v2b(c)}
     except sqlite3.DatabaseError as e:
         return False, S2.DB_CORRUPT, "%s: %s" % (type(e).__name__, e)
     finally:

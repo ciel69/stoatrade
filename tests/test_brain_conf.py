@@ -29,7 +29,8 @@ class RealConfig(unittest.TestCase):
     def test_shipped_roles_valid(self):
         r = roles_runtime.load(ROOT)
         self.assertEqual(r.errors, [])
-        self.assertEqual(sorted(r.roles), ["day_auditor", "entry_scout", "morning_analyst", "news_reader", "position_manager", "reviewer"])
+        self.assertEqual(sorted(r.roles), ["day_auditor", "day_reviewer", "entry_scout", "morning_analyst", "news_reader", "position_manager", "retro",
+                                           "reviewer"])                                       # day_reviewer, retro: задача 27 R2
         for role in r.roles.values():
             self.assertTrue(role.prompt.lstrip().startswith("# prompt v%d" % role.version))
             self.assertIn("JSON", role.system)

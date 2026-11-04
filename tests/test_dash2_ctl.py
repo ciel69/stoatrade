@@ -18,7 +18,8 @@ from tb.dash import keyweb
 from tb.dash2 import ctlbridge, server as S
 
 try:
-    from websockets.asyncio.client import connect
+    from websockets.asyncio.client import connect as _ws_connect  # noqa: F401
+    from _bootstrap import ws_connect as connect
     HAVE_WS = True
 except ImportError:
     HAVE_WS = False
@@ -146,6 +147,7 @@ class TestPipeline(Base):
         self.e.good_exec(profile="paper", now=time.time())
         self.stop = threading.Event()
         _ctl.pump(self.c, self.stop)
+        _ctl.patient_ctl_wait(self, self.stop)
         self.addCleanup(self.stop.set)
 
     def test_challenge_goes_through_ctl_and_returns_checks_without_nonce(self):
@@ -457,6 +459,7 @@ class TestFullPipeline(FullBase):
         self.e.good_exec(profile="paper", now=time.time())
         self.stop = threading.Event()
         _ctl.pump(self.c, self.stop)
+        _ctl.patient_ctl_wait(self, self.stop)
         self.addCleanup(self.stop.set)
 
     def final(self, cid):
@@ -489,6 +492,7 @@ class TestFullKillClear(FullBase):
         self.e.good_exec(profile="paper", now=time.time())
         self.stop = threading.Event()
         _ctl.pump(self.c, self.stop)
+        _ctl.patient_ctl_wait(self, self.stop)
         self.addCleanup(self.stop.set)
         self.flag(True)
         from tb.core import exec_cfg
@@ -530,7 +534,12 @@ class TestFullKillClear(FullBase):
         res = self.final(r["accepted_id"])
         self.assertEqual((res["status"], res["code"]), ("done", "OK"), res)
         self.assertIsNone(self.exec_cfg.kill_state(self.e.root))
-        rows = [x for x in audit.tail(self.e.root, 100) if x["action"] == "kill.clear" and x["result"] == "ok"]
+        end = time.time() + 5.0                 # строку аудита ctl пишет рядом с результатом: под нагрузкой (параллельный ./tb test) она может прийти чуть позже
+        while True:
+            rows = [x for x in audit.tail(self.e.root, 100) if x["action"] == "kill.clear" and x["result"] == "ok"]
+            if any("тест моста" in x.get("note", "") and x.get("mode") == "paper" for x in rows) or time.time() > end:
+                break
+            time.sleep(0.05)
         self.assertTrue(any("тест моста" in x.get("note", "") and x.get("mode") == "paper" for x in rows), rows)
 
     def test_no_nonce_is_refused_by_ctl(self):

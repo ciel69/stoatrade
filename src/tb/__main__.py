@@ -4,11 +4,8 @@
 `python -m tb ...` напрямую тоже идёт через launcher.
 """
 import importlib
-import os
 import runpy
 import sys
-
-from tb import paths
 
 # группа -> модуль. Для групп из GROUPS_SUB вторым словом выбирается подкоманда.
 SIMPLE = {
@@ -110,7 +107,8 @@ USAGE = """использование: ./tb <группа> <команда> [а�
   smoke [--max-seconds N] [--keep]   сквозной прогон paper (фейковый LLM, временный корень, публичные данные Bybit); docs/spec_v2/SMOKE_RESULT.md
   dash [--port 8765] [--open] [--max-seconds N]   дашборд по умолчанию (127.0.0.1): Vue + WebSocket, токена входа нет; live-кнопки выключены, пока владелец не включит флаги в config/control.json (docs/CONTROL.md)
   audit-public [--json] [--root ПУТЬ] [--term СЛОВО] [--strict]   проверка дерева перед публикацией: секреты, личные данные, крупные файлы, лицензия (только чтение; docs/PUBLISH_CHECKLIST.md)
-  tick ...   (старый движок) | test   (все тесты)""" % "|".join(RESEARCH)
+  test [-j N] [--slow] [-k ШАБЛОН] [модуль[.Класс[.тест]] ...] [--durations N]   тесты: параллельно по модулям (-j 1: один процесс), --slow: и медленный набор
+  tick ...   (старый движок)""" % "|".join(RESEARCH)
 
 
 def run(module, args):
@@ -134,9 +132,8 @@ def main(argv):
         return 0 if argv else 2
     group, rest = argv[0], argv[1:]
     if group == "test":
-        import unittest
-        suite = unittest.defaultTestLoader.discover(os.path.join(paths.root(), "tests"), top_level_dir=os.path.join(paths.root(), "tests"))
-        return 0 if unittest.TextTestRunner(verbosity=1).run(suite).wasSuccessful() else 1
+        from tb import testrun
+        return testrun.main(rest)
     if group == "feed":
         if not rest or rest[0] not in FEED:
             print("feed: start | once | selftest", file=sys.stderr)

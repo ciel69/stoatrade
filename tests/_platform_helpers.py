@@ -33,7 +33,9 @@ def script(root, name, body):
 
 def fast_cfg(**sv):
     cfg = S.load_cfg(None)
-    cfg["supervisor"].update({"poll_s": 0.02, "status_s": 0.05, "stop_grace_s": 3.0, "exec_stop_grace_s": 3.0, "fatal_within_s": 30.0,
+    # stop_grace_s 1.0: пустышки на Windows без общей консоли CTRL_BREAK не получают, и terminate() ждал бы grace/2 на каждого (4 сервиса = 6 с);
+    # мягкую остановку и эскалацию до kill проверяет test_platform_procs
+    cfg["supervisor"].update({"poll_s": 0.02, "status_s": 0.05, "stop_grace_s": 1.0, "exec_stop_grace_s": 1.0, "fatal_within_s": 30.0,
                               "retry_after_giveup_s": 0})
     cfg["supervisor"]["restart"] = {"base_s": 0.03, "factor": 2.0, "max_s": 0.2, "max_tries": 3}
     cfg["supervisor"].update(sv)

@@ -261,6 +261,62 @@ class TestReadiness(Base):
         self.assertEqual(self.status(self.rid), ("trial", "READY", "TRIAL"))
         self.assertEqual(self.c.execute("SELECT COUNT(*) FROM rule_rows WHERE rule_id=?", (self.rid,)).fetchone()[0], 2)   # TRIAL + READY
 
+    # ---- заморозка (вторая итерация, задача 31; Requirement 18.5)
+    def brain_trades(self, now, per_day_prev, per_day_cur, days=22, i0=0):
+        from _memory_helpers import mk
+        from tb.memory import cases
+        i = i0
+        for d in range(days):
+            for k in range(per_day_cur if d < 7 else per_day_prev):
+                i += 1
+                cases.append_new(mk(i, sym="F%d" % i, r=0.1, mode="paper", ts=cases.iso(now - d * D - H - k * 60)), root=self.root)
+
+    def signals(self, now, per_day, days=21):
+        rows = []
+        for d in range(days):
+            for k in range(per_day):
+                t = now - d * D - 1 - k
+                rows.append(("S%d-%d" % (d, k), t, "SOL", "hot_enter", 1, "{}", "done", t, t, t, 1))
+        with store.tx(self.c):
+            self.c.executemany("INSERT INTO signals(key, t0, sym, type, tradable, ev, status, mature_ts, next_try_ts, captured_ts, schema_ver) "
+                               "VALUES(?,?,?,?,?,?,?,?,?,?,?)", rows)
+
+    def test_freeze_defers_without_losing_verdict(self):
+        """Сделок мозга за 7 суток меньше половины среднего при прежнем потоке сигналов -> FREEZE: правило ждёт READY, вердикт promote
+        испытания сохраняется; поток сделок восстановился -> продвижение без вмешательства."""
+        for i in range(12, 20):
+            self.day(i)
+        now = self.START
+        self.env(now)
+        self.brain_trades(now, per_day_prev=4, per_day_cur=1)
+        self.signals(now, 10)
+        rep = self.real(now)
+        self.assertEqual(rep["ready"]["failed"], ["FREEZE"])
+        self.assertEqual(rep["promoted"], [])
+        self.assertEqual(self.status(self.rid)[:2], ("trial", "READY"))
+        t = TR.by_rule(self.c, self.rid)
+        self.assertEqual((t["state"], t["verdict"]), ("closed", "promote"))                      # вердикт не потерян
+        self.assertEqual([p["rule"]["rule_id"] for p in TR.promoted(self.c)], [self.rid])
+        rd = V.promotion_ready(self.c, self.cfg, now, root=self.root, state={}, check_db=False)
+        self.assertEqual((rd["details"]["freeze"]["known"], rd["details"]["freeze"]["frozen"]), (True, True))
+        self.brain_trades(now + H, per_day_prev=0, per_day_cur=3, days=7, i0=1000)                      # сделок за 7 суток снова больше половины среднего
+        self.env(now + H)
+        self.assertEqual([p["rule_id"] for p in self.real(now + H)["promoted"]], [self.rid])
+
+    def test_freeze_short_history_does_not_block(self):
+        """История сделок мозга короче 21 суток: заморозка не вычисляется (freeze_unknown) и продвижение не блокирует."""
+        for i in range(12, 20):
+            self.day(i)
+        now = self.START
+        self.env(now)
+        self.brain_trades(now, per_day_prev=4, per_day_cur=0, days=20)
+        self.signals(now, 10)
+        rep = self.real(now)
+        self.assertTrue(rep["ready"]["ok"], rep)
+        self.assertEqual([p["rule_id"] for p in rep["promoted"]], [self.rid])
+        rd = V.promotion_ready(self.c, self.cfg, now, root=self.root, state={}, check_db=False)
+        self.assertEqual((rd["details"]["freeze"]["known"], rd["details"]["freeze"]["why"]), (False, "SHORT_HISTORY"))
+
 
 # ---------------------------------------------------------------- лимит, LOSS_CAP
 

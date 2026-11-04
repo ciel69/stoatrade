@@ -17,6 +17,7 @@ from tb.platform import services as S
 ACK = riskstore.ACK
 PROFILE_OF = {"observe": ("paper", True), "paper": ("paper", False), "testnet": ("testnet", False), "live": ("trade", False)}
 MAX_INBOX_BYTES = protocol.MAX_COMMAND_BYTES
+IO_RETRIES = 5                     # проходов чтения командного файла при OSError (занят при замене), затем отказ E_ARGS
 KEEP_OUTBOX_S = 7 * 86400
 LIVE_ACTIONS = ("day.start", "risk.set", "brain.use", "carry.decide", "platform.shutdown", "kill.set", "stop.emergency", "brain.role", "exchange.set")
 
@@ -122,18 +123,26 @@ class Ctl(object):
 
     def process(self, path):
         cid = os.path.basename(path)[:-5]
+        retries = self.__dict__.setdefault("_io_retry", {})
         try:
             if os.path.getsize(path) > MAX_INBOX_BYTES:
                 raise ValueError("big")
             with open(path, encoding="utf-8") as f:
                 cmd = json.load(f)
-        except (OSError, ValueError):
+        except ValueError:
             cmd = None
-        finally:
-            try:
-                os.remove(path)
-            except OSError:
-                pass
+        except OSError:
+            # на Windows файл может быть занят в момент атомарной замены писателем: не терять команду, повторить на следующем проходе
+            n = retries.get(path, 0) + 1
+            if n < IO_RETRIES and os.path.exists(path):
+                retries[path] = n
+                return None
+            cmd = None
+        retries.pop(path, None)
+        try:
+            os.remove(path)
+        except OSError:
+            pass
         if cmd is None:
             audit.append(self.root, cid, "-", None, "-", "-", "rejected", "E_ARGS", now=self.now())
             return None

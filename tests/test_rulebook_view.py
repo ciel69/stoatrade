@@ -1,7 +1,7 @@
 """tb.knowledge.rulebook_view (R2, задача 11): свойство 22 (нет безнадзорных правил: просроченная или отсутствующая аренда, маркер восстановления,
 сигнал повреждения, повреждённая или отсутствующая база, apply=false и при повреждённой базе), соединение на один вызов (файл базы можно
 переименовать сразу после вызова), кеш по версии, resolve_event по веткам (event_seq, чужая монета, старое событие, idea_stale/idea_level,
-вид вне scope, нет события, предыдущий ротированный файл только при недавней ротации), rule_eval_fields без shadow_hits, слои. Сеть не используется."""
+вид вне scope, нет события, предыдущий ротированный файл только при недавней ротации), rule_eval_fields (shadow_hits пусто без правил trial), слои. Сеть не используется."""
 import json
 import os
 import shutil
@@ -300,7 +300,7 @@ class TestRuleEvalFields(Base):
         res = LR.apply(view, {"ok": True, "side": "long"}, MF.rule_features(dict(e, d=dict(e["d"], spread_bps=9.0)), {"side": "long"}, {}))
         f = RV.rule_eval_fields(view, res, {"role": "chat", "event": e, "plan": "PL-0001-ETHUSDT-01", "cands_ok_n": 2})
         self.assertEqual(tuple(sorted(f)), tuple(sorted(RV.RULE_EVAL_KEYS)))
-        self.assertNotIn("shadow_hits", f)
+        self.assertEqual(f["shadow_hits"], [])                    # вторая итерация (задача 31): поле есть, без правил trial — пусто
         self.assertEqual((f["event_seq"], f["rule_hits"], f["rule_eval_ids"], f["feat_missing_ids"], f["rulebook_ver"]), (7, ["RL0001"], ["RL0001"], [], "R-0002"))
         res = LR.apply(view, {"ok": True}, MF.rule_features(None, {"side": "long"}, {}))
         f = RV.rule_eval_fields(view, res, {"role": "entry_scout", "event_seq": None, "cands_ok_n": True})
