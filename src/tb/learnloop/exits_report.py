@@ -27,8 +27,21 @@
 
 Память (Requirement 13.4)
     `case_fields(row)` — необязательные поля случая `tb.case/1` (`result.after_mfe_r`, `result.after_t1`); схема случая
-    расширена только ими (`tb.memory.cases.RESULT`), `rules_ver` не меняется. Пишет их тот, кто закрывает случай (этот
-    отчёт только читает базу).
+    расширена только ими (`tb.memory.cases.RESULT`), `rules_ver` не меняется. `write_after(root, ...)` — писатель этих
+    полей: считает метрики по готовым `trade_paths` и дописывает `update`-строку закрытого случая (`tb.memory.cases.append_update`),
+    сохраняя остальной `result` и `src` (в том числе `rules_ver`); повторный вызов без изменений ничего не пишет
+    (идемпотентность), без готового пути случай не трогается.
+
+Отчёт R4.3 «мозг против алгоритма» (Requirement 12, задача 19)
+    `brain(conn, ...)` для каждой закрытой сделки мозга с путём считает `brain_delta = r_sim(версия позиции + timeline) −
+    r_sim(версия позиции без timeline)` через `exitsim.replay_brain` (порядок `S`, один лот `qty/qty_step/min_qty`, строки
+    пути срезаны до `entry_ts`). Версия позиции — `trade_paths.exit_ver` из `exit_versions` (нет записи — пол защиты,
+    счётчик `policy_missing`). Разрезы: по типам вмешательства (`move_stop`, `close`, `partial_close`) и по кодам
+    пробуждения (`decision kind="event", what="watch_wake"` плана в окне сделки, `args.code` / `WHY=WATCH:<код>`); сделка
+    входит в каждый разрез, который у неё есть. Доля сделок, где `qty.close_qty` изменил долю политики, считается
+    сравнением частей прогона с лотом и без лота. Стоимость `position_manager` — тот же журнал `tb.llm.usage`
+    (`state/llm_calls.jsonl`), из которого собран `brief.economics` (импорт `tb.brain` запрещён слоями `tb.learnloop`).
+    Вердикт по Requirement 12.2: n < 30 — «данных мало», иначе по 95% интервалу среднего по сделкам.
 
 Конфиг: `paths.post_close_min` берётся из `config/exits.json` (битый конфиг — окно по границе сохранённого пути и
 примечание в отчёте, числовых умолчаний в коде нет, Requirement 16.1). Слои `tb.learnloop` соблюдены: нет мозга, шлюза,
@@ -39,12 +52,18 @@ import math
 import sqlite3
 import time
 
+from tb.core import decisions as DEC
+from tb.core import expstats as XSTAT
 from tb.labels import paths as LP
 from tb.labels import policies as LPOL
 from tb.labels import schema as LS
 from tb.labels import store as LST
-from tb.logic import exitsim
 from tb.learnloop import exits_conf as EC
+from tb.learnloop import exits_eval as EV
+from tb.llm import usage as LLM
+from tb.logic import exitpol as XP
+from tb.logic import exitsim
+from tb.memory import cases as MC
 
 WILSON_Z = 1.96
 REASONS = ("sl", "tp", "rule", "manual", "timeout")
@@ -381,7 +400,8 @@ def after(conn, mode=None, since=None, now=None, root=None):
 
 
 def case_fields(row):
-    """Необязательные поля случая `tb.case/1` из строки отчёта: `result.after_mfe_r`, `result.after_t1` (Requirement 13.4)."""
+    """Необязательные поля случая `tb.case/1` из строки отчёта: `result.after_mfe_r`, `result.after_t1` (Requirement 13.4).
+    Пишет их `write_after` (или закрывающий случай), сам разбор строки базу не меняет."""
     row = row if isinstance(row, dict) else {}
     out = {}
     mfe = _num(row.get("after_mfe_r"))
@@ -391,6 +411,436 @@ def case_fields(row):
     if hit is not None:
         out["after_t1"] = 1.0 if hit >= 0.5 else 0.0
     return out
+
+
+# ---------------------------------------------------------------- R4.3: мозг против алгоритма (Requirement 12, задача 19)
+
+BRAIN_COLS = ("journal_id", "plan_id", "sym", "side", "mode", "entry_ts", "entry_px", "stop0", "tick", "qty", "qty_step", "min_qty",
+              "horizon", "max_hold_min", "atr5_pct", "sig_type", "exit_ver", "close_ts", "rows", "end_ts", "flags", "timeline", "fetched_ts")
+INTERVENTION_TYPES = ("move_stop", "close", "partial_close")
+REPORT_MIN_N = 30                       # Requirement 12.2: n < 30 — «данных мало»
+PM_ROLE = "position_manager"
+VERDICT_LOW, VERDICT_FLAT, VERDICT_ADDS, VERDICT_HARMS = "данных мало", "разницы не видно", "мозг добавляет", "мозг вредит"
+
+
+def _sd(xs):
+    xs = list(xs)
+    n = len(xs)
+    if n < 2:
+        return None
+    m = sum(xs) / float(n)
+    return math.sqrt(max(0.0, sum((x - m) ** 2 for x in xs) / float(n - 1)))
+
+
+def mean_ci(xs, level=0.95):
+    """Среднее и двусторонний t-интервал по сделкам -> (mean, lo, hi); пусто -> (None, None, None), n = 1 -> (m, m, m)."""
+    xs = [float(x) for x in (xs or [])]
+    n = len(xs)
+    if not n:
+        return (None, None, None)
+    m = sum(xs) / float(n)
+    s = _sd(xs)
+    if n < 2 or s is None or s == 0.0:
+        return (round(m, 4), round(m, 4), round(m, 4))
+    se = s / math.sqrt(float(n))
+    try:
+        q = XSTAT.t_quantile(1.0 - (1.0 - float(level)) / 2.0, n - 1)
+    except (ValueError, TypeError, ZeroDivisionError):
+        q = WILSON_Z
+    return (round(m, 4), round(m - q * se, 4), round(m + q * se, 4))
+
+
+def brain_verdict(n, lo, hi):
+    """Вердикт Requirement 12.2: n < 30 — «данных мало»; интервал содержит 0 — «разницы не видно»;
+    нижняя граница > 0 — «мозг добавляет»; верхняя граница < 0 — «мозг вредит»."""
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        return VERDICT_LOW
+    if n < REPORT_MIN_N or lo is None or hi is None:
+        return VERDICT_LOW
+    if float(lo) > 0.0:
+        return VERDICT_ADDS
+    if float(hi) < 0.0:
+        return VERDICT_HARMS
+    return VERDICT_FLAT
+
+
+def _flag_set(flags):
+    return set(x for x in str(flags or "").split(",") if x)
+
+
+def _canon_kind(kind):
+    """Вид вмешательства в терминах `exitsim` -> move_stop | close | partial_close | None."""
+    k = str(kind or "").strip().lower()
+    if k in ("move_stop", "stop", "adjust"):
+        return "move_stop"
+    if k == "close":
+        return "close"
+    if k in ("partial_close", "partial"):
+        return "partial_close"
+    return None
+
+
+def _timeline_kinds(timeline):
+    """Виды вмешательств хронологии без повторов в порядке первого появления (неизвестные события пропускаются)."""
+    out = []
+    for e in timeline or []:
+        if not isinstance(e, dict):
+            continue
+        k = _canon_kind(e.get("kind"))
+        if k and k not in out:
+            out.append(k)
+    return out
+
+
+def _wake_code(rec):
+    """Код пробуждения из записи решений: `kind="event", what="watch_wake"`, `args.code` или `why="WATCH:<код>"`."""
+    if not isinstance(rec, dict) or rec.get("kind") != "event" or rec.get("what") != "watch_wake":
+        return None
+    args = rec.get("args") if isinstance(rec.get("args"), dict) else {}
+    code = args.get("code")
+    if isinstance(code, str) and code.strip():
+        return code.strip()
+    why = rec.get("why")
+    if isinstance(why, str) and why.startswith("WATCH:"):
+        code = why[6:].strip()
+        return code or None
+    return None
+
+
+def _wakes_by_plan(root, since=None):
+    """Коды пробуждений по планам из журнала решений -> {plan: [(ts, code)]} (по возрастанию времени)."""
+    try:
+        rows = DEC.read(after_seq=0, plan=None, limit=0, root=root)
+    except (OSError, ValueError, TypeError):
+        return {}
+    out = {}
+    for r in rows:
+        code = _wake_code(r)
+        if not code:
+            continue
+        ts = _num(r.get("t"))
+        if ts is None or (since is not None and ts < float(since)):
+            continue
+        plan = r.get("plan")
+        if isinstance(plan, str) and plan:
+            out.setdefault(plan, []).append((ts, code))
+    for lst in out.values():
+        lst.sort(key=lambda x: x[0])
+    return out
+
+
+def _policy_for(conn, ver, floor, cache=None):
+    """Политика версии позиции из `exit_versions` -> (policy, missing). Нет записи/таблицы — пол и missing=True
+    (только для именованной версии, отличной от X-0001)."""
+    cache = cache if isinstance(cache, dict) else {}
+    key = ver if isinstance(ver, str) and ver else ""
+    if key in cache:
+        return cache[key]
+    pol, missing = floor, False
+    if key and key != "X-0001":
+        missing = True
+        try:
+            row = conn.execute("SELECT policy FROM exit_versions WHERE ver=?", (key,)).fetchone()
+        except sqlite3.Error:
+            row = None
+        if row:
+            try:
+                raw = json.loads(row[0] or "")
+            except (TypeError, ValueError):
+                raw = None
+            if isinstance(raw, dict):
+                pol, missing = XP.normalize(raw, floor), False
+    cache[key] = (pol, missing)
+    return pol, missing
+
+
+def _iter_brain_trades(conn, mode, since):
+    sql = "SELECT %s FROM trade_paths" % ",".join(BRAIN_COLS)
+    where, args = [], []
+    if mode:
+        where.append("mode=?")
+        args.append(mode)
+    if since is not None:
+        where.append("entry_ts>=?")
+        args.append(int(since))
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY entry_ts, journal_id"
+    for r in conn.execute(sql, args).fetchall():
+        yield dict(zip(BRAIN_COLS, r))
+
+
+def _parts_sig(res):
+    """Подпись частей закрытия: [(why, frac)] — по ней видно, изменил ли `close_qty` долю политики."""
+    return [(str(p.get("why")), round(_num(p.get("frac"), 0.0), 8)) for p in (res.get("parts") or []) if isinstance(p, dict)]
+
+
+def _brain_row(rec, floor, costs, stop_moves, policy):
+    """Одна сделка: прогон с хронологией и без неё, доля `close_qty`, виды вмешательств. None — путь непригоден."""
+    tick = _num(rec.get("tick"))
+    entry_px = _num(rec.get("entry_px"))
+    entry_ts = _num(rec.get("entry_ts"))
+    stop0 = _num(rec.get("stop0"))
+    if tick is None or tick <= 0 or entry_px is None or entry_px <= 0 or entry_ts is None or stop0 is None:
+        return None
+    entry_ts = int(entry_ts)
+    rows = [r for r in LP.decode(rec.get("rows"), tick, entry_px) if int(r[0]) >= entry_ts]
+    if not rows:
+        return None
+    mh = _num(rec.get("max_hold_min"))
+    plan = {"side": rec.get("side"), "entry": {"kind": "market"}, "stop": stop0, "tps": [], "fracs": [],
+            "tick": tick, "max_hold_min": mh, "entry_px": entry_px}
+    ctx = {"max_hold_min": mh, "atr5_pct": _num(rec.get("atr5_pct")), "sig_type": rec.get("sig_type"),
+           "horizon": rec.get("horizon"), "entry_px": entry_px, "stop_moves": stop_moves}
+    lot = {"qty": _num(rec.get("qty")), "qty_step": _num(rec.get("qty_step")), "min_qty": _num(rec.get("min_qty"))}
+    timeline = _json_list(rec.get("timeline"))
+    with_tl = exitsim.replay_brain(plan, rows, policy, floor, costs, timeline, ctx, lot)
+    without_tl = exitsim.replay_brain(plan, rows, policy, floor, costs, None, ctx, lot)
+    if not (with_tl.get("filled") and without_tl.get("filled")):
+        return None
+    exact = exitsim.run(plan, rows, policy, floor, costs, order="S", timeline=timeline, ctx=ctx)
+    changed = bool(exact.get("filled") and _parts_sig(with_tl) != _parts_sig(exact))
+    kinds = _timeline_kinds(timeline)
+    return {"journal_id": rec.get("journal_id"), "mode": rec.get("mode"), "side": rec.get("side"), "entry_ts": entry_ts,
+            "exit_ver": rec.get("exit_ver"), "r_with": round(with_tl["r_net"], 4), "r_without": round(without_tl["r_net"], 4),
+            "brain_delta": round(with_tl["r_net"] - without_tl["r_net"], 4), "interventions": kinds,
+            "wake_codes": [], "close_qty_changed": changed}
+
+
+def _group_stats(rows, pred):
+    """Группа сделок: n, среднее brain_delta, t-интервал, вердикт (строится по округлённым строкам отчёта)."""
+    got = [r for r in rows if pred(r)]
+    vals = [float(r["brain_delta"]) for r in got if r.get("brain_delta") is not None]
+    m, lo, hi = mean_ci(vals)
+    return {"n": len(got), "mean_delta": m, "ci_lo": lo, "ci_hi": hi, "verdict": brain_verdict(len(got), lo, hi)}
+
+
+def _pm_usage(root, since=None):
+    """Расход роли `position_manager` из журнала вызовов (тот же источник, что `brief.economics`, но без импорта tb.brain)."""
+    try:
+        rows = LLM.read_rows(root, since=since)
+    except (OSError, ValueError, TypeError):
+        rows = []
+    calls = tokens = 0
+    usd = 0.0
+    for r in rows:
+        if r.get("kind") == "fmt" or r.get("role") != PM_ROLE:
+            continue
+        calls += 1
+        tokens += int(r.get("in") or 0) + int(r.get("out") or 0)
+        usd += float(r.get("usd") or 0.0)
+    return {"role": PM_ROLE, "calls": calls, "tokens": tokens, "usd": round(usd, 6), "source": "state/llm_calls.jsonl (brief.economics)"}
+
+
+def brain(conn, mode=None, since=None, now=None, root=None):
+    """Отчёт R4.3 (Requirement 12.1–12.5) по открытому соединению.
+
+    -> {"ts", "mode", "since", "n", "n_intervened", "share_intervened", "mean_delta", "ci_lo", "ci_hi", "verdict",
+    "by_type", "by_wake", "close_qty", "tokens", "policy_missing", "skipped", "rows", "notes"}.
+    """
+    now = int(time.time() if now is None else now)
+    cfg, cerrs = EC.load(root)
+    notes = []
+    if cerrs:
+        notes.append("конфиг выходов не прочитан (%s)" % ",".join(cerrs[:3]))
+    mode = _mode_of(cfg, mode)
+    if mode not in MODES:
+        notes.append("режим не задан и brain.mode конфига не прочитан: считаю paper")
+        mode = "paper"
+    try:
+        inp = EV.market_inputs(root)
+    except (ValueError, TypeError, KeyError, OSError) as e:
+        notes.append("входы симулятора не прочитаны: %s" % type(e).__name__)
+        inp = {"floor": XP.floor({}), "costs": {}, "stop_moves": {}}
+    floor, costs, stop_moves = inp["floor"], inp["costs"], inp["stop_moves"]
+    wakes = _wakes_by_plan(root, since)
+    cache, rows, skipped, policy_missing = {}, [], 0, 0
+    for rec in _iter_brain_trades(conn, mode, since):
+        flags = _flag_set(rec.get("flags"))
+        if LS.FLAG_GAP in flags or LS.FLAG_ADOPTED in flags:
+            skipped += 1
+            continue
+        try:
+            policy, missing = _policy_for(conn, rec.get("exit_ver"), floor, cache)
+            row = _brain_row(rec, floor, costs, stop_moves, policy)
+        except (ValueError, TypeError, KeyError, sqlite3.Error):
+            skipped += 1
+            continue
+        if row is None:
+            skipped += 1
+            continue
+        if missing:
+            policy_missing += 1
+        lo_ts = int(rec.get("entry_ts") or 0)
+        hi_ts = _num(rec.get("close_ts"), _num(rec.get("end_ts"), lo_ts)) + 60.0
+        codes = []
+        for ts, code in wakes.get(rec.get("plan_id") or "", []):
+            if lo_ts <= ts <= hi_ts and code not in codes:
+                codes.append(code)
+        row["wake_codes"] = codes
+        rows.append(row)
+    n = len(rows)
+    vals = [float(r["brain_delta"]) for r in rows]
+    m, lo, hi = mean_ci(vals)
+    intervened = sum(1 for r in rows if r.get("interventions"))
+    by_type = {}
+    for kind in INTERVENTION_TYPES:
+        if any(kind in r.get("interventions", []) for r in rows):
+            by_type[kind] = _group_stats(rows, lambda r, k=kind: k in r.get("interventions", []))
+    by_wake = {}
+    for code in sorted(set(c for r in rows for c in r.get("wake_codes", []))):
+        by_wake[code] = _group_stats(rows, lambda r, c=code: c in r.get("wake_codes", []))
+    changed = sum(1 for r in rows if r.get("close_qty_changed"))
+    tokens = _pm_usage(root, since)
+    tokens["usd_per_trade"] = round(tokens["usd"] / n, 6) if n else None
+    tokens["tokens_per_trade"] = int(round(tokens["tokens"] / float(n))) if n else None
+    if policy_missing:
+        notes.append("версия позиции не найдена в exit_versions у %d сделок: считался пол защиты" % policy_missing)
+    if n and not any(r.get("wake_codes") for r in rows):
+        notes.append("кодов пробуждения в журнале решений нет (wake-разрезы пусты)")
+    return {"ts": now, "mode": mode, "since": since, "n": n, "n_intervened": intervened,
+            "share_intervened": round(intervened / float(n), 4) if n else None,
+            "mean_delta": m, "ci_lo": lo, "ci_hi": hi, "verdict": brain_verdict(n, lo, hi),
+            "by_type": by_type, "by_wake": by_wake,
+            "close_qty": {"n": changed, "share": round(changed / float(n), 4) if n else None},
+            "tokens": tokens, "policy_missing": policy_missing, "skipped": skipped, "rows": rows, "notes": notes}
+
+
+def unavailable_brain(code, detail=None, now=None):
+    """Отчёт R4.3 при недоступной базе: пустые секции, `db` = код причины, `ok` = False."""
+    why = REASONS_RU.get(code, code) + ((": %s" % detail) if detail else "")
+    return {"ok": False, "db": code, "error": why, "ts": int(time.time() if now is None else now), "mode": None, "since": None,
+            "n": 0, "n_intervened": 0, "share_intervened": None, "mean_delta": None, "ci_lo": None, "ci_hi": None,
+            "verdict": VERDICT_LOW, "by_type": {}, "by_wake": {}, "close_qty": {"n": 0, "share": None},
+            "tokens": {"role": PM_ROLE, "calls": 0, "tokens": 0, "usd": 0.0, "usd_per_trade": None, "tokens_per_trade": None,
+                       "source": "state/llm_calls.jsonl (brief.economics)"},
+            "policy_missing": 0, "skipped": 0, "rows": [], "notes": [why]}
+
+
+def run_brain(root=None, mode=None, since=None, now=None):
+    """Отчёт R4.3 по базе root: соединение только для чтения на вызов (`labels.store.open_ro`)."""
+    try:
+        conn = LST.open_ro(root)
+    except LST.KnowledgeRestoring:
+        return unavailable_brain(RESTORING, now=now)
+    except sqlite3.Error as e:
+        return unavailable_brain(DB_ERROR, "%s: %s" % (type(e).__name__, e), now=now)
+    if conn is None:
+        return unavailable_brain(NO_DB, now=now)
+    try:
+        rep = brain(conn, mode=mode, since=since, now=now, root=root)
+        rep["ok"] = True
+        rep["db"] = "OK"
+        return rep
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------- R4.2: писатель полей после закрытия (Requirement 13.4)
+
+def _case_index(root):
+    """Закрытые случаи-сделки по `refs.journal_id` -> {journal_id: [случай]}."""
+    try:
+        cases = MC.load(root)
+    except (OSError, ValueError, TypeError, sqlite3.Error):
+        return {}
+    out = {}
+    for c in cases:
+        if not isinstance(c, dict) or c.get("type") != "trade":
+            continue
+        res = c.get("result") if isinstance(c.get("result"), dict) else {}
+        if res.get("status") != "closed":
+            continue
+        jid = (c.get("refs") or {}).get("journal_id") if isinstance(c.get("refs"), dict) else None
+        if isinstance(jid, str) and jid:
+            out.setdefault(jid, []).append(c)
+    return out
+
+
+def write_after(root=None, mode=None, since=None, now=None):
+    """Записать `result.after_mfe_r` / `result.after_t1` в закрытые случаи по готовым `trade_paths` (Requirement 13.4).
+
+    Идемпотентно: поля, уже совпадающие с расчётом, не пишутся, `update`-строка не добавляется; `rules_ver` и остальной
+    `src` не меняются (обновляется только блок `result`). Без готового пути случай не трогается. `mode=None` — все режимы.
+    -> {"ok", "db", "ts", "scanned", "updated", "unchanged", "no_case", "no_fields", "errors", "cases"}.
+    """
+    now = int(time.time() if now is None else now)
+    cfg, _errs = EC.load(root)
+    p = (cfg or {}).get("paths") if isinstance(cfg, dict) else None
+    post_close = _num((p or {}).get("post_close_min")) if isinstance(p, dict) else None
+    try:
+        conn = LST.open_ro(root)
+    except LST.KnowledgeRestoring:
+        return {"ok": False, "db": RESTORING, "error": REASONS_RU[RESTORING], "ts": now}
+    except sqlite3.Error as e:
+        return {"ok": False, "db": DB_ERROR, "error": "%s: %s" % (type(e).__name__, e), "ts": now}
+    if conn is None:
+        return {"ok": False, "db": NO_DB, "error": REASONS_RU[NO_DB], "ts": now}
+    try:
+        rows, _skipped = _trade_rows(conn, root, mode, since, post_close)
+    except sqlite3.Error as e:
+        return {"ok": False, "db": DB_ERROR, "error": "%s: %s" % (type(e).__name__, e), "ts": now}
+    finally:
+        conn.close()
+    index = _case_index(root)
+    out = {"ok": True, "db": "OK", "ts": now, "scanned": len(rows), "updated": 0, "unchanged": 0, "no_case": 0,
+           "no_fields": 0, "errors": 0, "cases": sum(len(v) for v in index.values())}
+    for row in rows:
+        fields = case_fields(row)
+        if not fields:
+            out["no_fields"] += 1
+            continue
+        matched = index.get(row.get("key"))
+        if not matched:
+            out["no_case"] += 1
+            continue
+        for c in matched:
+            cur = dict(c.get("result") or {})
+            need = dict((k, v) for k, v in fields.items() if _num(cur.get(k)) != v)
+            if not need:
+                out["unchanged"] += 1
+                continue
+            cur.update(need)
+            try:
+                MC.append_update(c["case_id"], {"result": cur}, root=root, ts=MC.iso(now))
+            except (MC.CaseError, OSError, ValueError, TypeError):
+                out["errors"] += 1
+                continue
+            out["updated"] += 1
+    return out
+
+
+def render_brain(rep):
+    """Текст отчёта R4.3 для человека."""
+    lines = ["мозг против алгоритма: режим %s, %s" % (rep.get("mode") or "—",
+                                                      "сделок с путём %d" % (rep.get("n") or 0))]
+    ci = "—" if rep.get("ci_lo") is None else "95%%: %+.3f…%+.3fR" % (rep["ci_lo"], rep["ci_hi"])
+    mean = "—" if rep.get("mean_delta") is None else "%+.3fR" % rep["mean_delta"]
+    share = "—" if rep.get("share_intervened") is None else "%.1f%%" % (rep["share_intervened"] * 100.0)
+    lines.append("  вмешательства: %d (%s); среднее brain_delta %s, %s; вердикт: %s"
+                 % (rep.get("n_intervened") or 0, share, mean, ci, rep.get("verdict")))
+    for kind in INTERVENTION_TYPES:
+        d = (rep.get("by_type") or {}).get(kind)
+        if d:
+            lines.append("  %-13s n=%-4d %+.3fR [%s], %s" % (kind, d["n"], d["mean_delta"],
+                                                             "—" if d["ci_lo"] is None else "%+.3f…%+.3f" % (d["ci_lo"], d["ci_hi"]),
+                                                             d["verdict"]))
+    for code, d in sorted((rep.get("by_wake") or {}).items()):
+        lines.append("  wake %-10s n=%-4d %+.3fR [%s], %s" % (code, d["n"], d["mean_delta"],
+                                                               "—" if d["ci_lo"] is None else "%+.3f…%+.3f" % (d["ci_lo"], d["ci_hi"]),
+                                                               d["verdict"]))
+    cq = rep.get("close_qty") or {}
+    lines.append("  close_qty изменил долю: %d (%s)" % (cq.get("n") or 0,
+                                                        "—" if cq.get("share") is None else "%.1f%%" % (cq["share"] * 100.0)))
+    tk = rep.get("tokens") or {}
+    lines.append("  position_manager: вызовов %d, токенов %d, $%.4f; на сделку %s токенов / $%s"
+                 % (tk.get("calls") or 0, tk.get("tokens") or 0, tk.get("usd") or 0.0, tk.get("tokens_per_trade"),
+                    "—" if tk.get("usd_per_trade") is None else "%.4f" % tk["usd_per_trade"]))
+    for n in rep.get("notes") or []:
+        lines.append("примечание: " + n)
+    return lines
 
 
 def unavailable(code, detail=None, now=None):

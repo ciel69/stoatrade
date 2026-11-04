@@ -11,6 +11,8 @@
    brain/gateway/mcp/venues/executor/control/launcher/secretfile и tb.llm кроме usage (прямо и транзитивно), не знают каталога ключей;
    tb.learnloop не импортирует CLI вне пакета и localcfg; запись в config/ из tb.learnloop невозможна (ConfigWrites: функции, которые
    строят путь в config/ и пишут файл); config/learnloop.json (promotion.mode) пишет только tb.knowledge.learn_cli.set_mode.
+7. R4 (задача 14, свойство 19, Requirement 18.3): tb.core.exitdoc не импортирует tb.learnloop, tb.knowledge, tb.labels, tb.venues,
+   tb.executor (прямо и транзитивно по внутренним импортам tb) и ничего не пишет — только читает файлы runtime/ и config/exits.json.
 """
 import ast
 import os
@@ -905,6 +907,23 @@ class TestLayers(unittest.TestCase):
         self.assertEqual(only.writers("tb.x.g", head + bad["g"]), [])                       # risk_profile — не learnloop.json
         self.assertEqual(only.writers("tb.x.c", "from tb import paths\nfrom tb.learnloop import conf as LC\nimport os\n"
                                       "def c(r):\n    os.replace('t', paths.config(LC.FILE, root=r))\n"), ["c"])   # имя файла через константу модуля
+
+    # ---------------------------------------------------------------- R4: читатель политики выхода (задача 14, свойство 19)
+    def test_exitdoc_layers(self):
+        """Requirement 18.3: tb.core.exitdoc не импортирует tb.learnloop, tb.knowledge, tb.labels, tb.venues, tb.executor — прямо и
+        транзитивно по внутренним импортам tb; модуль только читает (ни одного вызова записи файла)."""
+        mod = "tb.core.exitdoc"
+        banned = ("tb.learnloop", "tb.knowledge", "tb.labels", "tb.venues", "tb.executor")
+
+        def hit(src, m):
+            return [n for n in imports_of(src, m) if under(n, banned)]
+
+        src = read(os.path.join(SRC, "core", "exitdoc.py"))
+        self.assertFalse(hit(src, mod))
+        self.assertEqual(closure_hits([mod], hit, disk_source), {})
+        self.assertEqual(learn_write_violations(src), [])
+        mods = {"tb.core.exitdoc": "import tb.knowledge"}
+        self.assertEqual(closure_hits(["tb.core.exitdoc"], hit, mods.get), {"tb.core.exitdoc": ["tb.knowledge"]})
 
     def test_layer_dirs_exist(self):
         for layer in ("brain", "logic", "core", "dash", "executor", "venues", "gateway", "mcp", "llm", "control", "labels", "learn", "knowledge", "learnloop"):

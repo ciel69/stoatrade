@@ -131,7 +131,7 @@ class TestCacheSpeed(TmpRoot):
         t = time.perf_counter()
         cases.append_new(mk(900, sym="NEW"), root=self.root)          # одна запись: дочитывается только хвост
         cases.load(self.root)
-        self.assertLessEqual(time.perf_counter() - t, 0.15)
+        self.assertLessEqual(time.perf_counter() - t, 0.15 * float(os.environ.get("TB_PERF_FACTOR") or 1.0))
         self.assertEqual(len(cases.load(self.root)), 20001)
 
 
