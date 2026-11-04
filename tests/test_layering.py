@@ -11,8 +11,14 @@
    brain/gateway/mcp/venues/executor/control/launcher/secretfile и tb.llm кроме usage (прямо и транзитивно), не знают каталога ключей;
    tb.learnloop не импортирует CLI вне пакета и localcfg; запись в config/ из tb.learnloop невозможна (ConfigWrites: функции, которые
    строят путь в config/ и пишут файл); config/learnloop.json (promotion.mode) пишет только tb.knowledge.learn_cli.set_mode.
+7. R1.7 (задача 24, свойство 17, Requirements 3.1–3.3): tb.cmkt не импортирует торговлю, исполнителя, шлюз, мозг, llm, управление,
+   launcher, MCP, файлы ключей, метки, цикл обучения, знания и intel (прямо и транзитивно), не содержит hmac, строк ключей, каталога
+   ключей и чтения config/local/; tb.logic.cmkt чист; tb.core.cmktdoc не импортирует tb.cmkt и открывает ряды только на чтение;
+   шлюз, мозг, метки, цикл обучения, исполнитель и дашборд читают сводный рынок только через tb.core.cmktdoc; в tb.gateway нет
+   названий бирж (список берётся из config/cmkt.json и tb.logic.cmkt.MARKETS).
 """
 import ast
+import json
 import os
 import re
 import unittest
@@ -373,6 +379,89 @@ def read(path):
         return f.read()
 
 
+# ---------------------------------------------------------------- R1.7: сводный рынок (задача 24; свойство 17; Requirements 3.1–3.3)
+ROOT = os.path.dirname(os.path.dirname(SRC))
+CMKT = "tb.cmkt"
+CMKT_FORBIDDEN = ("tb.venues", "tb.executor", "tb.gateway", "tb.brain", "tb.llm", "tb.control", "tb.launcher", "tb.mcp",
+                  "tb.core.secretfile", "tb.labels", "tb.learnloop", "tb.knowledge", "tb.intel")
+CMKT_SECRET_LITERALS = ("SECRET", "passphrase", "PASSPHRASE")       # к KEY_LITERALS: .config, traider-bot, API_SECRET, API_KEY, BYBIT_
+CMKT_CONSUMERS = ("brain", "gateway", "labels", "learnloop", "executor", "dash")
+# модули вне списка потребителей, которым импорт tb.cmkt разрешён: они не читают данные рынка
+CMKT_REACH_OK = (
+    "tb.platform.services",     # реестр сервисов: имена `cmkt@<venue><p|s>`, команды запуска, чистка окружения (design.md, Architecture)
+    "tb.intel.service",         # сервис intel: не запускает XStream при `compat_xflow` (design.md, «Изменения потребителей»)
+)
+
+
+def cmkt_import_violations(source, module="tb.cmkt.x"):
+    """Запрещённые импорты tb.cmkt (Requirement 3.2; для замыкания — то же): торговые слои, исполнитель, шлюз, мозг, llm, управление,
+    launcher, MCP, файлы ключей, метки, цикл обучения, знания, intel."""
+    return sorted(n for n in imports_of(source, module) if under(n, CMKT_FORBIDDEN))
+
+
+def _is_local_config(x):
+    """Литерал, читающий config/local/: каталог `local` в config/ (`paths.config("local", ...)`) или `localcfg` (писатель local)."""
+    low = x.strip().lower()
+    return "localcfg" in low or "config/local" in low or "config\\local" in low or low == "local"
+
+
+def cmkt_secret_violations(source, module="tb.cmkt.x"):
+    """Requirement 3.1: в tb.cmkt нет подписи (hmac), строк ключей и каталога ключей (~/.config/traider-bot), чтения config/local/."""
+    out = ["import:" + n for n in imports_of(source, module)
+           if n == "hmac" or n.startswith("hmac.") or under(n, ("tb.core.localcfg",))]
+    for n in ast.walk(ast.parse(source)):
+        if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name) and n.value.id in ("hmac", "localcfg"):
+            out.append("call:%s.%s" % (n.value.id, n.attr))
+    out += ["lit:" + x[:40] for x in key_literals(source)]
+    out += ["lit:" + x[:40] for x in code_literals(source)
+            if any(k in x for k in CMKT_SECRET_LITERALS) or _is_local_config(x)]
+    return sorted(set(out))
+
+
+def cmkt_reach_violations(roots, allowed=CMKT_REACH_OK, load_source=None):
+    """Модули вне tb.cmkt, достижимые от roots по внутренним импортам tb и импортирующие tb.cmkt (прямо или через посредника):
+    модуль -> импорты. tb.cmkt — терминал (его собственные запреты проверяет test_cmkt_layer_is_isolated), allowed — модули-исключения,
+    которые в tb.cmkt не спускаются."""
+    load = load_source or disk_source
+    seen, stack, bad = set(), list(roots), {}
+    while stack:
+        m = stack.pop()
+        if m in seen or under(m, (CMKT,)) or under(m, allowed):
+            continue
+        seen.add(m)
+        src = load(m)
+        if src is None:
+            continue
+        imps = imports_of(src, m)
+        hit = [n for n in imps if under(n, (CMKT,))]
+        if hit:
+            bad[m] = hit
+        stack.extend(n for n in imps if n.startswith("tb.") and n not in seen)
+    return bad
+
+
+def cmkt_venue_names():
+    """Названия бирж для проверки шлюза: ключи `venues` из config/cmkt.json и префиксы `MARKETS` из tb.logic.cmkt (в тесте не копируются)."""
+    names = set()
+    try:
+        with open(os.path.join(ROOT, "config", "cmkt.json"), encoding="utf-8") as f:
+            names.update(str(k).lower() for k in (json.load(f).get("venues") or {}))
+    except (OSError, ValueError):
+        pass
+    try:
+        from tb.logic import cmkt as L
+        names.update(str(m).split("_", 1)[0].lower() for m in L.MARKETS)
+    except (ImportError, AttributeError):
+        pass
+    return sorted(n for n in names if n)
+
+
+def venue_literals(source, venues):
+    """Строковые литералы с названием биржи отдельным словом: `gateway` и `gateway_audit.jsonl` биржей `gate` не считаются."""
+    pat = re.compile(r"(?<![a-z0-9])(%s)(?![a-z0-9])" % "|".join(re.escape(v) for v in venues), re.I)
+    return sorted(set(x for x in string_literals(source) if pat.search(x)))
+
+
 class TestHelpers(unittest.TestCase):
     """Сам проверяльщик ловит нарушения (иначе тест слоёв ничего не доказывает)."""
 
@@ -394,6 +483,37 @@ class TestHelpers(unittest.TestCase):
         self.assertTrue(logic_violations("import time\nt = time.time()"))
         self.assertTrue(logic_violations("import time\ntime.sleep(1)"))
         self.assertEqual(logic_violations("import math\nfrom collections import namedtuple\nx = math.floor(1.5)"), [])
+
+    def test_cmkt_checkers_catch_violations(self):
+        for src in ("import tb.venues.bybit", "from tb.executor import ports", "from tb.gateway import catalog", "from tb.brain import brief",
+                    "from tb.llm.keys import x", "from tb.control import client", "from tb import launcher", "import tb.mcp.server",
+                    "from tb.core import secretfile", "from tb.labels import store", "from tb.learnloop import cycle",
+                    "from tb.knowledge import rulebook_view", "from tb.intel import items", "from ..venues import bybit",
+                    "def f():\n    from tb.intel.xex import x"):
+            self.assertTrue(cmkt_import_violations(src, "tb.cmkt.x"), src)
+        self.assertFalse(cmkt_import_violations("from tb.logic import cmkt\nfrom tb.core import filelock\nfrom tb.marketdata import wsclient\n"
+                                                "import tb.fsutil\nfrom . import conf", "tb.cmkt.x"))
+        for src in ("import hmac", "import hmac as H", "import hmac\nhmac.new(b'k', b'm', 'sha256')", "k = 'BYBIT_API_SECRET'",
+                    "p = os.path.join(h, '.config', 'traider-bot')", "n = env['BINANCE_API_KEY']", "x = 'passphrase'",
+                    "from tb import paths\np = paths.config('local', 'exec_limits.json')", "from tb.core import localcfg",
+                    "from tb.core import localcfg as LC\nLC.update_local('x', f)"):
+            self.assertTrue(cmkt_secret_violations(src), src)
+        for src in ("from tb import paths\np = paths.config('cmkt.json')\nX = 'state/cmkt'", "import json\nimport os\nX = 'локальный'",
+                    "from tb.core import filelock"):
+            self.assertEqual(cmkt_secret_violations(src), [], src)
+        # транзитивная достижимость tb.cmkt от потребителей (реестр сервисов и intel — исключения)
+        mods = {"tb.brain.a": "from tb.core import cmktdoc", "tb.core.cmktdoc": "from tb.logic import cmkt\nimport tb.paths",
+                "tb.logic.cmkt": "x = 1", "tb.paths": "y = 1",
+                "tb.brain.c": "from tb.mid import f", "tb.mid": "def g():\n    import tb.cmkt.conf", "tb.cmkt": "", "tb.cmkt.conf": "z = 1",
+                "tb.brain.d": "from tb.platform import services", "tb.platform.services": "from tb.cmkt import conf",
+                "tb.brain.e": "from tb.intel import service", "tb.intel.service": "from tb.cmkt import conf"}
+        self.assertEqual(cmkt_reach_violations(["tb.brain.a"], load_source=mods.get), {})
+        self.assertEqual(cmkt_reach_violations(["tb.brain.c"], load_source=mods.get), {"tb.mid": ["tb.cmkt.conf"]})
+        self.assertEqual(cmkt_reach_violations(["tb.brain.d", "tb.brain.e"], load_source=mods.get), {})
+        # названия бирж: только отдельным словом
+        self.assertTrue(venue_literals("x = 'сводка по Bybit'", ("bybit", "gate")))
+        self.assertTrue(venue_literals("x = 'BYBIT_'", ("bybit", "gate")))
+        self.assertEqual(venue_literals("p = 'state/gateway_audit.jsonl'\nx = 'tb.gateway'\ny = 'gateway_actor'", ("bybit", "gate")), [])
 
 
 class TestLayers(unittest.TestCase):
@@ -904,8 +1024,84 @@ class TestLayers(unittest.TestCase):
         self.assertEqual(only.writers("tb.x.c", "from tb import paths\nfrom tb.learnloop import conf as LC\nimport os\n"
                                       "def c(r):\n    os.replace('t', paths.config(LC.FILE, root=r))\n"), ["c"])   # имя файла через константу модуля
 
+    # ---------------------------------------------------------------- R1.7: сводный рынок (задача 24; свойство 17)
+    def test_cmkt_layer_is_isolated(self):
+        """Requirement 3.2: tb.cmkt не импортирует торговые слои, исполнителя, шлюз, мозг, llm, управление, launcher, MCP, файлы ключей,
+        метки, цикл обучения, знания и intel — ни прямо, ни транзитивно."""
+        mods = [module_name(p) for p in py_files("cmkt")]
+        self.assertIn("tb.cmkt.aggregate", mods)
+        self.assertIn("tb.cmkt.ex.binance", mods)
+        bad = {}
+        for mod in mods:
+            found = cmkt_import_violations(disk_source(mod), mod)
+            if found:
+                bad[mod] = found
+        self.assertEqual(bad, {})
+        self.assertEqual(closure_hits(mods, cmkt_import_violations, disk_source), {})
+
+    def test_cmkt_has_no_keys_and_no_local_config(self):
+        """Requirement 3.1: в tb.cmkt нет hmac, строк ключей и каталога ключей, чтения config/local/."""
+        bad = {}
+        for path in py_files("cmkt"):
+            mod = module_name(path)
+            issues = cmkt_secret_violations(read(path), mod)
+            if issues:
+                bad[mod] = issues
+        self.assertEqual(bad, {})
+
+    def test_cmkt_services_are_scrubbed(self):
+        """Requirement 3.1: окружение процессов cmkt и сборщиков cmkt@* чистится как у labels."""
+        from tb.platform import services
+        self.assertIn("cmkt", services.SCRUBBED_SERVICES)
+        self.assertTrue(services.scrubbed("cmkt"))
+        self.assertTrue(services.scrubbed("cmkt@binancep"))
+        self.assertTrue(services.scrubbed("cmkt@coinbases"))
+
+    def test_logic_cmkt_is_pure(self):
+        """Requirement 3.2: tb.logic.cmkt чист (без os, сети, часов, open) и из tb импортирует только tb.logic.* транзитивно."""
+        self.assertTrue(os.path.isfile(os.path.join(SRC, "logic", "cmkt.py")))
+
+        def hit(src, m):
+            return logic_violations(src) + [("tb", i) for i in imports_of(src, m) if i.startswith("tb.") and not under(i, ("tb.logic",))]
+        self.assertEqual(closure_hits(["tb.logic.cmkt"], hit, disk_source), {})
+
+    def test_cmktdoc_does_not_import_cmkt(self):
+        """Requirement 3.3: tb.core.cmktdoc не импортирует tb.cmkt ни прямо, ни транзитивно через tb.*; ряды открываются только на чтение."""
+        mod = "tb.core.cmktdoc"
+        src = read(os.path.join(SRC, "core", "cmktdoc.py"))
+        self.assertFalse([n for n in imports_of(src, mod) if under(n, (CMKT,))])
+        self.assertEqual(closure_hits([mod], lambda s, m: [n for n in imports_of(s, m) if under(n, (CMKT,))], disk_source), {})
+        self.assertIn("mode=ro", src)
+        self.assertIn("uri=True", src)
+
+    def test_cmkt_consumers_read_only_through_cmktdoc(self):
+        """Requirement 3.3: шлюз, мозг, метки, цикл обучения, исполнитель и дашборд не импортируют tb.cmkt (прямо и транзитивно):
+        сводный рынок приходит только через tb.core.cmktdoc или файлы runtime/. Исключения CMKT_REACH_OK — реестр сервисов (имена
+        cmkt@*) и сервис intel (выключение XStream): данных рынка в них нет."""
+        mods = []
+        for layer in CMKT_CONSUMERS:
+            mods.extend(module_name(p) for p in py_files(layer))
+        self.assertIn("tb.brain.cands", mods)
+        self.assertIn("tb.gateway.catalog", mods)
+        self.assertEqual(cmkt_reach_violations(mods), {})
+        for mod in ("tb.brain.cands", "tb.brain.brief", "tb.gateway.catalog", "tb.labels.capture"):
+            self.assertIn("tb.core.cmktdoc", imports_of(disk_source(mod), mod), mod)   # путь чтения — читатель, не сервис
+
+    def test_gateway_has_no_venue_names(self):
+        """Requirement 3.3: в tb.gateway нет строковых названий бирж (они приходят данными из cmktdoc). Список названий — из
+        config/cmkt.json и MARKETS tb.logic.cmkt; исключений нет, `gateway`/`gateway_audit` названием биржи `gate` не считаются."""
+        venues = cmkt_venue_names()
+        self.assertGreaterEqual(len(venues), 6)
+        bad = {}
+        for path in py_files("gateway"):
+            found = venue_literals(read(path), venues)
+            if found:
+                bad[module_name(path)] = found
+        self.assertEqual(bad, {})
+
     def test_layer_dirs_exist(self):
-        for layer in ("brain", "logic", "core", "dash", "executor", "venues", "gateway", "mcp", "llm", "control", "labels", "learn", "knowledge", "learnloop"):
+        for layer in ("brain", "logic", "core", "dash", "executor", "venues", "gateway", "mcp", "llm", "control", "labels", "learn",
+                      "knowledge", "learnloop", "cmkt"):
             self.assertTrue(os.path.isfile(os.path.join(SRC, layer, "__init__.py")), layer)
 
 
