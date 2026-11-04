@@ -124,25 +124,31 @@ class TestRuleFeatureBudget(unittest.TestCase):
     def test_new_scanner_fields_whitelisted(self):
         c = bus.sanitize({"type": "scanner_signal", "sym": "SOL", "d": {"kind": "range_5m", "chg_24h_pct": -3.25, "turn_24h_musd": 812.4}})
         self.assertEqual(c["d"], {"kind": "range_5m", "chg_24h_pct": -3.25, "turn_24h_musd": 812.4})
-        self.assertEqual(set(bus.D_PROTECTED["scanner_signal"]), {"kind", "dir"} | set(RULE_FEATURES))
+        self.assertEqual(set(bus.D_PROTECTED["scanner_signal"]), {"kind", "dir", "t0"} | set(RULE_FEATURES))      # t0: R1.7 Requirement 23
         for k in bus.D_PROTECTED["scanner_signal"]:
             self.assertIn(k, bus.D_FIELDS["scanner_signal"])
 
     def test_worst_event_keeps_protected_fields(self):
         # реалистичное худшее (8 значащих цифр, знак) и враждебное (самое длинное представление числа после _num: 16 знаков)
+        # t0 (R1.7 Req 23): реальное (10 цифр эпохи) и враждебное (то же num) значение; длиннейший kind idea_invalidated
         for num in (-1234.5678, -0.0012345678, -1.2345678e-05, -123456780000000.0):
-            for kind in ("oi_spike", "liq_cascade"):
-                c = bus.sanitize(_worst_scanner(kind, num))
-                self.assertLessEqual(len(bus._probe(c)), bus.MAX_EVENT_BYTES, (kind, num))
-                self.assertEqual(c["sym"], SYM20)
-                self.assertEqual((c["d"]["kind"], c["d"]["dir"]), (kind, "short"))
-                for k in RULE_FEATURES:
-                    self.assertIn(k, c["d"], (kind, num, k))
+            for kind in ("oi_spike", "liq_cascade", "idea_invalidated"):
+                for t0 in (None, 4102444800):
+                    ev = _worst_scanner(kind, num)
+                    if t0 is not None:
+                        ev["d"]["t0"] = t0
+                    c = bus.sanitize(ev)
+                    self.assertLessEqual(len(bus._probe(c)), bus.MAX_EVENT_BYTES, (kind, num, t0))
+                    self.assertEqual(c["sym"], SYM20)
+                    self.assertEqual((c["d"]["kind"], c["d"]["dir"]), (kind, "short"))
+                    for k in bus.D_PROTECTED["scanner_signal"]:
+                        self.assertIn(k, c["d"], (kind, num, t0, k))
+                    self.assertEqual(c["d"]["t0"], num if t0 is None else t0)
 
     def test_eviction_order_unprotected_first_by_length(self):
-        # защищённые с самыми длинными значениями (16 знаков) + два незащищённых: всё вместе 402 байта > 400
+        # защищённые с самыми длинными значениями (16 знаков), t0 + два незащищённых: всё вместе больше 400 байт
         d = {k: -123456780000000 for k in RULE_FEATURES}
-        d.update(kind="liq_cascade", dir="short", px=1.5, liq_usd=-1234567.8)
+        d.update(kind="liq_cascade", dir="short", px=1.5, liq_usd=-1234567.8, t0=1793181300)
         c = bus.sanitize({"type": "scanner_signal", "sym": SYM20, "d": d})
         # прежний порядок выбросил бы защищённое поле (его значение длиннее); теперь уходит только длинное незащищённое liq_usd, px остаётся
         self.assertEqual(set(c["d"]), set(bus.D_PROTECTED["scanner_signal"]) | {"px"})

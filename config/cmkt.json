@@ -1,0 +1,32 @@
+{
+  "schema": "tb.cmkt_cfg/1",
+  "enabled": true,
+  "compat_xflow": false,
+  "focus": {"core": ["BTC", "ETH", "SOL"], "top_n": 30, "deep_top_n": 10, "max_deep": 20, "max_light": 120, "keep_signal_min": 180,
+            "struct_req_ttl_min": 30, "hold_s": 600, "warm_s": 300},
+  "venues": {
+    "binance": {"enabled": true, "markets": ["perp", "spot"], "hosts": ["fstream.binance.com", "ws-fapi.binance.com", "fapi.binance.com", "www.binance.com",
+                                                                     "data-stream.binance.vision", "data-api.binance.vision", "stream.binance.com", "api.binance.com"]},
+    "bybit": {"enabled": true, "markets": ["perp", "spot"], "hosts": ["stream.bybit.com", "api.bybit.com", "api.bybitglobal.com"]},
+    "okx": {"enabled": true, "markets": ["perp", "spot"], "hosts": ["ws.okx.com", "www.okx.com"]},
+    "bitget": {"enabled": true, "markets": ["perp", "spot"], "hosts": ["ws.bitget.com", "api.bitget.com"]},
+    "gate": {"enabled": true, "markets": ["perp", "spot"], "hosts": ["fx-ws.gateio.ws", "api.gateio.ws"]},
+    "coinbase": {"enabled": true, "markets": ["spot"], "hosts": ["ws-feed.exchange.coinbase.com", "api.exchange.coinbase.com"]}
+  },
+  "sync": {"tick_s": 1, "lag_max_ms": 1000, "lag_max_ms_venue": {}, "silent_s": 15, "file_stale_s": 1, "accept_s": 3, "ping_s": 10,
+           "clock_warn_ms": 500, "time_sync_s": 600, "lead_rtt_max_ms": 100, "lead_offset_max_age_s": 900, "snap_every_s": 2},
+  "book": {"bucket_bps": 25, "max_bps": 200, "bands_pct": [0.25, 0.5, 1, 2], "imb_band_first_wave": 0.25, "wall_min_market_usd": 100000,
+           "wall_mult": 6, "wall_min_usd": 400000, "wall_group_bps": 5, "wall_persist_s": 30, "touch_bps": 5, "pull_drop_share": 0.7,
+           "pull_window_s": 5, "resync_min_s": 10},
+  "cov": {"min_cov": 0.6, "min_n_ex": 2, "liq_min_cov": 0.5, "mismatch_pct": 2.0},
+  "limits": {"subs_per_conn": {"default": 200, "bitget": 50, "okx": 150, "gate": 100, "coinbase": 100}, "sub_msgs_per_s": 5, "conn_per_s": 1,
+             "backoff_s": 1, "backoff_max_s": 60,
+             "rest_weight_per_min": {"binance_perp": 400, "binance_spot": 1100, "bybit": 100, "okx": 60, "bitget": 60, "gate": 30, "coinbase": 30},
+             "oi_reserve_per_min": {"binance_perp": 240},
+             "oi_poll_s": {"deep": 10, "light": 60}},
+  "budget": {"cpu_avg_cores": 1.5, "cpu_p99_cores": 4.0, "rss_mb": 1500, "proc_p99_ms": 300, "net_mbit": 80, "disk_write_gb_day": 30,
+             "over_min": 10, "shrink_step": 20, "light_min": 40},
+  "store": {"dir": "state/cmkt", "keep_days": 30, "deep_every_s": 1, "light_every_s": 5, "disk_min_gb": 40},
+  "brief": {"mode": "compact", "max_tokens": 90, "syms": 1, "experiment": false},
+  "tool": {"max_bytes": 2048, "per_hour": 30}
+}
