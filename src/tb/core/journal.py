@@ -266,6 +266,9 @@ def cmd_close(a):
     rec = {"ev": "close", "id": a.id, "ts_close": _now(), "exit": a.exit, "reason": a.reason,
            "pnl_usdt": round(pnl, 4), "fees_usdt": round(fees, 4), "funding_usdt": a.funding or 0.0,
            "r": round(r, 2) if r is not None else None, "note": a.note}
+    exit_rule = getattr(a, "exit_rule", None)       # R4: компонент политики, закрывший позицию (Requirement 9.8)
+    if exit_rule:
+        rec["exit_rule"] = exit_rule
     path = getattr(a, "path", None)
     if path is None:                   # путь цены от сканера (runtime/trade_paths.json); нет данных -> поля нет
         path = tradepath.finalize(t, a.exit, tradepath.parse_ts(rec["ts_close"]), paths.runtime(tradepath.STATE_NAME))

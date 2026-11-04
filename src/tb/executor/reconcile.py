@@ -10,6 +10,15 @@ from tb.executor import gate as G
 from tb.executor.ports import PortError
 
 IN_POS = ("entered", "managing")
+XP_PREFIX = "tbx-xp-"       # заявка политики выхода: tbx-xp-<план>-<правило> (Requirement 9.9, 10.2)
+
+
+def _xp_plan_n(link):
+    """Номер плана из ссылки заявки политики `tbx-xp-<план>-...` или None."""
+    if not isinstance(link, str) or not link.startswith(XP_PREFIX):
+        return None
+    head = link[len(XP_PREFIX):].split("-", 1)[0]
+    return int(head) if head.isdigit() else None
 
 
 def _alert(ex, kind, sym, key=None, why=None):
@@ -205,6 +214,18 @@ def _orphans(ex, orders, diffs, now):
         if o.get("status") not in ("New", "PartiallyFilled", None) or lk in mine:
             continue
         if linkid.is_ours(lk):
+            xp_n = _xp_plan_n(lk)
+            if xp_n is not None:                       # заявка политики: не «лишняя», пока её позиция открыта; иначе снимается (Requirement 9.9)
+                plan = ex.plan_by_n(xp_n)
+                if plan is not None and plan["rt"]["status"] in IN_POS:
+                    continue
+                if not ex.observe:
+                    try:
+                        ex.act.call("cancel_order", G.RISK_DOWN, o["sym"], lk)
+                        ex.decide("reconcile", "cancel_orphan_order", why="RECON:orphan_tbx_xp_order")
+                    except Exception:
+                        pass
+                continue
             pn = linkid.parse(lk)
             plan = ex.plan_by_n(pn[0]) if pn else None
             if (plan is None or plan["rt"]["status"] not in ("armed",) + IN_POS) and not ex.observe:

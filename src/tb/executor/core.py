@@ -18,12 +18,12 @@ import os
 import time
 
 from tb import paths
-from tb.core import bus, decisions, exec_cfg, ideas, journal, linkid, plan_schema, portfolio, session, tradepath
+from tb.core import bus, decisions, exec_cfg, exitdoc, ideas, journal, linkid, plan_schema, portfolio, session, tradepath
 from tb.core.plan_store import PlanStore
 from tb.executor import actions as A
 from tb.executor import commands, gate as G, mdsvc, protect, reconcile
 from tb.executor.ports import KIND_UNKNOWN, PortError
-from tb.logic import rules, watch
+from tb.logic import exitpol, rules, watch
 from tb.logic.candles import CandleBook, MarketView, tf_min
 from tb.logic.qty import close_qty  # noqa: F401  (R4: округление долей единое с симулятором выходов; core.close_qty остаётся именем модуля)
 
@@ -37,6 +37,10 @@ EVAL_MIN_GAP_S = 0.1
 ENTRY_POLL_S = 0.5
 LIMIT_POLL_S = 2.0
 WHY_BUS = {"GUARD": "GUARD", "CHASE": "CHASE", "COOLDOWN": "COOLDOWN", "STALE": "STALE", "SPREAD": "SPREAD", "MIN_SIZE": "MIN_SIZE"}
+# R4 (Requirement 9.8): правило политики -> компонент словаря `tb.exit_policy/1` (поле случая `exit_rule`).
+XP_COMPONENTS = {"auto_be": "be", "auto_lock": "lock", "xp_lock": "lock", "xp_near": "near_tp", "xp_trail": "trail_atr",
+                 "xp_stall": "stall", "xp_decay": "decay", "xp_timeout": "timeout"}
+EXIT_FALLBACK = "EXIT_POLICY_FALLBACK"
 
 
 def _load_json(path):
@@ -112,6 +116,8 @@ class Executor(object):
         self.started = clock()
         self.acct = None
         self._state_dirty = False
+        self.exit_fallback = {}          # pid -> причина отката к полу (R4, EXIT_POLICY_FALLBACK); пусто = политика читается
+        self.exit_status = None
         self._load_state()
         self.stopped = False
         self.gate = G.Gate(self)
@@ -216,8 +222,98 @@ class Executor(object):
         t = self.px.get(sym) or {}
         return MarketView(sym, t.get("last"), t.get("bid"), t.get("ask"), t.get("mark"), t.get("ts"), self.books.get(sym), self.clock())
 
+    def _exit_floor(self, lim=None):
+        ap = (lim if isinstance(lim, dict) else (self.cfg or {})).get("auto_protect")
+        try:
+            return exitpol.floor(ap)
+        except Exception:
+            return {"schema": exitpol.SCHEMA}
+
+    @staticmethod
+    def _xp_component(rule):
+        """`xp_partial_0` -> `partial`, `xp_near` -> `near_tp`; прочие xp_* и auto_* — по карте компонентов."""
+        if isinstance(rule, str) and rule.startswith("xp_partial_"):
+            return "partial"
+        return XP_COMPONENTS.get(rule) or (rule[3:] if isinstance(rule, str) and rule.startswith("xp_") else None)
+
+    def _action_why(self, a, why):
+        rid = a.get("rule")
+        if isinstance(rid, str) and rid.startswith("xp_"):
+            comp = self._xp_component(rid)
+            if comp:
+                return "XP:%s" % comp
+        return why
+
+    def _exit_case_rule(self, p):
+        """Компонент политики, закрывший позицию (поле случая `exit_rule`, Requirement 9.8); None для стопа/тейка/мозга."""
+        close = p["rt"].get("close") or {}
+        if close.get("reason") != "rule":
+            return None
+        return self._xp_component(close.get("rule"))
+
+    @staticmethod
+    def _exit_status_from(fallback):
+        if not fallback:
+            return None
+        pid = sorted(fallback)[0]
+        why = fallback[pid]
+        return {"code": "%s:%s" % (EXIT_FALLBACK, why), "why": why, "plan": pid}
+
+    def _note_exit(self, p, why):
+        """Статус применения политики выхода (Requirement 8.6): причина отката к полу или снятие статуса при `OK`."""
+        pid = p["spec"]["id"]
+        why = why if isinstance(why, str) and why else "SNAPSHOT"
+        if why == "OK":
+            if self.exit_fallback.pop(pid, None) is not None:
+                self.exit_status = self._exit_status_from(self.exit_fallback)
+            return
+        if self.exit_fallback.get(pid) == why:
+            return
+        self.exit_fallback[pid] = why
+        self.exit_status = self._exit_status_from(self.exit_fallback)
+        self.exit_status["ts"] = round(self.clock(), 3)
+        try:
+            self.decide("event", "exit_policy_fallback", plan=pid, why="%s:%s" % (EXIT_FALLBACK, why), res={"ok": False, "code": why})
+        except Exception:
+            pass
+
+    def _exit_doc(self, p, avg):
+        """`rt.pos.exit` на вход: версия и политика позиции, ATR 5м на входе и `max_hold_min` плана (Requirement 9.3).
+        Политику отдаёт только `exitdoc.current`; при любой его ошибке — пол защиты (`EXIT_POLICY_FALLBACK:<причина>`, Requirement 8.6)."""
+        spec = p["spec"]
+        floor = self._exit_floor()
+        info = {"ver": exitdoc.FLOOR_VER, "policy_h": None, "why": "SNAPSHOT"}
+        pol = floor
+        try:
+            policy, info = exitdoc.current(self.root, self.clock(), floor)
+            pol = exitpol.normalize(policy if info.get("why") == "OK" else floor, floor)
+        except Exception:
+            info = {"ver": exitdoc.FLOOR_VER, "policy_h": None, "why": "SNAPSHOT"}
+            pol = floor
+        self._note_exit(p, info.get("why"))
+        atr5 = None
+        try:
+            book = self.books.get(spec["symbol"])
+            a = book.atr(5) if book is not None else None
+            if a and avg:
+                atr5 = round(float(a) / float(avg) * 100.0, 6)
+        except Exception:
+            atr5 = None
+        try:
+            floor_h = exitpol.policy_hash(floor)
+            policy_h = exitpol.policy_hash(pol)
+        except Exception:
+            floor_h, policy_h = None, info.get("policy_h")
+        lc = spec.get("lifecycle") if isinstance(spec.get("lifecycle"), dict) else {}
+        src = spec.get("source") if isinstance(spec.get("source"), dict) else {}
+        return {"ver": info.get("ver") or exitdoc.FLOOR_VER, "policy_h": policy_h, "floor_h": floor_h,
+                "atr5_pct": atr5, "horizon": spec.get("session_type"), "max_hold_min": lc.get("max_hold_min"),
+                "sig_type": src.get("kind") if isinstance(src.get("kind"), str) else None,
+                "scope": pol.get("scope") or "all", "why": info.get("why") or "SNAPSHOT", "policy": pol}
+
     def limits_for(self, p):
-        """Копия exec_limits с подложенными данными символа (tick, qty_step, min_qty, session_end_ts, kill) для logic.rules/pyramid."""
+        """Копия exec_limits с подложенными данными символа (tick, qty_step, min_qty, session_end_ts, kill) для logic.rules/pyramid.
+        Позиция ведётся политикой из `rt.pos.exit` (Requirement 9.3); пол берётся из текущего `auto_protect` (Requirement 2.7)."""
         lim = json.loads(json.dumps(self.cfg))
         ins = self.instrument(p["spec"]["symbol"]) or {}
         for k_src, k_dst in (("tick", "tick"), ("qty_step", "qty_step"), ("min_qty", "min_qty"), ("min_notional", "min_notional")):
@@ -225,6 +321,29 @@ class Executor(object):
                 lim[k_dst] = float(ins[k_src])
         if exec_cfg.kill_state(self.root) is not None:
             lim["kill"] = True
+        rt = p["rt"]
+        if rt.get("status") in IN_POS:
+            rec = (rt.get("pos") or {}).get("exit")
+            if not isinstance(rec, dict):
+                rec = {}
+                self._note_exit(p, "POS")
+            pol = rec.get("policy")
+            if isinstance(pol, dict):
+                h = rec.get("policy_h")
+                try:
+                    if not isinstance(h, str) or exitpol.policy_hash(pol) != h:
+                        pol = None
+                except Exception:
+                    pol = None
+            if not isinstance(pol, dict):
+                pol = self._exit_floor(lim)
+                self._note_exit(p, "POS")
+            else:
+                self._note_exit(p, rec.get("why") or "OK")
+            lc = p["spec"].get("lifecycle") if isinstance(p["spec"].get("lifecycle"), dict) else {}
+            lim["exit_policy"] = pol
+            lim["exit_ctx"] = {"max_hold_min": rec.get("max_hold_min", lc.get("max_hold_min")), "atr5_pct": rec.get("atr5_pct"),
+                               "sig_type": rec.get("sig_type"), "horizon": rec.get("horizon")}
         return lim
 
     def symbol_busy(self, sym, p):
@@ -838,8 +957,9 @@ class Executor(object):
         ent["partial"] = bool(info.get("partial"))
         pos.update({"qty": round(qty_f, 12), "avg": avg_f, "initial_stop": stop0, "cur_stop": stop0, "r_unit": abs(avg_f - stop0), "best_px": avg_f,
                     "worst_px": avg_f, "t_best": round(now, 3), "t_worst": round(now, 3), "lev": ent.get("lev"), "path_n": 0, "path_cov": 0.0,
-                    "entries": [{"ts": round(now, 3), "px": avg_f, "qty": qty_f, "fee": fees, "link": ent.get("link_id"), "exec_id": fills[0]["exec_id"], "kind": "entry"}],
+                     "entries": [{"ts": round(now, 3), "px": avg_f, "qty": qty_f, "fee": fees, "link": ent.get("link_id"), "exec_id": fills[0]["exec_id"], "kind": "entry"}],
                     "risk0": float(ent.get("risk_usdt") or 0.0) * (qty_f / float(ent.get("qty") or qty_f))})
+        pos["exit"] = self._exit_doc(p, avg_f)
         rt["realized"]["fees"] = round(rt["realized"]["fees"] + fees, 8)
         for f in fills:
             self.seen_exec.setdefault(f["exec_id"], 1)
@@ -957,6 +1077,8 @@ class Executor(object):
             self.error("save_rt", "TRANSITION")
         self.decide("transition", new, plan=p["spec"]["id"], why="%s %s->%s" % (why, old, new))
         if new in plan_schema.TERMINAL:
+            if self.exit_fallback.pop(p["spec"]["id"], None) is not None:
+                self.exit_status = self._exit_status_from(self.exit_fallback)
             self.plans.pop(p["spec"]["id"], None)
         return True
 
@@ -1175,7 +1297,7 @@ class Executor(object):
         """Одно действие движка правил -> исполнение через Gate/Actions. -> True выполнено / False отказ / None нейтрально."""
         typ = a.get("type")
         spec, rt = p["spec"], p["rt"]
-        why = a.get("why") or ""
+        why = self._action_why(a, a.get("why") or "")
         pid = spec["id"]
         if typ == "cancel_entry":
             return self.act.cancel_entry_order(p, why=why) in ("cancelled", "gone")
@@ -1233,12 +1355,16 @@ class Executor(object):
             return False
         if full and self.act.close_inflight(p):      # закрытие уже в пути: без повторов на каждом тике (иначе ордер снимается раньше исполнения и позиция висит)
             return False
-        kind, info = self.act.close(p, None if full else qty, reason, why=a.get("why", ""), full=full)
-        self.decide("rule", a["type"], plan=p["spec"]["id"], args={"qty": remaining if full else qty}, why=a.get("why", ""),
+        why = self._action_why(a, a.get("why", ""))
+        rule = a.get("rule")
+        kind, info = self.act.close(p, None if full else qty, reason, why=why, full=full)
+        self.decide("rule", a["type"], plan=p["spec"]["id"], args={"qty": remaining if full else qty}, why=why,
                     res={"ok": kind == "ok", "code": info.get("code", "OK")})
         if kind == "ok":
             if full:
                 rt["close"]["reason"] = reason
+                if isinstance(rule, str) and rule.startswith("xp_"):
+                    rt["close"]["rule"] = rule
             self.sync_position(p)
             self.emit("rule_fired", {"rule": a.get("rule") or "x", "action": a["type"], "ok": True, "code": "OK"}, plan=p["spec"]["id"], sym=p["spec"]["symbol"])
             if not full and rt["status"] in IN_POS:
@@ -1335,7 +1461,10 @@ class Executor(object):
             exit_px = (self.px.get(sym) or {}).get("last") or pos.get("avg") or 0.0
         pnl = round(real["pnl"] - real["fees"], 6)
         reason = self._close_reason(p, parts, exit_px)
+        pre_rule = (rt.get("close") or {}).get("rule")
         rt["close"] = {"reason": reason, "px": exit_px, "pnl": pnl}
+        if pre_rule:
+            rt["close"]["rule"] = pre_rule
         now = self.clock()
         if not self.observe:
             try:
@@ -1355,7 +1484,8 @@ class Executor(object):
                 tr = None
             if tr is not None and not tr.get("ts_close"):
                 self._journal_call("cmd_close", id=jid, exit=exit_px, reason=reason, funding=0.0, note="exec plan %s" % spec["id"], path=path,
-                                   pnl_override=pnl, fees_usdt=round(real["fees"], 6), rule_followed=None, err=None, lesson=None)
+                                   pnl_override=pnl, fees_usdt=round(real["fees"], 6), rule_followed=None, err=None, lesson=None,
+                                   exit_rule=self._exit_case_rule(p))
         for t in (rt.get("targets") or {}).values():
             if t.get("state") in ("resting", "pending", "touch"):
                 t["state"] = "cancelled"
@@ -1454,6 +1584,7 @@ class Executor(object):
                           "t_best": round(now, 3), "t_worst": round(now, 3), "lev": pos.get("lev"), "path_n": 0, "path_cov": 0.0,
                           "entries": [{"ts": round(now, 3), "px": avg, "qty": qty, "fee": 0.0, "link": None, "exec_id": "adopt", "kind": "entry"}],
                           "risk0": qty * abs(avg - stop0)})
+        rt["pos"]["exit"] = self._exit_doc(p, avg)
         rt["ts"]["armed"] = rt["ts"]["entered"] = round(now, 3)
         rt["entry"]["state"] = "filled"
         self.exch_pos[sym] = dict(pos)

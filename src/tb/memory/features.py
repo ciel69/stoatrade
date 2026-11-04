@@ -342,9 +342,11 @@ def result_from_close(op, cl):
     path = cl.get("path") if isinstance(cl.get("path"), dict) else {}
     t0, t1 = cases.parse_ts(op.get("ts_open")), cases.parse_ts(cl.get("ts_close"))
     fees = num(cl.get("fees_usdt"))
+    exit_rule = cl.get("exit_rule")
     return {"status": "closed", "r": r, "pnl_r_net": r, "mae_r": num(path.get("mae_r")), "mfe_r": num(path.get("mfe_r")),
             "hold_min": round((t1 - t0) / 60.0, 1) if t0 is not None and t1 is not None and t1 >= t0 else None,
-            "exit_reason": EXIT_MAP.get(cl.get("reason")), "fees_r": round(fees / risk, 3) if fees is not None and risk else None}
+            "exit_reason": EXIT_MAP.get(cl.get("reason")), "exit_rule": exit_rule if exit_rule in cases.EXIT_RULES else None,
+            "fees_r": round(fees / risk, 3) if fees is not None and risk else None}
 
 
 def whatif_from_outcomes(rows, h_pref=15):

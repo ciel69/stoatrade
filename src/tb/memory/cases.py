@@ -34,6 +34,7 @@ ACTIONS = ("enter", "skip", "wait", "exit", "stop_move")
 SKIP_CODES = ("NO_CONFIRM", "WIDE_STOP", "RANGE_GT_STOP", "COOLDOWN", "BLACKOUT", "SPREAD", "SIZE", "NO_EDGE", "CORRELATED", "OTHER")
 STATUSES = ("open", "closed", "expired", "na")
 EXIT_REASONS = ("sl", "tp", "manual", "timeout", "invalidation", "rule", "kill", "session_end")
+EXIT_RULES = ("be", "lock", "partial", "trail_atr", "stall", "decay", "timeout", "near_tp")      # компоненты tb.exit_policy/1
 ACTORS = ("agent", "owner", "system")
 ROLES = ("position_manager", "morning_analyst", "chat", "manual", "mechanics", "reviewer", "migration")
 MODES = ("live", "paper", "testnet")
@@ -59,6 +60,7 @@ SRC = {"risk_level": (I, 0, 9), "actor": (E_, ACTORS), "agent_id": (S, 16), "mod
        "rules_ver": (S, 20), "mode": (E_, MODES), "mem": (E_, MEM), "rulebook_ver": (S, 8)}      # rulebook_ver (R2): версия rulebook R-NNNN, необязательно
 RESULT = {"status": (E_, STATUSES), "r": (N, -100, 1000), "pnl_r_net": (N, -100, 1000), "mae_r": (N, -100, 1000), "mfe_r": (N, -100, 1000),
           "hold_min": (N, 0, 10 ** 7), "exit_reason": (E_, EXIT_REASONS), "fees_r": (N, -100, 1000),
+          "exit_rule": (E_, EXIT_RULES),
           # R4.2 (Requirement 13.4): ход после выхода; необязательные, schema tb.case/1 не меняется, rules_ver не затрагивается
           "after_mfe_r": (N, -100, 1000), "after_t1": (N, 0, 1)}
 WHATIF = {"h_min": (I, 1, 10 ** 5), "dir_pct": (N, -10 ** 4, 10 ** 4), "ret_pct": (N, -10 ** 4, 10 ** 4), "cost_pct": (N, 0, 100),
