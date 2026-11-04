@@ -19,11 +19,12 @@
   * варианты чёрного списка `exit_blacklist` (`until_ts > now`) в поиск не идут (Requirement 5.8); вариант, у которого на всех путях окна
     решения те же, что у базы, — `NOOP` и в поиск не идёт (Requirement 5, Edge Cases).
 
-Таблицы `near_tp`: квантили MFE пути по (вид сигнала, горизонт) считаются по путям СТРОГО РАНЬШЕ окна поиска (`t0 < a`, `labeled_ts ≤ cut_ts`) и
-подставляются в `near_tp.table` политики кандидата, чтобы регистрация испытания записала их в параметры варианта (Requirement 5.5, свойство 17).
-Уровень — `max(квантиль q, near_tp.min_r)`, не выше верхней границы схемы (20R); нет путей вида сигнала — строки таблицы нет и компонент не
-действует (так же `exitpol._near_level`). Оценки `exit_evals` вариантов меню считает `exits_eval` по политике из конфига, то есть без таблицы:
-`near_tp`-варианты приходят к поиску с неактивным компонентом и получают `NOOP`. Согласование оценки с таблицей — вопрос спеки (см. отчёт).
+Таблицы `near_tp`: квантили MFE пути по (вид сигнала, горизонт) считаются по путям СТРОГО РАНЬШЕ окна поиска (`t0 < a`, `labeled_ts ≤ cut_ts`,
+`exits_eval.near_tp_history`) и подставляются в `near_tp.table` политики варианта до чтения матрицы (Requirement 5.5, свойство 17). Уровень —
+`max(квантиль q, near_tp.min_r)`, не выше верхней границы схемы (20R); нет путей вида сигнала — строки таблицы нет и компонент не действует
+(так же `exitpol._near_level`). Шаг оценок `exits_eval` считает ту же таблицу и пишет оценки с её `policy_h`; поиск повторяет детерминированный
+расчёт, берёт `policy_h` варианта и читает только строки с этим хешем. Кандидат несёт политику с той же таблицей и тем же `policy_h`, и
+регистрация записывает их в `exit_variants`.
 
 Что пишется в базу (Requirement 5.6): строка `exit_search` (`a`, `b`, `cut_ts`, `sample_h`, `cfg_h`, `menu_ver`, `base_ver`, `block_h`, `code`,
 `results`) и событие `learn_events step="exits_search"` — при любом исходе поиска (`OK`, `LOW_N`, `NO_CANDIDATE`, `NOOP`). `BACKLOG`, `NOT_DUE`,
@@ -48,7 +49,6 @@ from tb.labels import store as LST
 from tb.learnloop import exits_conf as EC
 from tb.learnloop import exits_eval as EV
 from tb.memory import chain as CH
-from tb.logic import exitpol as XP
 from tb.logic import exitsim as XS
 
 STEP = "exits_search"
@@ -69,10 +69,10 @@ CODE_DISABLED = "DISABLED"
 CODE_NO_WINDOW = "NO_WINDOW"
 CODES = (CODE_OK, CODE_LOW_N, CODE_NO_CANDIDATE, CODE_NOOP, CODE_BACKLOG, CODE_NOT_DUE, CODE_DISABLED, CODE_NO_WINDOW)
 
-NEAR_TP_MAX_R = 20.0                      # верхняя граница near_tp.level схемы tb.exit_policy/1 (exitpol)
 CHUNK = 400                               # размер пачки параметров IN (...): предел SQLite — 999
 
-EVAL_COLS = ("key", "var_id", "var_ver", "ord", "px_mode", "t0", "block", "labeled_ts", "r_net", "exit_reason", "amb", "end_ts", "path_mfe_r")
+EVAL_COLS = ("key", "var_id", "var_ver", "ord", "px_mode", "policy_h", "t0", "block", "labeled_ts", "r_net", "exit_reason", "amb", "end_ts",
+             "path_mfe_r")
 
 
 # ---------------------------------------------------------------- мелочи
@@ -172,15 +172,24 @@ def blacklist(conn, now):
 
 # ---------------------------------------------------------------- оценки окна
 
-def window_evals(conn, win, cost_h, sim_ver=None):
-    """Оценки путей прогонов окна при текущих `cost_h`/`sim_ver`: `t0 ∈ [a, b)`, `labeled_ts ≤ cut_ts` (Requirement 4.3)."""
+def window_evals(conn, win, cost_h, policies=None, sim_ver=None):
+    """Оценки путей прогонов окна при текущих `cost_h`/`sim_ver`: `t0 ∈ [a, b)`, `labeled_ts ≤ cut_ts` (Requirement 4.3).
+
+    `policies` — {(var_id, var_ver): актуальный policy_h}; строки варианта с другим `policy_h` (прежняя таблица `near_tp`) в выборку не
+    входят: матрица читает оценки текущего прохода (Requirement 5.5).
+    """
     sv = XS.SIM_VER if sim_ver is None else sim_ver
     sql = ("SELECT %s FROM exit_evals WHERE src=? AND cost_h=? AND sim_ver=? AND ord=? AND t0>=? AND t0<? AND labeled_ts<=?"
            % ",".join(EVAL_COLS))
     args = (SRC_RUN, str(cost_h), sv, ORDER_S, int(win["a"]), int(win["b"]), int(win["cut_ts"]))
     out = []
     for r in conn.execute(sql, args):
-        out.append(dict(zip(EVAL_COLS, r)))
+        d = dict(zip(EVAL_COLS, r))
+        if policies is not None:
+            want = policies.get(_pair((d["var_id"], d["var_ver"])))
+            if want is None or str(d["policy_h"]) != str(want):
+                continue
+        out.append(d)
     return out
 
 
@@ -378,101 +387,11 @@ def maxt(D, B, seed):
 
 # ---------------------------------------------------------------- near_tp
 
-def quantile(xs, q):
-    """Квантиль с линейной интерполяцией по отсортированным значениям (детерминированно, без статистических библиотек)."""
-    ys = sorted(float(x) for x in xs if _fin(x))
-    n = len(ys)
-    if not n:
-        return None
-    if n == 1:
-        return ys[0]
-    pos = float(q) * (n - 1)
-    i = int(math.floor(pos))
-    if i >= n - 1:
-        return ys[-1]
-    return ys[i] + (ys[i + 1] - ys[i]) * (pos - i)
-
-
-def path_meta(conn, keys):
-    """(вид сигнала, горизонт) пути прогона по ключу оценки `"<key>|<policy_id>|<policy_ver>"` -> {ключ оценки: (type, horizon) | None}."""
-    out = {}
-    wanted = [str(k) for k in keys]
-    for i in range(0, len(wanted), CHUNK):
-        chunk = wanted[i:i + CHUNK]
-        raw_keys, found = [], {}
-        for k in chunk:
-            sp = EV.split_run_key(k)
-            if sp is None:
-                out[k] = None
-            else:
-                raw_keys.append(sp[0])
-        if not raw_keys:
-            continue
-        for key, pid, pver, typ, hz in conn.execute(
-                "SELECT key, policy_id, policy_ver, type, horizon FROM run_paths WHERE key IN (%s)" % ",".join("?" * len(raw_keys)), raw_keys):
-            found[EV.run_key(key, pid, int(pver))] = (typ, hz) if typ and hz else None
-        for k in chunk:
-            if k not in out:
-                out[k] = found.get(k)
-    return out
-
-
-def near_tp_history(conn, base, a, cut_ts, cost_h, sim_ver=None):
-    """MFE путей СТРОГО раньше окна поиска по виду сигнала и горизонту (Requirement 5.5, свойство 17).
-
-    -> {(type, horizon): [path_mfe_r, ...]}; путь без вида сигнала/горизонта в таблицу не входит.
-    """
-    sql = ("SELECT key, path_mfe_r FROM exit_evals WHERE src=? AND var_id=? AND var_ver=? AND ord=? AND px_mode=? AND cost_h=? AND sim_ver=? "
-           "AND t0<? AND labeled_ts<=?")
-    args = (SRC_RUN, str(base["var_id"]), int(base["var_ver"]), ORDER_S, PX_FEE, str(cost_h),
-            XS.SIM_VER if sim_ver is None else sim_ver, int(a), int(cut_ts))
-    raw = conn.execute(sql, args).fetchall()
-    meta = path_meta(conn, set(k for k, _mfe in raw))
-    out = {}
-    for key, mfe in raw:
-        m = meta.get(str(key))
-        v = _num(mfe)
-        if m is None or v is None:
-            continue
-        out.setdefault(m, []).append(v)
-    return out
-
-
-def near_tp_tables(hist, variants):
-    """Таблицы `near_tp.table` вариантов по истории -> {(var_id, ver): table}; вариант без `near_tp` в ответ не входит.
-
-    Уровень — `max(квантиль q, min_r)` в R, не выше `NEAR_TP_MAX_R`; вида сигнала/горизонта нет в истории — строки таблицы нет (компонент
-    не действует, как в `exitpol._near_level`).
-    """
-    out = {}
-    for var in variants:
-        nt = (var.get("policy") or {}).get("near_tp")
-        if not isinstance(nt, dict) or "table" in nt:
-            continue
-        q, min_r = _num(nt.get("q")), _num(nt.get("min_r"))
-        if q is None or min_r is None:
-            continue
-        table = {}
-        for (typ, hz) in sorted(hist, key=lambda x: (str(x[0]), str(x[1]))):
-            lvl = quantile(hist[(typ, hz)], q)
-            if lvl is None:
-                continue
-            lvl = min(max(lvl, min_r), NEAR_TP_MAX_R)
-            if lvl <= 0:
-                continue
-            table.setdefault(str(typ), {})[str(hz)] = round(lvl, 6)
-        out[_pair((var["var_id"], var["var_ver"]))] = table
-    return out
-
-
-def apply_near_tp(policy, table):
-    """Политика с подставленной таблицей `near_tp.table` (пустая таблица — политика без изменений)."""
-    nt = (policy or {}).get("near_tp")
-    if not table or not isinstance(nt, dict):
-        return policy
-    p = dict(policy)
-    p["near_tp"] = dict(nt, table=dict((k, dict(v)) for k, v in table.items()))
-    return p
+NEAR_TP_MAX_R = EV.NEAR_TP_MAX_R
+quantile = EV.quantile
+near_tp_history = EV.near_tp_history
+near_tp_tables = EV.near_tp_tables
+apply_near_tp = EV.apply_near_tp
 
 
 # ---------------------------------------------------------------- справочные доли
@@ -549,15 +468,23 @@ def run(conn, root, cfg, now, force=False):
     if block_h is None:
         raise ValueError("config/exits.json: нет unit.block_h")
     tail_mfe = float(cfg["tail"]["mfe_r"])
-    rows = window_evals(conn, win, cost_h)
-    paths = group_paths(rows, base)
-    sample_h = sample_hash(paths)
-    seed = seed_of(sample_h)
-
     blocked = blacklist(conn, now)
     base_h = base["policy_h"]
     menu = [v for v in menu_variants(cfg, floor_policy) if _pair((v["var_id"], v["var_ver"])) not in blocked]
     pool = [v for v in menu if v["policy_h"] != base_h]
+
+    # near_tp: таблица считается по путям строго раньше окна (свойство 17); с ней же политика варианта и его policy_h (Requirement 5.5)
+    hist = near_tp_history(conn, base, win["a"], win["cut_ts"], cost_h)
+    tables = near_tp_tables(hist, pool)
+    pool = [EV.with_near_tp(v, tables.get(_pair((v["var_id"], v["var_ver"])))) for v in pool]
+    pool = [v for v in pool if v["policy_h"] != base_h]
+    policies = dict((_pair((v["var_id"], v["var_ver"])), v["policy_h"]) for v in pool)
+    policies[_pair((base["var_id"], base["var_ver"]))] = base_h
+
+    rows = window_evals(conn, win, cost_h, policies)
+    paths = group_paths(rows, base)
+    sample_h = sample_hash(paths)
+    seed = seed_of(sample_h)
 
     results = {"window": {"a": int(win["a"]), "b": int(win["b"]), "cut_ts": int(win["cut_ts"])},
                "menu_ver": cfg["menu_ver"], "base_ver": base["var_id"], "base_h": base_h, "block_h": block_h,
@@ -571,9 +498,6 @@ def run(conn, root, cfg, now, force=False):
         results["blocks"] = sorted(set(p["base"]["block"] for p in paths.values()), key=_block_key)
         return _persist(conn, cfg, now, win, sample_h, base, block_h, CODE_LOW_N, results)
 
-    # near_tp: только пути строго раньше окна (свойство 17); таблица идёт в политику кандидата (Requirement 5.5)
-    hist = near_tp_history(conn, base, win["a"], win["cut_ts"], cost_h)
-    tables = near_tp_tables(hist, pool)
     results["near_tp"] = dict((k[0], t) for k, t in tables.items() if t)
 
     if not pool:
@@ -643,9 +567,8 @@ def run(conn, root, cfg, now, force=False):
         variants_out.append(rec)
         if is_noop or not all(conds.values()):
             continue
-        policy = apply_near_tp(v["policy"], near)
-        candidates.append({"id": v["var_id"], "ver": int(v["var_ver"]), "family": v["family"], "policy": policy,
-                           "policy_h": XP.policy_hash(XP.normalize(policy, floor_policy)), "menu_ver": cfg["menu_ver"],
+        candidates.append({"id": v["var_id"], "ver": int(v["var_ver"]), "family": v["family"], "policy": v["policy"],
+                           "policy_h": v["policy_h"], "menu_ver": cfg["menu_ver"],
                            "numbers": {"n_blocks": n_blocks, "n_paths": st["n_paths"], "mean_d": _r(t_info["mean"]),
                                        "t": _r(t_info["t"]), "p": _r(p_adj, 10), "alpha": alpha, "min_effect_r": min_eff,
                                        "min_clusters": min_n, "tail": rec["tail"], "taker_mean_d": _r(taker_mean),

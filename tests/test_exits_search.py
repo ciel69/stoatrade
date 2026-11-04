@@ -21,7 +21,7 @@ from tb.knowledge import store2
 from tb.labels import paths as LP
 from tb.labels import schema as LS
 from tb.labels import store
-from tb.learnloop import exits_conf, exits_eval, exits_search
+from tb.learnloop import exits_conf, exits_eval, exits_search, exits_trial
 from tb.logic import exitpol as XP
 from tb.logic import exitsim as XS
 
@@ -53,6 +53,10 @@ def _manual_p(vals, B, seed):
         if _t_manual(sum(e * v for e, v in zip(eps, vals)), sq, n) >= obs:
             hits += 1
     return (1.0 + hits) / (1.0 + B)
+
+
+def _pkey(pair):
+    return str(pair[0]), int(pair[1])
 
 
 def _t_manual(s, sq, n):
@@ -156,6 +160,9 @@ class Base(unittest.TestCase):
         self.inp = exits_eval.market_inputs(self.root)
         self.floor = self.inp["floor"]
         self.cost_h = self.inp["cost_h"]
+        self.base_h = XP.policy_hash(XP.normalize(self.floor, self.floor))
+        self.menu_h = dict((_pkey((v["var_id"], v["var_ver"])), v["policy_h"])
+                           for v in exits_search.menu_variants(self.cfg, self.floor))
         self.add_version("X-0001", self.floor)
         self.win = exits_search.window(self.cfg, self.root, NOW)
         self.assertIsNotNone(self.win)
@@ -168,31 +175,42 @@ class Base(unittest.TestCase):
                                   "policy_h": XP.policy_hash(pol), "floor_h": XP.policy_hash(self.floor),
                                   "numbers": {"n": 0}, "actor": "code", "ts": NOW})
 
-    def ev_row(self, key, vid, ver, t0, side, r_net, mfe, reason="sl", amb=0, labeled_ts=None, px_mode="fee", block_h=None):
+    def h_of(self, vid, ver):
+        if str(vid) == "X-0001" and int(ver) == 1:
+            return self.base_h
+        return self.menu_h.get(_pkey((vid, ver)), "0" * 16)
+
+    def ev_row(self, key, vid, ver, t0, side, r_net, mfe, reason="sl", amb=0, labeled_ts=None, px_mode="fee", block_h=None, ph=None):
         bh = self.cfg["unit"]["block_h"] if block_h is None else int(block_h)
         return {"src": "run", "key": key, "var_id": vid, "var_ver": int(ver), "ord": "S", "px_mode": px_mode,
-                "policy_h": "0" * 16, "cost_h": self.cost_h, "sim_ver": XS.SIM_VER, "t0": int(t0),
+                "policy_h": self.h_of(vid, ver) if ph is None else ph, "cost_h": self.cost_h, "sim_ver": XS.SIM_VER, "t0": int(t0),
                 "block": exits_eval.block_id(t0, side, bh),
                 "labeled_ts": int(t0 + 600 if labeled_ts is None else labeled_ts),
                 "r_net": float(r_net), "r_gross": float(r_net), "fees_r": 0.0, "mfe_r": float(mfe), "mae_r": 0.0,
                 "path_mfe_r": float(mfe), "exit_reason": reason, "hold_min": 60.0, "end_ts": int(t0) + 3600,
                 "amb": int(amb), "created_ts": NOW}
 
-    def add_path(self, t0, side, d_by_var, base_r=0.0, mfe=1.0, reasons=None, amb=0, labeled_ts=None, key=None, taker=None):
-        """Один путь: оценка базы и оценки вариантов (`d_by_var`: {id | (id, ver): d}); `taker` — оценки по цене taker."""
+    def add_path(self, t0, side, d_by_var, base_r=0.0, mfe=1.0, reasons=None, amb=0, labeled_ts=None, key=None, taker=None,
+                 ph_by=None):
+        """Один путь: оценка базы и оценки вариантов (`d_by_var`: {id | (id, ver): d}); `taker` — оценки по цене taker;
+        `ph_by` — policy_h вариантов, отличающихся от меню (таблица near_tp)."""
         key = key or "k%d:%s" % (int(t0), side)
         rk = exits_eval.run_key(key, "P2", 1)
         reasons = reasons or {}
+        ph_by = ph_by or {}
         rows = [self.ev_row(rk, "X-0001", 1, t0, side, base_r, mfe, reasons.get("X-0001", "sl"), amb, labeled_ts)]
         for vid, ver, d in _entries(d_by_var):
-            rows.append(self.ev_row(rk, vid, ver, t0, side, base_r + d, mfe, reasons.get(vid, "sl"), amb, labeled_ts))
+            rows.append(self.ev_row(rk, vid, ver, t0, side, base_r + d, mfe, reasons.get(vid, "sl"), amb, labeled_ts,
+                                    ph=ph_by.get(_pkey((vid, ver)))))
         for vid, ver, d in _entries(taker):
-            rows.append(self.ev_row(rk, vid, ver, t0, side, base_r + d, mfe, reasons.get(vid, "sl"), amb, labeled_ts, px_mode="taker"))
+            rows.append(self.ev_row(rk, vid, ver, t0, side, base_r + d, mfe, reasons.get(vid, "sl"), amb, labeled_ts,
+                                    px_mode="taker", ph=ph_by.get(_pkey((vid, ver)))))
         with store.tx(self.conn):
             store2.insert_rows(self.conn, "exit_evals", rows, ignore_dup=True)
         return rk
 
-    def add_window(self, d_by_var=None, base_r=0.0, mfe=1.0, reasons=None, per_block=2, n=28, d_fn=None, amb=0, taker=None):
+    def add_window(self, d_by_var=None, base_r=0.0, mfe=1.0, reasons=None, per_block=2, n=28, d_fn=None, amb=0, taker=None,
+                   ph_by=None):
         """Блоки окна: n половин суток (сутки и сторона), per_block путей в блоке (`d_fn(i, j)`, `mfe(i, j)` — на путь)."""
         for i in range(n):
             t0 = self.win["a"] + i * BLOCK
@@ -200,7 +218,7 @@ class Base(unittest.TestCase):
             for j in range(per_block):
                 d = d_fn(i, j) if d_fn else dict(d_by_var or {})
                 mt = mfe(i, j) if callable(mfe) else mfe
-                self.add_path(t0 + j, side, d, base_r=base_r, mfe=mt, reasons=reasons, amb=amb, taker=taker)
+                self.add_path(t0 + j, side, d, base_r=base_r, mfe=mt, reasons=reasons, amb=amb, taker=taker, ph_by=ph_by)
 
     def add_run_path(self, key, t0, typ="range_5m", horizon="scalp"):
         """Минимальная строка run_paths: для таблиц near_tp нужны только вид сигнала и горизонт."""
@@ -471,6 +489,48 @@ class TestNoFutureLeak(Base):
         self.assertNotIn("table", policy["near_tp"])
         self.assertNotEqual(XP.policy_hash(out), XP.policy_hash(policy))
         self.assertEqual(exits_search.apply_near_tp(policy, {}), policy)
+
+
+# ---------------------------------------------------------------- near_tp: вариант становится кандидатом
+
+class TestNearTpCandidates(Base):
+    def near_tp_n1(self):
+        """Таблица N1 по истории строго до окна и policy_h политики с этой таблицей."""
+        for i, mfe in enumerate((0.8, 1.0, 1.2)):
+            t0 = self.win["a"] - (i + 1) * DAY
+            rk = self.add_run_path("old%d" % i, t0)
+            with store.tx(self.conn):
+                store2.insert_rows(self.conn, "exit_evals", [self.ev_row(rk, "X-0001", 1, t0, "long", 0.5, mfe)], ignore_dup=True)
+        base = exits_search.base_variant(self.conn, self.floor)
+        hist = exits_search.near_tp_history(self.conn, base, self.win["a"], self.win["cut_ts"], self.cost_h)
+        raw = [v for v in exits_search.menu_variants(self.cfg, self.floor) if v["var_id"] == "N1"]
+        table = exits_search.near_tp_tables(hist, raw)[("N1", 1)]
+        pol = XP.normalize(exits_search.apply_near_tp(raw[0]["policy"], table), self.floor)
+        return table, XP.policy_hash(pol)
+
+    def test_near_tp_with_effect_becomes_candidate_and_register_keeps_table(self):
+        table, ph = self.near_tp_n1()
+        self.assertTrue(table)
+        self.add_window({"N1": 0.1}, base_r=0.5, mfe=2.0, taker={("N1", 1): 0.1}, ph_by={("N1", 1): ph})
+        rep = self.run_search()
+        self.assertEqual([c["id"] for c in rep["candidates"]], ["N1"])
+        cand = rep["candidates"][0]
+        self.assertEqual(cand["policy_h"], ph)
+        self.assertEqual(cand["policy"]["near_tp"]["table"], table)
+        self.assertEqual(rep["results"]["near_tp"]["N1"], table)
+        tid = exits_trial.register(self.conn, cand, None, self.cfg, NOW, root=self.root)
+        row = self.conn.execute("SELECT policy, policy_h FROM exit_variants WHERE id='N1' AND ver=1").fetchone()
+        self.assertEqual(row[1], ph)
+        self.assertEqual(json.loads(row[0])["near_tp"]["table"], table)
+        crit = json.loads(self.conn.execute("SELECT criterion FROM exit_trials WHERE trial_id=?", (tid,)).fetchone()[0])
+        self.assertEqual(crit["var"]["policy_h"], ph)
+
+    def test_near_tp_without_signal_history_is_noop(self):
+        self.add_window({"N1": 0.0}, base_r=0.5, mfe=2.0, ph_by={("N1", 1): self.menu_h[("N1", 1)]})
+        rep = self.run_search()
+        self.assertEqual(rep["code"], "NOOP")
+        self.assertIn("N1", rep["results"]["noop"])
+        self.assertEqual(rep["results"]["near_tp"], {})
 
 
 # ---------------------------------------------------------------- вспомогательное

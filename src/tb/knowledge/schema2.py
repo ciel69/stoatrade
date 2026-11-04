@@ -149,6 +149,7 @@ V2B_TRIGGERS = tuple("tr_%s_%s" % (t, w) for t in MEM_TABLES for w in ("nu", "nd
 X1_VER = 1
 META_X1_KEY = "knowledge_x1_ver"
 X1_TABLES = ("exit_variants", "exit_evals", "exit_versions", "exit_search", "exit_trials", "exit_blacklist")
+# policy_h в ключе exit_evals: у варианта с другой таблицей near_tp другая политика и другая оценка (R4, задача 10б)
 EXIT_TRIALS_IMMUTABLE = ("criterion", "criterion_h")
 X1 = [
     """CREATE TABLE exit_variants(id TEXT NOT NULL, ver INTEGER NOT NULL, family TEXT NOT NULL, policy TEXT NOT NULL, policy_h TEXT NOT NULL,
@@ -157,7 +158,7 @@ X1 = [
   px_mode TEXT NOT NULL, policy_h TEXT NOT NULL, cost_h TEXT NOT NULL, sim_ver TEXT NOT NULL, t0 INTEGER NOT NULL, block TEXT NOT NULL,
   labeled_ts INTEGER NOT NULL, r_net REAL, r_gross REAL, fees_r REAL, mfe_r REAL, mae_r REAL, path_mfe_r REAL, exit_reason TEXT,
   hold_min REAL, end_ts INTEGER, amb INTEGER NOT NULL, created_ts INTEGER NOT NULL,
-  PRIMARY KEY(src, key, var_id, var_ver, ord, px_mode, cost_h, sim_ver))""",
+  PRIMARY KEY(src, key, var_id, var_ver, ord, px_mode, policy_h, cost_h, sim_ver))""",
     "CREATE INDEX ix_ee_var ON exit_evals(var_id, var_ver, t0)",
     """CREATE TABLE exit_versions(seq INTEGER PRIMARY KEY, ver TEXT UNIQUE NOT NULL, parent TEXT, reason_code TEXT NOT NULL, policy TEXT NOT NULL,
   policy_h TEXT NOT NULL, floor_h TEXT NOT NULL, numbers TEXT, actor TEXT NOT NULL, ts INTEGER NOT NULL, prev_h TEXT, row_h TEXT NOT NULL)""",

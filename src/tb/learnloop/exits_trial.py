@@ -358,7 +358,8 @@ def register(conn, cand, base_ver, cfg, now, root=None, floor_policy=None):
              "state": OPEN, "verdict": None, "numbers": None, "start_ts": int(start), "deadline_ts": int(crit["deadline_ts"]),
              "cut_ts": None, "closed_ts": None}
     with LST.tx(conn):
-        store2.insert_rows(conn, "exit_variants", [variant], ignore_dup=True)
+        conn.execute("DELETE FROM exit_variants WHERE id=? AND ver=?", (var_id, int(var_ver)))
+        store2.insert_rows(conn, "exit_variants", [variant])
         store2.insert_rows(conn, "exit_trials", [trial])
         store2.log_event(conn, STEP, "TRIAL", "code", ref=tid,
                          body={"var": var_id, "ver": int(var_ver), "base": base["ver"], "start_ts": int(start),

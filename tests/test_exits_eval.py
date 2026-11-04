@@ -393,6 +393,86 @@ class TestIdempotentAndRecompute(Base):
         self.assertEqual(rep["backlog"], 0)
 
 
+# ---------------------------------------------------------------- near_tp: таблица в оценке
+
+def path_low(ts0):
+    """Почти ровный путь: MFE ниже near_tp.min_r, таблица даёт нижний уровень."""
+    return _bars(ts0, [100.0] * 30 + [100.0 + 0.03 * i for i in range(1, 11)] + [100.3] * 10, open0=100.0)
+
+
+class TestNearTp(Base):
+    def menu(self, vid):
+        return next(v for v in exits_eval.menu_variants(self.cfg, self.floor) if v["var_id"] == vid)
+
+    def expected(self, vid):
+        """Таблица и policy_h варианта по той же истории, что видит шаг оценок."""
+        base = next(v for v in exits_eval.version_variants(self.conn, self.floor) if v["role"] == "active")
+        hist = exits_eval.near_tp_history(self.conn, base, self.win["a"], self.win["cut_ts"], self.inp["cost_h"])
+        tables = exits_eval.near_tp_tables(hist, [self.menu(vid)])
+        table = tables[(vid, 1)]
+        pol = XP.normalize(exits_eval.apply_near_tp(self.menu(vid)["policy"], table), self.floor)
+        return table, XP.policy_hash(pol)
+
+    def setUp(self):
+        Base.setUp(self)
+        self.win = exits_eval.window(self.cfg, self.root, NOW)
+        self.assertIsNotNone(self.win)
+        self.inp = exits_eval.market_inputs(self.root)
+
+    def old_path(self, key, mfe_rows, back_days=2):
+        t0 = self.win["a"] - back_days * DAY
+        self.add_run(key, t0=t0, rows=mfe_rows, labeled_ts=self.win["cut_ts"])
+        self.run_eval()                                      # история: база пути до окна
+
+    def test_menu_variant_evaluated_with_table_and_policy_hash(self):
+        self.old_path("old", path_low(self.win["a"] - 2 * DAY + 60))
+        t0 = self.win["a"] + 3600
+        self.add_run("w1", t0=t0, labeled_ts=self.win["cut_ts"])
+        rep = self.run_eval()
+        self.assertGreater(rep["n"], 0)
+        table, want_h = self.expected("N1")
+        self.assertTrue(table)
+        rows = self.of(exits_eval.run_key("w1", "P2", 1), ("N1", 1), ord="S", px_mode="fee")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["policy_h"], want_h)
+        self.assertNotEqual(rows[0]["policy_h"], self.menu("N1")["policy_h"])
+        n2 = self.of(exits_eval.run_key("w1", "P2", 1), ("N2", 1), ord="S", px_mode="fee")[0]
+        self.assertNotEqual(n2["policy_h"], self.menu("N2")["policy_h"])
+        base = self.of(exits_eval.run_key("w1", "P2", 1), ("X-0001", 1), ord="S", px_mode="fee")[0]
+        self.assertNotAlmostEqual(rows[0]["r_net"], base["r_net"], places=9)
+
+    def test_no_history_evaluates_without_table(self):
+        t0 = self.win["a"] + 3600
+        self.add_run("w1", t0=t0, labeled_ts=self.win["cut_ts"])
+        self.run_eval()
+        row = self.of(exits_eval.run_key("w1", "P2", 1), ("N1", 1), ord="S", px_mode="fee")[0]
+        self.assertEqual(row["policy_h"], self.menu("N1")["policy_h"])
+        base = self.of(exits_eval.run_key("w1", "P2", 1), ("X-0001", 1), ord="S", px_mode="fee")[0]
+        self.assertAlmostEqual(row["r_net"], base["r_net"], places=12)     # компонент не действует
+
+    def test_table_change_writes_new_row_and_repeat_writes_nothing(self):
+        self.old_path("old", path_low(self.win["a"] - 2 * DAY + 60))
+        t0 = self.win["a"] + 3600
+        self.add_run("w1", t0=t0, labeled_ts=self.win["cut_ts"])
+        self.run_eval()
+        key = exits_eval.run_key("w1", "P2", 1)
+        first = self.of(key, ("N1", 1), ord="S", px_mode="fee")
+        self.assertEqual(len(first), 1)
+        self.assertEqual(self.run_eval()["n"], 0)                # та же таблица — ничего не пишется
+        # новая история вида сигнала меняет квантиль: сначала оценивается сам путь, затем таблица
+        high = self.win["a"] - 3 * DAY
+        closes = [100.0] * 6 + [100.0 + 0.3 * i for i in range(1, 21)] + [106.0] * 10
+        self.add_run("old2", t0=high, rows=_bars(high + 60, closes, open0=100.0), labeled_ts=self.win["cut_ts"])
+        self.run_eval()
+        rep = self.run_eval()
+        self.assertGreater(rep["n"], 0)
+        now_rows = self.of(key, ("N1", 1), ord="S", px_mode="fee")
+        self.assertEqual(len(now_rows), 2)
+        self.assertNotEqual(now_rows[0]["policy_h"], now_rows[1]["policy_h"])
+        self.assertIn(first[0]["policy_h"], [r["policy_h"] for r in now_rows])
+        self.assertEqual(self.run_eval()["n"], 0)                # повтор на новой таблице ничего не пишет
+
+
 # ---------------------------------------------------------------- лимит и очередь
 
 class TestLimitAndBacklog(Base):
@@ -464,10 +544,10 @@ class TestWindow(Base):
 # ---------------------------------------------------------------- ротация оценок меню
 
 class TestRotation(Base):
-    def old_eval(self, var_id, var_ver, age_days=40, key="old-key", src="run"):
+    def old_eval(self, var_id, var_ver, age_days=40, key="old-key", src="run", policy_h="a" * 16):
         inp = exits_eval.market_inputs(self.root)
         return {"src": src, "key": key, "var_id": var_id, "var_ver": int(var_ver), "ord": "S", "px_mode": "fee",
-                "policy_h": "a" * 16, "cost_h": inp["cost_h"], "sim_ver": XS.SIM_VER, "t0": NOW - age_days * DAY,
+                "policy_h": policy_h, "cost_h": inp["cost_h"], "sim_ver": XS.SIM_VER, "t0": NOW - age_days * DAY,
                 "block": "0:long", "labeled_ts": NOW - age_days * DAY, "r_net": 0.1, "r_gross": 0.2, "fees_r": 0.1,
                 "mfe_r": 1.0, "mae_r": 0.1, "path_mfe_r": 1.0, "exit_reason": "end", "hold_min": 60.0, "end_ts": NOW - age_days * DAY,
                 "amb": 0, "created_ts": int(NOW - age_days * DAY)}
@@ -475,14 +555,15 @@ class TestRotation(Base):
     def test_old_menu_rows_rotated_but_versions_and_open_trials_kept(self):
         self.add_trial(var_id="L2")
         with store.tx(self.conn):
-            store2.insert_rows(self.conn, "exit_evals", [self.old_eval("L1", 1), self.old_eval("L2", 1),
-                                                         self.old_eval("X-0001", 1)], ignore_dup=True)
+            store2.insert_rows(self.conn, "exit_evals", [self.old_eval("L1", 1), self.old_eval("L1", 1, policy_h="b" * 16),
+                                                         self.old_eval("L2", 1), self.old_eval("X-0001", 1)], ignore_dup=True)
         cfg = copy.deepcopy(self.cfg)
         cfg["eval"]["keep_days_menu"] = 28
         rep = self.run_eval(cfg=cfg)
         self.assertGreaterEqual(rep["rotated"], 1)
         left = set((r["var_id"], r["var_ver"]) for r in self.evals("SELECT * FROM exit_evals WHERE key='old-key'"))
-        self.assertNotIn(("L1", 1), left)                                # меню вне испытания удалено
+        self.assertNotIn(("L1", 1), left)                                # меню вне испытания удалено (обе таблицы policy_h)
+        self.assertEqual([r for r in self.evals("SELECT * FROM exit_evals WHERE key='old-key' AND var_id='L1'")], [])
         self.assertIn(("L2", 1), left)                                   # вариант открытого испытания сохранён
         self.assertIn(("X-0001", 1), left)                               # оценка версии сохранена
 

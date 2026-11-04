@@ -201,6 +201,16 @@ class TestX1Migration(Base):
                 store2.migrate_x1(c, self.root, now=NOW)
         self.assertNotIn("exit_versions", self.names(c, "table"))
 
+    def test_exit_evals_key_includes_policy_h(self):
+        c = self.x1()
+        row = {"src": "run", "key": "k1", "var_id": "L1", "var_ver": 1, "ord": "S", "px_mode": "fee", "policy_h": "a" * 16,
+               "cost_h": "c" * 16, "sim_ver": "xs1", "t0": NOW, "block": "0:long", "labeled_ts": NOW, "amb": 0, "created_ts": NOW}
+        with store.tx(c):
+            self.assertEqual(store2.insert_rows(c, "exit_evals", [row], ignore_dup=True), 1)
+            self.assertEqual(store2.insert_rows(c, "exit_evals", [dict(row)], ignore_dup=True), 0)
+            self.assertEqual(store2.insert_rows(c, "exit_evals", [dict(row, policy_h="b" * 16)], ignore_dup=True), 1)
+        self.assertEqual(c.execute("SELECT COUNT(*) FROM exit_evals").fetchone()[0], 2)
+
     def test_not_in_labels_migrations(self):
         flat = " ".join(s for _, stmts in LS.MIGRATIONS for s in stmts)
         for t in S2.X1_TABLES:

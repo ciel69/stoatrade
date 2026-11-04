@@ -184,7 +184,7 @@ class TestFormatsConstants(unittest.TestCase):
         self.assertEqual(set(bus.PRIORITIES), {"wake", "info"})
         for t in ("plan_armed", "entry_filled", "position_closed", "kill", "exec_down", "reconcile_alert", "scanner_signal", "milestone", "error"):
             self.assertIn(t, bus.EVENT_TYPES)
-        self.assertEqual(len(bus.EVENT_TYPES), 32)   # +news_flash (быстрые новости), +service_down (WP11-B), +macro_blackout_soon (WP13a), +risk_level_changed (WP16), +control_cmd (WP12), +day_report, +day_state (WP14), +brain_wake_request (правило notify плана, 01_plan/03_brain), +rulebook_promoted, +rulebook_rollback (R2.7/R2.8)
+        self.assertEqual(len(bus.EVENT_TYPES), 34)   # +exit_policy_promoted, +exit_policy_rollback (R4.7); +news_flash (быстрые новости), +service_down (WP11-B), +macro_blackout_soon (WP13a), +risk_level_changed (WP16), +control_cmd (WP12), +day_report, +day_state (WP14), +brain_wake_request (правило notify плана, 01_plan/03_brain), +rulebook_promoted, +rulebook_rollback (R2.7/R2.8)
         self.assertEqual(bus.EVENT_TYPES["brain_wake_request"], bus.PRI_WAKE)
         self.assertEqual((bus.EVENT_TYPES["rulebook_promoted"], bus.EVENT_TYPES["rulebook_rollback"]), (bus.PRI_INFO, bus.PRI_INFO))
         self.assertEqual(bus.MAX_EVENT_BYTES, 400)

@@ -24,14 +24,24 @@
     * `block` — единица независимости `unit.block_h` часов и сторона (Requirement 4.4): `"<t0 // (block_h × 3600)>:<side>"`;
     * `path_mfe_r` — MFE пути на фиксированном горизонте `max_hold_min` от входа (признак хвоста, Requirement 6.3): свойство пути,
       одинаковое для всех вариантов;
+    * `policy_h` — хеш политики варианта; у варианта меню с `near_tp` он считается ПОСЛЕ подстановки таблицы квантилей (Requirement 5.5);
     * `cost_h` — 16 hex sha256 входов издержек `exitsim` (комиссии и проскальзывание bybit, `stop_slip_bps`, спред), `sim_ver` —
       `exitsim.SIM_VER`.
 
+Таблица `near_tp` (Requirement 5.5, свойство 17)
+
+    Шаг сам считает таблицу квантилей MFE по (вид сигнала, горизонт) для вариантов меню с компонентом `near_tp`: история — оценки
+    действующей версии по путям СТРОГО раньше окна поиска (`t0 < a`, `labeled_ts ≤ cut_ts`), уровень — `max(квантиль q, min_r)` не выше
+    верхней границы схемы (20R). Нет истории вида сигнала — строки таблицы нет и компонент для этого вида не действует (как в
+    `exitpol._near_level`). Политика варианта получает `near_tp.table` до симуляции, поэтому её `policy_h` и оценка соответствуют
+    действующей таблице; поиск читает оценки именно этого `policy_h`.
+
 Идемпотентность и пересчёт (Requirement 4.5, 4.6; свойства 12, 13)
 
-    Существующие оценки ищутся ровно по ключу строки (включая `cost_h` и `sim_ver`), поэтому повторный проход на тех же путях ничего не
-    пишет (`INSERT OR IGNORE` — только страховка), а смена `cost_h` или `sim_ver` делает старые строки невидимыми для поиска и заново
-    ставит все пути в очередь: оценки прежних значений остаются в таблице и не смешиваются с новыми.
+    Существующие оценки ищутся ровно по ключу строки (включая `policy_h`, `cost_h` и `sim_ver`), поэтому повторный проход на тех же путях
+    и той же таблице ничего не пишет (`INSERT OR IGNORE` — только страховка), а смена таблицы `near_tp`, `cost_h` или `sim_ver` делает
+    прежние строки невидимыми для читателей и заново ставит все пути в очередь: оценки прежних значений остаются в таблице и не
+    смешиваются с новыми.
 
 Лимит и очередь (Requirement 4.7)
 
@@ -62,6 +72,7 @@
 """
 import hashlib
 import json
+import math
 
 from tb.core import exec_cfg
 from tb.knowledge import rulebook_view as RV
@@ -85,6 +96,8 @@ ORDER_S, ORDER_T = "S", "T"
 PX_FEE, PX_TAKER = "fee", "taker"
 RUN_KEY_SEP = "|"
 COST_KEYS = ("fee", "maker_fee", "slip", "stop_slip_bps", "spread_bps")
+NEAR_TP_MAX_R = 20.0                      # верхняя граница near_tp.level схемы tb.exit_policy/1 (exitpol)
+CHUNK = 400                               # размер пачки ключей IN (...): предел SQLite — 999
 
 RUN_PATH_COLS = ("key", "policy_id", "policy_ver", "t0", "sym", "type", "side", "horizon", "entry_ts", "entry_px", "stop", "tick", "max_hold_min",
                  "atr5_pct", "plan", "rows", "n_rows", "end_ts", "state", "flags", "labeled_ts")
@@ -165,6 +178,136 @@ def costs_hash(costs):
     c = dict((k, _num((costs or {}).get(k))) for k in COST_KEYS)
     blob = json.dumps(c, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
+# ---------------------------------------------------------------- near_tp: таблица квантилей MFE
+
+def quantile(xs, q):
+    """Квантиль с линейной интерполяцией по отсортированным значениям (детерминированно, без статистических библиотек)."""
+    ys = sorted(float(x) for x in xs if _num(x) is not None)
+    n = len(ys)
+    if not n:
+        return None
+    if n == 1:
+        return ys[0]
+    pos = float(q) * (n - 1)
+    i = int(math.floor(pos))
+    if i >= n - 1:
+        return ys[-1]
+    return ys[i] + (ys[i + 1] - ys[i]) * (pos - i)
+
+
+def path_meta(conn, keys):
+    """(вид сигнала, горизонт) пути прогона по ключу оценки `"<key>|<policy_id>|<policy_ver>"` -> {ключ оценки: (type, horizon) | None}."""
+    out = {}
+    wanted = [str(k) for k in keys]
+    for i in range(0, len(wanted), CHUNK):
+        chunk = wanted[i:i + CHUNK]
+        raw_keys, found = [], {}
+        for k in chunk:
+            sp = split_run_key(k)
+            if sp is None:
+                out[k] = None
+            else:
+                raw_keys.append(sp[0])
+        if not raw_keys:
+            continue
+        for key, pid, pver, typ, hz in conn.execute(
+                "SELECT key, policy_id, policy_ver, type, horizon FROM run_paths WHERE key IN (%s)" % ",".join("?" * len(raw_keys)), raw_keys):
+            found[run_key(key, pid, int(pver))] = (typ, hz) if typ and hz else None
+        for k in chunk:
+            if k not in out:
+                out[k] = found.get(k)
+    return out
+
+
+def near_tp_history(conn, base, a, cut_ts, cost_h, sim_ver=None):
+    """MFE путей СТРОГО раньше окна поиска по виду сигнала и горизонту (Requirement 5.5, свойство 17).
+
+    Берутся оценки действующей версии (`base`) с её `policy_h`: путь без вида сигнала/горизонта в таблицу не входит.
+    -> {(type, horizon): [path_mfe_r, ...]}.
+    """
+    sql = ("SELECT key, path_mfe_r FROM exit_evals WHERE src=? AND var_id=? AND var_ver=? AND ord=? AND px_mode=? AND policy_h=? "
+           "AND cost_h=? AND sim_ver=? AND t0<? AND labeled_ts<=?")
+    args = (SRC_RUN, str(base["var_id"]), int(base["var_ver"]), ORDER_S, PX_FEE, str(base["policy_h"]), str(cost_h),
+            XS.SIM_VER if sim_ver is None else sim_ver, int(a), int(cut_ts))
+    raw = conn.execute(sql, args).fetchall()
+    meta = path_meta(conn, set(k for k, _mfe in raw))
+    out = {}
+    for key, mfe in raw:
+        m = meta.get(str(key))
+        v = _num(mfe)
+        if m is None or v is None:
+            continue
+        out.setdefault(m, []).append(v)
+    return out
+
+
+def near_tp_tables(hist, variants_):
+    """Таблицы `near_tp.table` вариантов по истории -> {(var_id, ver): table}; вариант без `near_tp` в ответ не входит.
+
+    Уровень — `max(квантиль q, min_r)` в R, не выше `NEAR_TP_MAX_R`; вида сигнала/горизонта нет в истории — строки таблицы нет (компонент
+    не действует, как в `exitpol._near_level`). Вариант, у которого таблица уже есть в политике, не переопределяется.
+    """
+    out = {}
+    for var in variants_:
+        nt = (var.get("policy") or {}).get("near_tp")
+        if not isinstance(nt, dict) or "table" in nt:
+            continue
+        q, min_r = _num(nt.get("q")), _num(nt.get("min_r"))
+        if q is None or min_r is None:
+            continue
+        table = {}
+        for (typ, hz) in sorted(hist, key=lambda x: (str(x[0]), str(x[1]))):
+            lvl = quantile(hist[(typ, hz)], q)
+            if lvl is None:
+                continue
+            lvl = min(max(lvl, min_r), NEAR_TP_MAX_R)
+            if lvl <= 0:
+                continue
+            table.setdefault(str(typ), {})[str(hz)] = round(lvl, 6)
+        out[(str(var["var_id"]), int(var["var_ver"]))] = table
+    return out
+
+
+def apply_near_tp(policy, table):
+    """Политика с подставленной таблицей `near_tp.table` (пустая таблица — политика без изменений)."""
+    nt = (policy or {}).get("near_tp")
+    if not table or not isinstance(nt, dict):
+        return policy
+    p = dict(policy)
+    p["near_tp"] = dict(nt, table=dict((k, dict(v)) for k, v in table.items()))
+    return p
+
+
+def with_near_tp(variant, table):
+    """Вариант с таблицей `near_tp`: политика и `policy_h` пересчитываются (пустая таблица — вариант без изменений)."""
+    if not table:
+        return variant
+    pol = apply_near_tp(variant["policy"], table)
+    return dict(variant, policy=pol, policy_h=XP.policy_hash(pol))
+
+
+def menu_with_tables(conn, menu_vars, base_variants, win, cost_h):
+    """Варианты меню с таблицами `near_tp`, посчитанными по путям строго раньше окна поиска (Requirement 5.5, свойство 17).
+
+    История — оценки действующей версии (`base_variants`, роль `active`) с `t0 < a` и `labeled_ts ≤ cut_ts`. Нет окна, действующей версии
+    или истории вида сигнала — варианты остаются без таблицы (компонент `near_tp` не действует).
+    """
+    if not menu_vars or not win:
+        return menu_vars
+    near = [v for v in menu_vars if isinstance((v.get("policy") or {}).get("near_tp"), dict)
+            and "table" not in (v["policy"] or {})["near_tp"]]
+    if not near:
+        return menu_vars
+    base = next((v for v in (base_variants or []) if v.get("role") == "active"), None)
+    if base is None:
+        return menu_vars
+    hist = near_tp_history(conn, base, win["a"], win["cut_ts"], cost_h)
+    tables = near_tp_tables(hist, near)
+    if not tables:
+        return menu_vars
+    return [with_near_tp(v, tables.get((v["var_id"], int(v["var_ver"])))) for v in menu_vars]
 
 
 def _meta_set(conn, k, v):
@@ -276,7 +419,8 @@ def _variant_from_table(conn, var_id, var_ver, floor_policy):
 
 
 def open_trial_variants(conn, cfg, floor_policy):
-    """Варианты открытых испытаний (`exit_trials.state="open"`); политика — из меню или `exit_variants`."""
+    """Варианты открытых испытаний (`exit_trials.state="open"`); политика — из `exit_variants` (запись регистрации, вместе с таблицей
+    `near_tp` и её `policy_h`), иначе из меню."""
     try:
         raw = conn.execute("SELECT DISTINCT var_id, var_ver FROM exit_trials WHERE state=? ORDER BY var_id, var_ver", ("open",)).fetchall()
     except Exception:
@@ -284,13 +428,13 @@ def open_trial_variants(conn, cfg, floor_policy):
     menu = dict(((v["var_id"], v["var_ver"]), v) for v in menu_variants(cfg, floor_policy))
     out = []
     for vid, vver in raw:
-        v = menu.get((str(vid), int(vver)))
-        if v is not None:
-            out.append(dict(v, role="trial"))
-            continue
         p = _variant_from_table(conn, str(vid), int(vver), floor_policy)
         if p is not None:
             out.append(_variant(p, vid, int(vver), "trial", floor_policy))
+            continue
+        v = menu.get((str(vid), int(vver)))
+        if v is not None:
+            out.append(dict(v, role="trial"))
     return out
 
 
@@ -423,17 +567,18 @@ def _path_data(src, row, stop_moves):
 # ---------------------------------------------------------------- существующие оценки и задачи прохода
 
 def existing(conn, src, key, cost_h, sim_ver=None):
-    """Оценки пути при текущих входах издержек и версии симулятора -> {(var_id, var_ver, ord, px_mode): amb}.
-    Строки прежних `cost_h`/`sim_ver` не видны: их значения не смешиваются с новыми (Requirement 4.5)."""
+    """Оценки пути при текущих входах издержек и версии симулятора -> {(var_id, var_ver, policy_h, ord, px_mode): amb}.
+    Строки прежних `cost_h`/`sim_ver` не видны: их значения не смешиваются с новыми (Requirement 4.5). `policy_h` в ключе: у варианта с
+    другой таблицей `near_tp` это другая политика и другая оценка (Requirement 5.5)."""
     sv = XS.SIM_VER if sim_ver is None else sim_ver
     try:
-        raw = conn.execute("SELECT var_id, var_ver, ord, px_mode, amb FROM exit_evals WHERE src=? AND key=? AND cost_h=? AND sim_ver=?",
-                           (src, key, cost_h, sv)).fetchall()
+        raw = conn.execute("SELECT var_id, var_ver, ord, px_mode, policy_h, amb FROM exit_evals "
+                           "WHERE src=? AND key=? AND cost_h=? AND sim_ver=?", (src, key, cost_h, sv)).fetchall()
     except Exception:
         return {}
     out = {}
-    for vid, vver, order, mode, amb in raw:
-        out[(str(vid), int(vver), str(order), str(mode))] = int(amb or 0)
+    for vid, vver, order, mode, ph, amb in raw:
+        out[(str(vid), int(vver), str(ph), str(order), str(mode))] = int(amb or 0)
     return out
 
 
@@ -441,10 +586,10 @@ def tasks_for(done, variants_):
     """Недостающие оценки пути: [(variant, ord, px_mode)].
 
     `S`/`fee` — всегда; `T`/`fee` — если оценка `S` была неоднозначной (`amb=1`), но строки `T` нет; `S`/`taker` — только у варианта с
-    maker-частями (пересчёт `ROBUST_COST`)."""
+    maker-частями (пересчёт `ROBUST_COST`). Ключ оценки включает `policy_h` варианта: смена таблицы `near_tp` ставит новые задачи."""
     out = []
     for v in variants_ or []:
-        k = (v["var_id"], int(v["var_ver"]))
+        k = (v["var_id"], int(v["var_ver"]), str(v["policy_h"]))
         if (k + (ORDER_S, PX_FEE)) not in done:
             out.append((v, ORDER_S, PX_FEE))
         elif done.get(k + (ORDER_S, PX_FEE)) and (k + (ORDER_T, PX_FEE)) not in done:
@@ -560,20 +705,20 @@ def rotate(conn, cfg, now, menu=None):
         open_vars = set()
     cutoff = int(now) - int(keep_days) * CL.DAY
     try:
-        raw = conn.execute("SELECT src, key, var_id, var_ver, ord, px_mode, cost_h, sim_ver FROM exit_evals WHERE created_ts < ?",
+        raw = conn.execute("SELECT src, key, var_id, var_ver, ord, px_mode, policy_h, cost_h, sim_ver FROM exit_evals WHERE created_ts < ?",
                            (cutoff,)).fetchall()
     except Exception:
         return 0
     doomed = []
-    for src, key, vid, vver, order, mode, ch, sv in raw:
+    for src, key, vid, vver, order, mode, ph, ch, sv in raw:
         k = (str(vid), int(vver))
         if k in ids and k not in open_vars:
-            doomed.append((src, key, vid, int(vver), order, mode, ch, sv))
+            doomed.append((src, key, vid, int(vver), order, mode, ph, ch, sv))
     if not doomed:
         return 0
     with LST.tx(conn):
-        conn.executemany("DELETE FROM exit_evals WHERE src=? AND key=? AND var_id=? AND var_ver=? AND ord=? AND px_mode=? AND cost_h=? AND sim_ver=?",
-                         doomed)
+        conn.executemany("DELETE FROM exit_evals WHERE src=? AND key=? AND var_id=? AND var_ver=? AND ord=? AND px_mode=? AND policy_h=? "
+                         "AND cost_h=? AND sim_ver=?", doomed)
     return len(doomed)
 
 
@@ -598,6 +743,7 @@ def eval_pass(conn, root, cfg, now, limit=None):
         raise ValueError("config/exits.json: нет unit.block_h")
     base_variants, menu_vars = variants(conn, cfg, floor_policy)
     win = window(cfg, root, now)
+    menu_vars = menu_with_tables(conn, menu_vars, base_variants, win, cost_h)
     out.update(cost_h=cost_h, window=win)
     try:
         out["rotated"] = rotate(conn, cfg, now, menu_vars)
@@ -636,7 +782,7 @@ def eval_pass(conn, root, cfg, now, limit=None):
                 continue
             rows.append(eval_row(data, variant, order, px_mode, res, cost_h, now, block_h))
             written += 1
-            k = (variant["var_id"], int(variant["var_ver"]))
+            k = (variant["var_id"], int(variant["var_ver"]), str(variant["policy_h"]))
             if order == ORDER_S and px_mode == PX_FEE and res.get("amb"):
                 if k + (ORDER_T, PX_FEE) not in done and not any(t[1] == ORDER_T and t[0] is variant for t in queue):
                     queue.append((variant, ORDER_T, PX_FEE))
