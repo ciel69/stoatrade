@@ -21,7 +21,7 @@ import time
 
 from tb import paths
 from tb.knowledge import markers as KM
-from tb.labels import capture, klines, label, policies, query, schema, store
+from tb.labels import capture, klines, label, paths as paths_mod, policies, query, schema, store
 from tb.platform import services as S
 
 EXIT_LOCKED = 2
@@ -31,6 +31,7 @@ LABEL_BUDGET_S = 45.0       # длиннее проход разметки не 
 STATS_EVERY_S = 30.0        # тяжёлые счётчики 24 ч не чаще
 DAY_S = 86400
 IDLE_S = 1.0
+PATHS_EVERY_S = 30.0        # пути прогонов и сделок: не чаще раза в 30 с (шина и окна путей меняются медленно)
 
 
 def lock_path(root=None):
@@ -119,6 +120,13 @@ class Service(object):
         self.req_samples = collections.deque()
         self.stats = {}
         self.sync_warn = store.sync_dir_warning(root)
+        # R4: пути прогонов и сделок мозга. Доля времени прохода на пути — в heartbeat (Requirement 1.7).
+        self.exits_cfg = None
+        self.t_exits_cfg = None
+        self.paths_dt = 0.0
+        self.paths_hist = collections.deque(maxlen=60)
+        self.t_paths = None
+        self.t_rotate = 0.0
 
     # ---- R2: защита базы знаний (только при маркере state/knowledge.v2; без него методы ничего не меняют)
     def _v2_check(self):
@@ -272,6 +280,47 @@ class Service(object):
                 break
         return n
 
+    def _exits_cfg(self, now):
+        """config/exits.json раз в минуту (пути включены, пока файл годен); None — файла нет или он битый."""
+        if self.t_exits_cfg is None or now - self.t_exits_cfg >= 60.0:
+            self.exits_cfg = paths_mod.load_cfg(self.root)
+            self.t_exits_cfg = now
+        return self.exits_cfg
+
+    def paths_step(self, now):
+        """Догрузка путей прогонов и пути сделок мозга (R4, задачи 8 и 9): время шага учитывается в доле прохода."""
+        t0 = self.clock()
+        try:
+            if self.t_paths is not None and now - self.t_paths < PATHS_EVERY_S:
+                return None
+            if self._restoring_check() or self.conn is None:
+                return None
+            cfg = self._exits_cfg(now)
+            if not paths_mod.enabled(cfg):
+                return None
+            self.t_paths = now
+            out = {"extend": paths_mod.extend_step(self.conn, self.root, cfg, self.fetch, now),
+                   "trade": paths_mod.trade_paths_step(self.conn, self.root, cfg, self.fetch, now)}
+            if now - self.t_rotate >= 3600.0:
+                self.t_rotate = now
+                out["rotate"] = paths_mod.rotate(self.conn, cfg, now)
+            return out
+        except klines.RateLimited:
+            self.rate_events.append(now)
+            self.pause_until = now + klines.RATE_PAUSE_S
+            self.last_error = "rate_limited"
+            self.log("labels: биржа ограничила запросы на путях (403/429), пауза %d с" % klines.RATE_PAUSE_S)
+            return None
+        except (sqlite3.Error, OSError, ValueError) as e:
+            if self._is_corrupt_v2(e):
+                self._corrupt("paths_step", e)
+                return None
+            self.last_error = type(e).__name__
+            self.log("labels: пути не обновлены (%s)" % type(e).__name__)
+            return None
+        finally:
+            self.paths_dt = self.clock() - t0
+
     def checkpoint_step(self, now):
         if self._restoring_check() or self.conn is None:
             return
@@ -319,10 +368,14 @@ class Service(object):
             warnings.append(store.LAST_ERROR)
         db_mb = query.db_mb(self.root)
         st = self.stats
+        tot_dt = sum(x[0] for x in self.paths_hist)
+        paths_share = round(sum(x[1] for x in self.paths_hist) / tot_dt, 4) if tot_dt > 0 else None
         hb = {"captured_24h": st.get("captured_24h"), "labeled_24h": st.get("labeled_24h"), "pending": st.get("pending"), "due": st.get("due"),
               "failed_24h": st.get("failed_24h"), "no_data_24h": st.get("no_data_24h"), "rate_limited_24h": len(self.rate_events), "req_per_min": rpm,
               "bad_lines": self.bad_lines, "last_error": self.last_error or store.LAST_ERROR, "db_mb": db_mb,
-              "missing_share_24h": st.get("missing_share_24h"), "warnings": warnings, "enabled": bool(self.cfg.get("enabled", True))}
+              "missing_share_24h": st.get("missing_share_24h"), "warnings": warnings, "enabled": bool(self.cfg.get("enabled", True)),
+              "paths_share": paths_share, "paths_partial": st.get("paths_partial"), "paths_complete": st.get("paths_complete"),
+              "trade_paths": st.get("trade_paths"), "trade_path_missing": st.get("trade_path_missing")}
         if self.v2:
             hb["v2"] = True
             hb["db_state"] = self.db_state
@@ -331,11 +384,16 @@ class Service(object):
     def tick(self, now=None):
         now = self.clock() if now is None else now
         n = 0
+        t_tick = self.clock()
+        self.paths_dt = 0.0
         self._v2_check()
         if self.cfg.get("enabled", True) and not self._restoring_check() and self._ensure_conn():
             self.capture_step(now)
             n = self.label_step(now)
+            self.paths_step(now)
             self.checkpoint_step(now)
+        if self.paths_dt or self.paths_hist:
+            self.paths_hist.append((self.clock() - t_tick, self.paths_dt))
         self.heartbeat(now)
         return n
 

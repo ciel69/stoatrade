@@ -1,4 +1,4 @@
-"""`./tb labels <команда>`: status | stats | coverage | show KEY | backfill --since D | rerun --policy ID --since D | backup | verify (R1, Requirements 12.5, 13).
+"""`./tb labels <команда>`: status | stats | coverage | show KEY | backfill --since D | rerun --policy ID --since D | paths-backfill --days N | backup | verify (R1, Requirements 12.5, 13; R4 — paths-backfill).
 
 Вывод: JSON одной строкой (--text: кратко для человека). Коды: 0 успех; 1 - нет ключа (show), нарушения (verify), доля пустых признаков выше порога (coverage),
 нет базы (show, verify, backup); 2 - ошибка использования или реестра политик.
@@ -19,7 +19,7 @@ import time
 from tb import paths
 from tb.knowledge import markers as KM
 from tb.knowledge import store2
-from tb.labels import capture, label, policies, query, schema, store
+from tb.labels import capture, klines, label, paths as paths_mod, policies, query, schema, store
 
 RESTORING_MSG = "база знаний восстанавливается (runtime/knowledge.restoring): команда отклонена, повторите после восстановления"
 
@@ -386,6 +386,35 @@ class _writer(object):
         return False
 
 
+def cmd_paths_backfill(a, root):
+    """Дописать run_paths для уже размеченных прогонов за N суток (R4, Requirement 1.4): полное окно сразу, policy_runs не меняются."""
+    if a.days is None or int(a.days) < 1:
+        _err("--days: ожидается целое > 0")
+        return 2
+    if KM.restoring(root):
+        _err(RESTORING_MSG)
+        return 1
+    cfg = capture.load_cfg(root)
+    limiter = klines.Limiter(float(cfg.get("max_rps", 5)))
+    now_s = time.time()
+
+    def fetch(sym, interval, start_s, end_s):
+        return klines.fetch(sym, interval, start_s, end_s, limiter, now_s=now_s)
+    try:
+        with _writer(root) as v2:
+            conn = store.open_rw(root)
+            try:
+                rep = paths_mod.backfill(conn, root, int(a.days), fetch, now_s, stop=(lambda: KM.restoring(root)) if v2 else None)
+            finally:
+                conn.close()
+    except klines.RateLimited:
+        _err("биржа ограничила запросы (403/429): повторите команду позже")
+        return 1
+    _out(rep, a.text, ["paths-backfill за %s суток: просмотрено %s, записано %s, уже было %s, ошибок %s" % (
+        a.days, rep["scanned"], rep["written"], rep["skipped"], rep["errors"])])
+    return 0
+
+
 def cmd_backup(a, root):
     if KM.restoring(root):
         _err(RESTORING_MSG)
@@ -451,6 +480,9 @@ def build_parser():
     rr.add_argument("--policy", required=True)
     rr.add_argument("--since", required=True, help="YYYY-MM-DD (UTC)")
     rr.add_argument("--text", action="store_true")
+    pb = sub.add_parser("paths-backfill", help="дописать минутные пути прогонов (run_paths) за N суток полным окном, не меняя policy_runs")
+    pb.add_argument("--days", type=int, required=True, help="глубина по t0, суток (UTC)")
+    pb.add_argument("--text", action="store_true")
     bk = sub.add_parser("backup", help="копия базы state/backups/knowledge-YYYYMMDD.sqlite без остановки сервиса (в режиме v2: проверенная knowledge-<время>-owner.sqlite)")
     bk.add_argument("--text", action="store_true")
     vf = sub.add_parser("verify", help="integrity_check и полнота разметки; код 0 только при нуле нарушений")
@@ -459,7 +491,7 @@ def build_parser():
 
 
 HANDLERS = {"status": cmd_status, "stats": cmd_stats, "coverage": cmd_coverage, "show": cmd_show, "backfill": cmd_backfill, "rerun": cmd_rerun, "backup": cmd_backup,
-            "verify": cmd_verify}
+            "verify": cmd_verify, "paths-backfill": cmd_paths_backfill}
 
 
 def main(argv, root=None):

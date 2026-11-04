@@ -58,6 +58,7 @@ V2 = {
     "knowledge": "tb.knowledge.cli",   # база знаний v2 (R2.9a): verify|backup|restore|stats|disable-v2|migrate-v2a
     "rulebook": "tb.knowledge.rulebook_cli",   # rulebook цикла обучения (R2.3, R2.8): list|show|verify|disable|disable-all|apply|unblock
     "learn": "tb.knowledge.learn_cli",         # цикл обучения (R2): promotion [auto|off]
+    "exits": "tb.knowledge.exits_cli",         # политика выхода (R4): after — путь после закрытия (R4.2)
     "risk": "tb.control.risk_cmd",  # уровни риска (WP16): risk level show|set|list|check, risk init-key
     "notify": "tb.lifecycle.notify_cli",  # уведомления ОС: status|on|off|set|test (WP-N)
     "setup": "tb.setup_cli",        # первый запуск и помощник настройки: среда, зависимости, ключи, токены, LLM (вопросы только в терминале)
@@ -96,10 +97,11 @@ USAGE = """использование: ./tb <группа> <команда> [а�
   llm <providers|check [--live]|usage [--days N] [--by profile|provider|model|role]|presets|provider add|update|remove|enable|disable|model set|remove|key set|status|clear>   слой LLM: провайдеры, шаблоны, ключи (скрытый ввод), проверка (--live: живой запрос), расход
   risk level <show|list|check [--apply]|set N --confirm "..."> | risk init-key   уровни риска 1-5 (WP16; set и init-key только владелец в Terminal)
   memory <similar|stats|add|show|sync|migrate|coverage|verify|review-queue|review|lesson|backtest|compare> ...   память случаев: похожие ситуации, уроки-гипотезы, ретро-проверка, доля пустых признаков (WP15a, WP15b, R1)
-  labels <status|stats [--by policy|type]|coverage|show KEY|backfill --since D|rerun --policy ID --since D|backup|verify> [--text]   фабрика меток и теневые политики (R1): backfill и rerun только ставят сигналы в очередь, размечает сервис labels
+  labels <status|stats [--by policy|type]|coverage|show KEY|backfill --since D|rerun --policy ID --since D|paths-backfill --days N|backup|verify> [--text]   фабрика меток и теневые политики (R1): backfill и rerun только ставят сигналы в очередь, размечает сервис labels; paths-backfill дописывает минутные пути прогонов (R4)
   knowledge <verify [--quick]|backup|restore [--from FILE]|stats|disable-v2|migrate-v2a> [--text]   база знаний v2 (R2): цепочки и целостность, проверенные копии, восстановление по протоколу (docs/RUNBOOK.md)
   rulebook <list|show [R-NNNN|RL0001]|verify|disable RULE|disable-all|apply on|off|unblock BLOCK_H> [--text]   rulebook цикла обучения (R2): версии, правила, режим применения, проверка цепочки; аварийные действия владельца (необязательные)
   learn promotion [auto|off] [--text]   цикл обучения (R2): режим автопродвижения; off — аварийная остановка продвижения
+  exits after [--mode paper|testnet|live] [--days N] [--text]   политика выхода (R4): путь после закрытия — ход после выхода и достижение t1 по причинам (только чтение)
   day <status|list|report [ID]|checklist|preflight> [--json]   жизненный цикл дня: состояние, итоги, сухой прогон чек-листа закрытия, preflight (WP14; только чтение)
   notify <status|on|off|set КАТЕГОРИЯ on|off|set quiet HH:MM-HH:MM|set quiet off|test>   уведомления ОС: мастер, категории, тихие часы (docs/NOTIFICATIONS.md)
   control <token new|status|gates|audit|cmd|run>   плоскость управления: ключ, токен входа, гейты live, аудит, сервис ctl (WP12)

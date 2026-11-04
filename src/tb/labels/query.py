@@ -10,6 +10,7 @@ import datetime
 import json
 import math
 import os
+import sqlite3
 
 from tb.core import expstats
 from tb.labels import capture, policies, schema, store
@@ -161,6 +162,14 @@ def heartbeat_stats(conn, now_s, coverage_fields=None):
            "pending": one("SELECT COUNT(*) FROM signals WHERE status=?", schema.PENDING),
            "due": one("SELECT COUNT(*) FROM signals WHERE status=? AND mature_ts<=? AND next_try_ts<=?", schema.PENDING, int(now_s), int(now_s))}
     out["missing_share_24h"] = _missing_share(conn, cut, coverage_fields)
+    try:                                   # R4: пути прогонов и сделок мозга (таблицы схемы v2)
+        out["paths_partial"] = one("SELECT COUNT(*) FROM run_paths WHERE state=?", schema.PATH_PARTIAL)
+        out["paths_complete"] = one("SELECT COUNT(*) FROM run_paths WHERE state=?", schema.PATH_COMPLETE)
+        out["trade_paths"] = one("SELECT COUNT(*) FROM trade_paths")
+        row = conn.execute("SELECT v FROM meta WHERE k='trade_path_missing'").fetchone()
+        out["trade_path_missing"] = int(row[0]) if row and row[0] is not None else 0
+    except (sqlite3.Error, ValueError, TypeError):
+        pass
     return out
 
 
