@@ -208,7 +208,8 @@ class TestReviewWrite(MemGw):
         det = "потеряли 12.5 USDT"
         self.w(dict(REV, alternative={"action": "wait_confirm", "detail": det}))
         raw = read_text(paths.state("gateway_audit.jsonl", root=self.root))
-        self.assertNotIn("12.5", raw)
+        self.assertNotIn("USDT", raw)          # не число: «12.5» совпадало с цифрами метки времени `t` и делало тест случайно красным
+        self.assertNotIn("потеряли", raw)
 
 
 class TestRead(MemGw):
