@@ -748,7 +748,8 @@ def _rule_gate(ctx, a, plan):
     try:
         return brief_mod.cands_mod.rule_check(ctx.root, plan.get("symbol"), plan.get("side"), _rule_event_seq(ctx), ctx.now)
     except Exception:          # применение правил не должно ломать подачу плана: сбой = базовое поведение
-        return {"view": None, "event": None, "res": {"ok": True, "fail": None, "hits": [], "eval": [], "missing": [], "blocked": [], "apply": False}}
+        return {"view": None, "event": None, "res": {"ok": True, "fail": None, "hits": [], "eval": [], "missing": [], "blocked": [], "apply": False},
+                "event_why": "no_event", "event_kind": None}
 
 
 def _rule_eval(ctx, a, chk, resp):
@@ -762,7 +763,8 @@ def _rule_eval(ctx, a, chk, resp):
             sb = brief_mod.load_saved(a["brief_id"], root=ctx.root)
             cok = brief_mod.cands_mod.ok_before_rules((sb or {}).get("cands"))
         basis = RV.rule_eval_fields(chk.get("view"), chk.get("res"), {"role": _rule_role(ctx), "cands_ok_n": cok, "event": chk.get("event"),
-                                                                      "plan": pid if isinstance(pid, str) else None})
+                                                                      "plan": pid if isinstance(pid, str) else None,
+                                                                      "event_why": chk.get("event_why"), "event_kind": chk.get("event_kind")})
         res = chk.get("res") or {}
         code = learn_rules.plan_code(res["hits"][0]) if res.get("fail") and res.get("hits") else "OK"
         rec = {"actor": ctx.agent.actor, "kind": "note", "what": "rule_eval", "why": "правила rulebook на подаче плана", "basis": basis,

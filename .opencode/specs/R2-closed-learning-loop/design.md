@@ -68,6 +68,14 @@
 
 - **Маркер `state/memory.store` вместо ключа в `config/memory.json`.** Первая реализация переключала `store` в `config/memory.json` — общем конфиге репозитория, который около 15 тестовых наборов копируют во временные корни. После живого переключения тесты получали `store=sqlite` во временном корне без базы и падали (`cases.jsonl` не найден, verify false); на чистой установке такой конфиг тоже был бы неверен. `store` — свойство данных корня. Правило `memstore.mode(root)` (`mode_info` — с источником): есть маркер корня → его значение (`marker`); маркера нет: корень проекта (`paths.DEFAULT_ROOT`; `TB_ROOT` временного корня — не корень проекта) → `store` из `config/memory.json` проекта, если там `sqlite` (`config-compat`, переходное, жёлтый `STORE_IN_CONFIG`), иначе и для любого другого корня → `jsonl` (`default`). Маркер пишут атомарно `migrate` (в той же точке, где раньше писался `store`; откат до COMMIT возвращает прежнее состояние маркера), `export-jsonl` и `./tb knowledge store-marker` (маркер из текущего действующего значения, идемпотентно; для живой платформы, переключённой до маркера). `memory.cfg.set_store` удалена: `config/` командами переноса не пишется. Ключ `store` в `config/memory.json` остаётся только как совместимость для корня проекта; после `store-marker` его возвращают к `jsonl`.
 
+### 2026-11-04, при реализации: причины `RULES_NO_EVENT` и покрытие правилами
+
+- **Найдено на живых данных.** `RULES_NO_EVENT` горел жёлтым при 29% записей «без события», и все они — `entry_scout`: событие у решения было, но вида вне области правил (`patrol` — плановый обход, `book_wall`) или `hot_enter` старше `event_max_age_s` (900 с) к подаче. `resolve_event` во всех случаях возвращал `None`, и сбой («события нет») смешивался с нормой («правило на такой вход не распространяется»).
+- **Причина в записи.** `rulebook_view.resolve_event_why` — то же решение о событии, что `resolve_event`, и причина `ok | no_event | out_of_scope | stale` с видом события. Событие задания `entry_scout` для причины `stale` ищется в окне `event_max_age_s × 24`; без `event_seq` (`chat`) причина — по последнему `scanner_signal` монеты в окне порога (вид вне области → `out_of_scope`, нет → `no_event`). Поля `basis.event_why` и `basis.event_kind` записи `rule_eval` пишет шлюз (`cands.rule_check` → `h_submit`); применение правил не меняется.
+- **Колонки.** `rule_evals.event_why`, `rule_evals.event_kind` — миграция `store2.migrate_re_why` с ключом `meta.knowledge_re_why_ver` (`ALTER TABLE ADD COLUMN`, идемпотентно), зовёт шаг `rule_eval_import`; сбой миграции — перенос без колонок. Строки до миграции — `event_why = NULL`, считаются как прежний `no_event`.
+- **Статус.** Числитель доли `RULES_NO_EVENT` — `no_event + stale` (+ прежние строки с `no_event = 1`), знаменатель и порог `feat_missing_max` прежние (`rulebook_view.rule_eval_why`, общий для цикла и вкладки «Память»).
+- **Покрытие правилами** (справочно, без цвета): доля решений `entry_scout`/`chat` с известной причиной, у которых событие вне области правил, по видам события за 7 суток. Видно строкой `./tb status` («покрытие правилами (7 сут): вне области правил: N% (patrol …)»), полем `coverage {window_days, n, in_scope, out_of_scope, share, by_kind}` операции `memory_rules` и строкой блока «Правила сейчас» с подсказкой: правила проверены только на видах сигналов политики и на остальные входы не распространяются.
+
 ## Диагноз R2.0
 
 Снято 2026-11-03 на ветке `feat/R1-label-factory`, только чтение. Метод: одноразовые скрипты (вне репозитория) загружали `cases.load`, `cfg.load`, `lessons.pool`, `agg.closed_r`, `lessons.propose` на боевом состоянии `state/` без записи; повторяет их по данным `./tb memory lesson diagnose` (задача 1). Числа проверены повторным прогоном.
@@ -600,7 +608,7 @@ CREATE TABLE learn_events(seq INTEGER PRIMARY KEY, ts TEXT NOT NULL, step TEXT N
 | `DB_CORRUPT` | событие, статус | `learn_events`, красный | повреждение базы по `store2.is_corruption` (`DbCorruptError` в коде); `IntegrityError`, `ProgrammingError`, `database is locked` — не повреждение | — |
 | `SRC_CORRUPT` | событие | `learn_events` | копирование повреждённой базы отклонено | — |
 | `WATCH_STALE` | статус | красный | цикл работает дольше `lease_h`, сторож не отработал | — |
-| `RULES_NO_EVENT` | статус | жёлтый | доля решений без события > 0.2 за 7 суток | — |
+| `RULES_NO_EVENT` | статус | жёлтый | доля решений без события (`event_why` `no_event`/`stale`; `out_of_scope` не входит) > 0.2 за 7 суток | — |
 | `WARMUP_STUCK` | статус | жёлтый | прогрев не завершён 21 сутки | — |
 | `NOT_READY` | статус | `./tb status` | таблиц цикла нет | — |
 | `PLATFORM_RUNNING` | ответ команды | вывод CLI (вторая итерация) | миграция при запущенной платформе | — |

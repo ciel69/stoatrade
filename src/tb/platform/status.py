@@ -130,8 +130,25 @@ def learnloop_block(hb, now, running=True):
     reasons = [it["text"] for it in items]
     color = "red" if any(c in LEARN_RED for c in codes) else ("yellow" if items else "green")
     rd = hb.get("ready") if isinstance(hb.get("ready"), dict) else None
+    ne = hb.get("no_event") if isinstance(hb.get("no_event"), dict) else {}
+    cov = ne.get("coverage") if isinstance(ne.get("coverage"), dict) else None
     return {"state": hb.get("state"), "color": color, "codes": codes, "reasons": reasons, "items": items, "mode": hb.get("mode"),
-            "ready": rd, "stubs": hb.get("stubs") or [], "day": hb.get("day"), "last_ok_ts": ok_ts}
+            "ready": rd, "stubs": hb.get("stubs") or [], "day": hb.get("day"), "last_ok_ts": ok_ts, "coverage": cov}
+
+
+def coverage_line(lb):
+    """Информационная строка ./tb status (не влияет на цвет): доля решений entry_scout/chat вне области правил за 7 суток по видам события
+    (rulebook_view.coverage_txt). Нет данных -> None."""
+    cov = (lb or {}).get("coverage")
+    if not cov:
+        return None
+    try:
+        from tb.knowledge import rulebook_view as RV
+        txt = RV.coverage_txt(cov)
+    except Exception:  # noqa: BLE001 - строка справочная
+        return None
+    return ("покрытие правилами (7 сут): %s; правила проверены только на видах сигналов политики, на остальные входы не распространяются" % txt
+            if txt else None)
 
 
 def learnloop_line(lb):
@@ -302,6 +319,9 @@ def format_text(st):
             {"green": "ок", "yellow": "жёлтый", "red": "КРАСНЫЙ"}.get(kb.get("color"), kb.get("color")), kb["store"], kb.get("store_src") or "-"))
     if st.get("learnloop"):
         out.append(learnloop_line(st["learnloop"]))
+        cl = coverage_line(st["learnloop"])
+        if cl:
+            out.append(cl)
     for n, u in st["links"].items():
         out.append("ссылка %s: %s" % (n, u))
     return "\n".join(out)

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import {
-  FEAT_HINT, MemoryBlockState, NO_EVENT_HINT, RULE_KIND_TEXT, SMALL_HINT, SMALL_TEXT, VERSION_HINT, applyView, dateText, noEventText, numView, ruleCountText, ruleHint, ruleText, versionReasonWord,
+  COVERAGE_HINT, FEAT_HINT, MemoryBlockState, NO_EVENT_HINT, RULE_KIND_TEXT, SMALL_HINT, SMALL_TEXT, VERSION_HINT, applyView, coverageText, dateText, noEventText, numView, ruleCountText, ruleHint, ruleText, versionReasonWord,
   waitHint, waitTermText, waitWord, type BlockState, type RuleBrief, type RulesDetail,
 } from '@/entities/memory'
 import { UiChip, UiTip } from '@/shared/ui'
@@ -22,6 +22,7 @@ const feat = computed(() => (props.detail?.feat_missing ? numView(props.detail.f
 const featByRule = computed(() => (props.detail?.feat_missing?.by_rule ?? []).filter((r) => r.n > 0).slice(0, 6))
 const noEv = computed(() => (props.detail?.no_event ? numView(props.detail.no_event, 'pct') : null))
 const days = computed(() => props.detail?.no_event?.window_days ?? props.detail?.feat_missing?.window_days ?? 7)
+const cov = computed(() => coverageText(props.detail?.coverage))
 </script>
 
 <template>
@@ -96,6 +97,7 @@ const days = computed(() => props.detail?.no_event?.window_days ?? props.detail?
           </dd>
         </div>
       </dl>
+      <p v-if="cov" class="cov"><UiTip dotted :tip="COVERAGE_HINT">{{ cov }}</UiTip> <span class="n">из {{ detail?.coverage?.n }} решений</span></p>
 
       <details v-if="versions.length" class="hist">
         <summary>История версий <span class="cnt">{{ detail?.versions_total ?? versions.length }}</span></summary>
@@ -152,6 +154,7 @@ const days = computed(() => props.detail?.no_event?.window_days ?? props.detail?
 .val.warn, .note.warn { color: var(--warn); }
 .n { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .note { flex-basis: 100%; margin: 0; font-size: 11px; line-height: 1.45; color: var(--muted); }
+.cov { margin: 0; font-size: 12px; line-height: 1.5; color: var(--muted); overflow-wrap: anywhere; }
 .by { flex-basis: 100%; list-style: none; margin: var(--space-1) 0 0; padding: 0; display: grid; gap: 2px; font-size: 12px; font-variant-numeric: tabular-nums; }
 
 .hist summary { cursor: pointer; min-height: 32px; display: flex; align-items: center; font-size: 13px; font-weight: 600; border-radius: var(--radius-sm); }

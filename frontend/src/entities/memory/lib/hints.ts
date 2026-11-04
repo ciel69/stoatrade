@@ -299,7 +299,27 @@ export const FEAT_HINT: TipContent = {
 }
 export const NO_EVENT_HINT: TipContent = {
   title: 'Решения без события',
-  text: 'Доля решений мозга, к которым не нашлось рыночного события для проверки правил. Если доля выше 20%, платформа подсвечивает это жёлтым: правила работают вслепую.',
+  text: 'Доля решений мозга, к которым не нашлось рыночного события для проверки правил или событие запоздало. Если доля выше 20%, платформа подсвечивает это жёлтым: правила работают вслепую. Входы на сигналах вне области правил сюда не входят.',
+}
+
+const KIND_WORD: Record<string, string> = {
+  patrol: 'плановый обход', book_wall: 'стена в стакане', hot_enter: 'монета стала горячей', range_5m: 'размах за 5 минут', turnover_surge: 'всплеск оборота',
+  oi_spike: 'всплеск открытого интереса', liq_cascade: 'каскад ликвидаций',
+}
+/** Вид сигнала по-русски; незнакомый — как есть (это имя вида сканера, не код ошибки). */
+export const kindWord = (k: string): string => KIND_WORD[k] ?? k
+
+export const COVERAGE_HINT: TipContent = {
+  title: 'Вне области правил',
+  text: 'Доля решений мозга на сигналах, для которых правила не проверялись: правила проверены только на видах сигналов политики проверки и на остальные входы не распространяются. Это не сбой и цветом не подсвечивается.',
+}
+/** Строка покрытия: «вне области правил: 31% (плановый обход 20, стена в стакане 5)»; нет решений -> ''. */
+export function coverageText(c: RulesDetail['coverage'] | null | undefined): string {
+  const v = c?.share?.v
+  if (!c || !fin(c.n) || c.n <= 0 || !fin(v)) return ''
+  const kinds = arr<{ kind: string; n: number }>(c.by_kind).filter((k) => typeof k?.kind === 'string' && fin(k.n) && k.n > 0).slice(0, 4)
+  const det = kinds.map((k) => `${kindWord(k.kind)} ${k.n}`).join(', ')
+  return `вне области правил: ${Math.round(v * 100)}%${det ? ` (${det})` : ''}`
 }
 export const noEventText = (yellow: boolean, days: number): string => (yellow ? `Больше 20% за ${days} ${plural(days, ['день', 'дня', 'дней'])}: правила часто проверяются вслепую.` : `За ${days} ${plural(days, ['день', 'дня', 'дней'])}, порог 20%.`)
 

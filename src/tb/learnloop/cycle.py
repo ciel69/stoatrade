@@ -289,8 +289,10 @@ def rule_eval_rows(rec):
     es = es if isinstance(es, int) and not isinstance(es, bool) else None
     t = rec.get("t")
     ts = int(t) if isinstance(t, (int, float)) and not isinstance(t, bool) else 0
+    why = b.get("event_why") if b.get("event_why") in RV.EVENT_WHY else None
     common = {"rec_seq": int(rec["seq"]), "ts": ts, "role": _s(b.get("role"), 24), "event_seq": es, "no_event": 1 if es is None else 0,
-              "rulebook_ver": _s(b.get("rulebook_ver"), 16), "plan": _s(b.get("plan") or rec.get("plan"), 64)}
+              "rulebook_ver": _s(b.get("rulebook_ver"), 16), "plan": _s(b.get("plan") or rec.get("plan"), 64),
+              "event_why": why, "event_kind": _s(b.get("event_kind"), 24)}
     rows = [dict(common, rule_id="", hit=1 if hits else 0, evaluated=1 if evals else 0, missing=1 if miss else 0)]
     for rid in sorted(hits | evals | miss):
         rows.append(dict(common, rule_id=rid[:32], hit=1 if rid in hits else 0, evaluated=1 if rid in evals else 0, missing=1 if rid in miss else 0))
@@ -303,6 +305,14 @@ def import_rule_evals(conn, root):
     cur = get_cursor(conn)
     recs, newc = read_rule_evals(root, cur)
     rows = [r for rec in recs for r in rule_eval_rows(rec)]
+    try:
+        why_ok = store2.migrate_re_why(conn) >= S2.RE_WHY_VER and store2.has_re_why(conn)
+    except store2.KnowledgeMigrationError as e:
+        if store2.is_corruption(e):
+            raise
+        why_ok = False                         # колонки не добавлены: строки без причины (как прежде), перенос не останавливается
+    if not why_ok:
+        rows = [dict((k, v) for k, v in r.items() if k not in ("event_why", "event_kind")) for r in rows]
     n = 0
     if rows or newc != cur:
         with LST.tx(conn):
@@ -312,12 +322,16 @@ def import_rule_evals(conn, root):
     return {"code": "OK", "records": len(recs), "rows": n, "cursor": newc}
 
 
-def no_event_share(conn, now, window_s=NO_EVENT_WINDOW_S):
-    """Доля записей rule_eval без события за окно (строки rule_id="") и доля строк правил с feat_missing. -> (n, share|None, missing_share|None)."""
+def no_event_share(conn, now, window_s=NO_EVENT_WINDOW_S, detail=False):
+    """Доля записей rule_eval без события за окно (строки rule_id="") и доля строк правил с feat_missing. -> (n, share|None, missing_share|None)
+    (detail=True — четвёртым элементом rulebook_view.rule_eval_why). Без события — причины no_event и stale (сбой или запаздывание) и прежние
+    строки без event_why с no_event=1; событие вне области правил (out_of_scope) — норма и в долю не входит."""
     t0 = int(now) - int(window_s)
-    n, ne = conn.execute("SELECT COUNT(*), SUM(no_event) FROM rule_evals WHERE rule_id='' AND ts>=?", (t0,)).fetchone()
+    w = RV.rule_eval_why(conn, now, window_s)
+    n = w["n"]
     m, mm = conn.execute("SELECT COUNT(*), SUM(missing) FROM rule_evals WHERE rule_id<>'' AND ts>=?", (t0,)).fetchone()
-    return int(n or 0), (float(ne or 0) / n if n else None), (float(mm or 0) / m if m else None)
+    out = (int(n or 0), (float(w["fail"]) / n if n else None), (float(mm or 0) / m if m else None))
+    return out + (w,) if detail else out
 
 
 # ---------------------------------------------------------------- учёт суток
@@ -567,11 +581,13 @@ class Cycle(object):
         cfg = self.cfg
         codes, reasons = [], []
         try:
-            n, share, miss = no_event_share(conn, now)
-            self.no_event = {"n": n, "share": None if share is None else round(share, 4), "missing_share": None if miss is None else round(miss, 4)}
+            n, share, miss, w = no_event_share(conn, now, detail=True)
+            self.no_event = {"n": n, "share": None if share is None else round(share, 4), "missing_share": None if miss is None else round(miss, 4),
+                             "why": w["why"], "coverage": w["coverage"]}
             if share is not None and share > float(cfg["apply"]["feat_missing_max"]):
                 codes.append("RULES_NO_EVENT")
-                reasons.append("цикл обучения: решений без события %.0f%% за 7 суток (RULES_NO_EVENT): правила к ним не применяются" % (share * 100))
+                reasons.append("цикл обучения: решений без события или с запоздавшим событием %.0f%% за 7 суток (RULES_NO_EVENT): правила к ним не "
+                               "применяются" % (share * 100))
         except Exception:  # noqa: BLE001
             pass
         try:

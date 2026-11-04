@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  FUNNEL_HINTS, SMALL_TEXT, applyView, blockState, condRu, dateText, ruleText, effectHint, effectView, expiryHint, expiryText, lessonStatusHint, lessonStatusWord, lessonText, normalizeDetail, numView,
+  FUNNEL_HINTS, SMALL_TEXT, applyView, blockState, condRu, coverageText, dateText, ruleText, effectHint, effectView, expiryHint, expiryText, lessonStatusHint, lessonStatusWord, lessonText, normalizeDetail, numView,
   pathLabel, pathSteps, reasonWord, ruleHint, ruleStatusWord, spanText, srcHint, srcWord, stateText, waitHint, waitTermText, waitWord,
 } from './hints'
 import type { PathRow } from '../model/types'
@@ -100,6 +100,19 @@ describe('правила', () => {
     expect(reasonWord('ROLLBACK')).toMatch(/откат/)
     expect(reasonWord('SOMETHING_NEW')).toBe('по служебной причине')
     expect(ruleHint({ rule_id: 'RL0001', status: 'disabled', reason_code: 'OWNER_DISABLE', cond_txt: 'ночь', ver_in: 'RV2' }).rows).toContainEqual({ label: 'Причина', value: 'отключил владелец' })
+  })
+})
+
+describe('покрытие правилами', () => {
+  it('доля вне области по видам сигналов, без сырых кодов', () => {
+    const c = { window_days: 7, n: 40, in_scope: 28, out_of_scope: 12, share: { v: 0.3, n: 40, small: false }, by_kind: [{ kind: 'patrol', n: 9 }, { kind: 'book_wall', n: 3 }] }
+    const t = coverageText(c)
+    expect(t).toBe('вне области правил: 30% (плановый обход 9, стена в стакане 3)')
+    expect(t).not.toMatch(RAW)
+  })
+  it('нет решений — пустая строка', () => {
+    expect(coverageText(undefined)).toBe('')
+    expect(coverageText({ window_days: 7, n: 0, in_scope: 0, out_of_scope: 0, share: { v: null, n: 0, small: true }, by_kind: [] })).toBe('')
   })
 })
 

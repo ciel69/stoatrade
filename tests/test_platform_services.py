@@ -88,6 +88,15 @@ class TestStatusBlock(unittest.TestCase):
         lb = ST.learnloop_block(self.hb(last_ok_ts=None, run_start=self.NOW - 3 * 3600), self.NOW)
         self.assertIn("STALE", lb["codes"])
 
+    def test_coverage_line_no_color(self):
+        """Покрытие правилами — справочная строка ./tb status, цвет не меняет."""
+        cov = {"n": 40, "in_scope": 28, "out_of_scope": 12, "share": 0.3, "by_kind": {"patrol": 9, "book_wall": 3}}
+        lb = ST.learnloop_block(self.hb(no_event={"n": 40, "share": 0.05, "coverage": cov}), self.NOW)
+        self.assertEqual(lb["color"], "green")
+        line = ST.coverage_line(lb)
+        self.assertIn("вне области правил: 30% (patrol 9, book_wall 3) из 40 решений", line)
+        self.assertIsNone(ST.coverage_line(ST.learnloop_block(self.hb(), self.NOW)))
+
     def test_off(self):
         lb = ST.learnloop_block({"enabled": False, "state": "disabled", "conf_errors": ["E_CONF:nofile"]}, self.NOW)
         self.assertEqual((lb["state"], lb["color"], lb["reasons"]), ("off", "off", []))

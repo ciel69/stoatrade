@@ -157,6 +157,18 @@ export interface NoEvent extends Num {
   window_days: number
   threshold: number
   yellow: boolean
+  /** Счёт причин за окно: ok, no_event, out_of_scope, stale, legacy (записи до учёта причин). В долю входят no_event и stale. */
+  why?: Record<string, number>
+}
+
+/** Покрытие правилами (справочно, без цвета): решения entry_scout/chat вне области правил (вид события вне видов политики). */
+export interface Coverage {
+  window_days: number
+  n: number
+  in_scope: number
+  out_of_scope: number
+  share: Num
+  by_kind: Array<{ kind: string; n: number }>
 }
 
 export interface RulesDetail extends Envelope {
@@ -171,6 +183,7 @@ export interface RulesDetail extends Envelope {
   rules_total?: number
   feat_missing?: FeatMissing
   no_event?: NoEvent
+  coverage?: Coverage
 }
 
 // ---------------------------------------------------------------- memory_path
