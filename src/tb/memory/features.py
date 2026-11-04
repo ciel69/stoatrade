@@ -9,6 +9,7 @@ import re
 import time
 
 from tb.core import plan_schema
+from tb.logic.learn_cond import CM_RULE_FEATURES
 from tb.memory import cases, privacy
 
 CTX_NUM = ("range_5m_pct", "range_15m_pct", "ret_5m_pct", "turn_surge_5m", "chg_24h_pct", "spread_bps", "funding_pct")
@@ -274,15 +275,18 @@ def _cand_side(cand):
     return s if s in ("long", "short") else None
 
 
-def rule_features(event, cand, cfg):
-    """Девять признаков правил (tb.logic.learn_cond.RULE_FEATURES) + RULE_SCOPE_KEYS -> {имя: значение|None}. Одна функция для меток и мозга.
+def rule_features(event, cand, cfg, cm=None):
+    """Признаки правил (tb.logic.learn_cond.RULE_FEATURES) + RULE_SCOPE_KEYS -> {имя: значение|None}. Одна функция для меток и мозга.
 
     event — см. rule_event (None/не scanner_signal -> все признаки события None); cand — кандидат, план или прогон ({"side"} или строка стороны);
     cfg — config/memory.json. Числа только из полей события (spread_bps — только d.spread_bps, не struct.sp); coin_class = classify_coin(sym, cfg,
-    turn_24h_musd × 1e6), а монета вне справочника без оборота -> None (не unknown); utc_session по времени события; side_rel = with_dir|against_dir|None."""
+    turn_24h_musd × 1e6), а монета вне справочника без оборота -> None (не unknown); utc_session по времени события; side_rel = with_dir|against_dir|None.
+    R1.7 (Requirement 15.2): признаки cm_* — из аргумента cm (путь мозга и шлюза: tb.core.cmktdoc.features_at(...)["cm"]) или, если cm=None,
+    из ev.cm события меток (путь цикла); то же округление _num8; нет строки признаков или признака -> None (условие ложно)."""
     side = _cand_side(cand)
     out = {"coin_class": None, "utc_session": None, "side": side}
     out.update((k, None) for k in RULE_EVENT_NUM)
+    out.update((k, None) for k in CM_RULE_FEATURES)
     out.update((k, None) for k in RULE_SCOPE_KEYS)
     e = rule_event(event)
     if e is None:
@@ -290,6 +294,10 @@ def rule_features(event, cand, cfg):
     f = e["f"]
     for k in RULE_EVENT_NUM:
         out[k] = _num8(f.get(k))
+    src = cm if cm is not None else f.get("cm")
+    if isinstance(src, dict):
+        for k in CM_RULE_FEATURES:
+            out[k] = _num8(src.get(k))
     sym = e["sym"] if isinstance(e["sym"], str) and e["sym"] else None
     if sym:
         tm = _num8(f.get("turn_24h_musd"))

@@ -10,15 +10,17 @@ from tb.memory import cases, lessons
 
 class TestDictionary(unittest.TestCase):
     def test_features_and_menu(self):
-        self.assertEqual(lc.RULE_FEATURES, ("coin_class", "utc_session", "side", "range_5m_pct", "ret_5m_pct", "turn_surge_5m", "chg_24h_pct",
-                                            "spread_bps", "funding_pct"))
-        self.assertEqual(lc.MENU_NUM, ("range_5m_pct", "ret_5m_pct", "turn_surge_5m", "chg_24h_pct", "spread_bps", "funding_pct"))
+        self.assertEqual(lc.BASE_RULE_FEATURES, ("coin_class", "utc_session", "side", "range_5m_pct", "ret_5m_pct", "turn_surge_5m", "chg_24h_pct",
+                                                 "spread_bps", "funding_pct"))
+        self.assertEqual(lc.BASE_MENU_NUM, ("range_5m_pct", "ret_5m_pct", "turn_surge_5m", "chg_24h_pct", "spread_bps", "funding_pct"))
+        self.assertEqual(lc.RULE_FEATURES, lc.BASE_RULE_FEATURES + lc.CM_WAVE)          # R1.7 первая волна (Requirement 15.1)
+        self.assertEqual(lc.MENU_NUM, lc.BASE_MENU_NUM + lc.CM_WAVE)
         self.assertEqual(lc.MENU_CAT, ("coin_class",))
-        self.assertEqual(len(lc.MENU_NUM) + len(lc.MENU_CAT), 7)          # без side и utc_session
+        self.assertEqual(len(lc.MENU_NUM) + len(lc.MENU_CAT), 11)         # без side и utc_session
         self.assertTrue(set(lc.MENU_NUM + lc.MENU_CAT) <= set(lc.RULE_FEATURES))
         self.assertEqual(lc.NUM_FEATURES, lc.MENU_NUM)
         self.assertEqual(lc.menu_cat_values("coin_class"), ("meme", "major", "alt_mid", "alt_small", "stock_token"))
-        self.assertEqual(len(lc.MENU_NUM) * 2 + len(lc.menu_cat_values("coin_class")), 17)   # верхняя граница K
+        self.assertEqual(len(lc.MENU_NUM) * 2 + len(lc.menu_cat_values("coin_class")), 25)   # верхняя граница K (было 17)
 
     def test_dictionary_matches_memory(self):
         """Словарь не расходится с tb.memory.cases и признаками уроков."""

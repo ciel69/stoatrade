@@ -11,6 +11,13 @@ gate [--json]        гейт этапа R2 (Requirements 15.8, 15.9; tb.learnlo
                      накопленной истории базы знаний (только чтение). Вывод по умолчанию — текст, --json — JSON одной строкой. Коды: 0 оценка
                      выполнена (пройден гейт или нет — поле ok); 1 база недоступна (нет базы, нет таблиц цикла, идёт восстановление, ошибка чтения).
 
+menu-wave --check [признаки] [--days N] [--json]
+                     R1.7 (Requirement 15.7, 15.8): критерий волны признаков сводного рынка по окну поиска текущего меню (только чтение,
+                     вывод чисел): (а) заполнение среди заполненных прогонов P2 за последние N суток (первая волна — 7) ≥ feat_cover_min,
+                     (б) q20 < q80, (в) |Спирмен| с признаками меню ≤ 0.7, (г) мощность конвейера медианного условия при −0.3R с новым K
+                     на установившемся окне 14 суток ≥ 0.5 и снижение ≤ 0.05 (learnloop.menu.wave_check). Без признаков — первая волна.
+                     Коды: 0 расчёт выполнен (прошёл ли признак — поля ok_*); 1 нет данных или база недоступна; 2 ошибка использования.
+
 Вывод promotion: JSON одной строкой (--text: кратко). Коды: 0 успех; 1 конфиг битый или не записан; 2 ошибка использования.
 """
 import argparse
@@ -151,6 +158,80 @@ def cmd_gate(a, root):
     return 1 if rep.get("db") not in (None, "OK") else 0
 
 
+def menu_wave(root, feats, now=None, days=None, env="mainnet"):
+    """Проверка критерия волны признаков меню (R1.7, Requirement 15.7) по базе знаний root: соединение только для чтения на вызов, окно
+    поиска текущего меню (learnloop.candidates.discovery_window), чёрный список — как у меню. -> отчёт menu.wave_check с полями db, code."""
+    import sqlite3
+    from tb.labels import store as LST
+    from tb.learnloop import candidates as CA
+    from tb.learnloop import clusters as CL
+    from tb.learnloop import menu as MN
+    now = int(time.time() if now is None else now)
+    base = {"feats_req": list(feats), "now": now, "env": env}
+    try:
+        cfg = LC.load_strict(root)
+        policy = CL.load_policy(root, cfg)
+    except (OSError, ValueError) as e:
+        return dict(base, db="CONFIG", code="CONFIG", why=str(e)[:200])
+    try:
+        conn = LST.open_ro(root)
+    except LST.KnowledgeRestoring:
+        return dict(base, db="RESTORING", code="NO_DATA")
+    except sqlite3.Error as e:
+        return dict(base, db="DB_ERROR", code="NO_DATA", why="%s: %s" % (type(e).__name__, e))
+    if conn is None:
+        return dict(base, db="NO_DB", code="NO_DATA")
+    try:
+        win, code = CA.discovery_window(conn, now, cfg, policy, env)
+        if win is None:
+            return dict(base, db="OK", code=code)
+        rep = MN.wave_check(win, cfg, feats, blocked=CA._blocked(conn, now), fill_days=days)
+        return dict(base, db="OK", code="OK", policy=policy["id"], days_req=days, **rep)
+    except (sqlite3.Error, CL.WindowNotReady) as e:
+        return dict(base, db="DB_ERROR", code="NO_DATA", why="%s: %s" % (type(e).__name__, e))
+    finally:
+        conn.close()
+
+
+def render_wave(rep):
+    """Текст для человека: числа по каждому признаку и мощность (только вывод, решения не принимаются)."""
+    yn = lambda v: "—" if v is None else ("да" if v else "нет")  # noqa: E731
+    if rep.get("code") != "OK":
+        return ["проверка волны: нет данных (%s%s)" % (rep.get("code"), (": " + rep["why"]) if rep.get("why") else "")]
+    w = rep["window"]
+    lines = ["проверка волны меню: окно поиска %.2f сут, заполнение по последним %.2f сут (%d заполненных прогонов)" % (w["days"], w["fill_days"], w["n_fill"])]
+    for f, d in rep["feats"].items():
+        lines.append("%s: заполнение %.4f (а %s), q20 %s, q80 %s (б %s), |Спирмен| max %s (в %s)" % (
+            f, d["cover"], yn(d["a"]), d["q20"], d["q80"], yn(d["b"]), d["rho_max"], yn(d["c"])))
+    pw = rep["power"]
+    for name, key in (("без волны", "base"), ("с волной", "wave")):
+        x = pw[key]
+        lines.append("мощность %s: K %d, условий %d, поток %s/сут, σ_d %s, скрининг %s, holdout %s, испытание %s, конвейер %s" % (
+            name, x["k"], x["n_cond"], x["flow"], x["sd_d"], x.get("screen"), x.get("holdout"), x.get("trial"), x.get("pipeline")))
+    lines.append("снижение мощности %s (эффект %sR, окно %s), (г) %s" % (pw["drop"], pw["effect_r"], "установившееся" if pw["steady"] else "неполное", yn(rep["ok_d"])))
+    lines.append("итог: а %s, б %s, в %s, г %s" % (yn(rep["ok_a"]), yn(rep["ok_b"]), yn(rep["ok_c"]), yn(rep["ok_d"])))
+    return lines
+
+
+def cmd_menu_wave(a, root):
+    from tb.logic import cmkt as LCM
+    from tb.logic import learn_cond as LCD
+    if not a.check:
+        _err("нужен --check (команда только проверяет критерий волны)")
+        return 2
+    feats = list(a.features or LCD.CM_WAVE)
+    bad = [f for f in feats if f not in LCM.CM_FEATURES or f == "cm_lead_ex"]          # cm_lead_ex — категориальный, в меню не идёт
+    if bad:
+        _err("признаки вне CM_FEATURES: %s" % ",".join(bad))
+        return 2
+    rep = menu_wave(root, feats, now=a.now, days=a.days, env=a.env)
+    if a.json:
+        _out(rep)
+    else:
+        _out(rep, True, render_wave(rep))
+    return 0 if rep.get("code") == "OK" else 1
+
+
 def build_parser():
     p = argparse.ArgumentParser(prog="tb learn", description="цикл обучения: аварийный режим продвижения, гейт этапа (R2)")
     sub = p.add_subparsers(dest="cmd")
@@ -159,10 +240,17 @@ def build_parser():
     pr.add_argument("--text", action="store_true")
     gt = sub.add_parser("gate", help="гейт этапа R2: ступени A и B с причиной по каждому условию (только чтение)")
     gt.add_argument("--json", action="store_true")
+    mw = sub.add_parser("menu-wave", help="R1.7: критерий волны признаков меню (заполнение, q20<q80, Спирмен, мощность; только чтение)")
+    mw.add_argument("--check", action="store_true", help="проверить критерий (обязателен)")
+    mw.add_argument("features", nargs="*", help="признаки cm_* (по умолчанию первая волна)")
+    mw.add_argument("--days", type=float, default=None, help="окно заполнения, суток (первая волна — 7; по умолчанию всё окно поиска)")
+    mw.add_argument("--env", default="mainnet", choices=("mainnet", "testnet"))
+    mw.add_argument("--now", type=float, default=None, help=argparse.SUPPRESS)
+    mw.add_argument("--json", action="store_true")
     return p
 
 
-HANDLERS = {"promotion": cmd_promotion, "gate": cmd_gate}
+HANDLERS = {"promotion": cmd_promotion, "gate": cmd_gate, "menu-wave": cmd_menu_wave}
 
 
 def main(argv, root=None):

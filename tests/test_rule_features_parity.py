@@ -27,6 +27,7 @@ SYM20 = "ABCDEFGHIJKLMNOP1234"         # предел RE_SYMBOL
 MEM_CFG = {"coin_class": {"major": ["BTC", "ETH"], "meme": ["DOGE"], "stock_token": ["TSLAX"], "alt_mid": ["SOL"],
                           "turnover_mid_usd": 2e8, "turnover_small_usd": 2e7}}
 FEATS = learn_cond.RULE_FEATURES
+EV_FEATS = learn_cond.BASE_RULE_FEATURES      # R1.7: признаки cm_ берутся из строки признаков сигнала (здесь рядов нет: None на обоих путях)
 ALL_KEYS = FEATS + F.RULE_SCOPE_KEYS
 
 
@@ -126,7 +127,7 @@ class Parity(unittest.TestCase):
                 res, _b, _s = self.all_paths(scan_line(kind), "long")
                 self.assertParity(res)
                 f = res["label"]
-                for k in FEATS:
+                for k in EV_FEATS:
                     if kind == "oi_spike" and k == "turn_surge_5m":
                         self.assertIsNone(f[k])           # hotscan.make_deriv_event не пишет turn_surge_5m: нет на обоих путях
                     else:
@@ -174,7 +175,7 @@ class Parity(unittest.TestCase):
                 for k in bus.D_PROTECTED["scanner_signal"]:
                     self.assertIn(k, d, (kind, k))
                 f = res["pub"]
-                for k in FEATS:
+                for k in EV_FEATS:
                     self.assertIsNotNone(f[k], (kind, k))
                 self.assertEqual(f["coin_class"], "alt_mid")                 # 987654 млн USD >= turnover_mid_usd
                 self.assertEqual((f["ev_kind"], f["side_rel"]), (kind, "with_dir"))

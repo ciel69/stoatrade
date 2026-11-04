@@ -4,10 +4,19 @@
 ограничены ими. Меню первой итерации строится по `MENU_NUM` (`>= q80`, `<= q20`) и `MENU_CAT` (`=` каждому значению словаря без `unknown`).
 `cmp_val` и `matches_features` перенесены из `tb.memory.lessons` без изменения поведения (там `_cmp_val` остаётся псевдонимом).
 Имя модуля отличается от `tb.logic.conds` и `tb.logic.rules` (условия планов исполнителя), они здесь не используются.
+
+R1.7 (Requirement 15.1, 15.6; задача 19): первая волна признаков сводного рынка `CM_WAVE` (копия `tb.logic.cmkt.FIRST_WAVE`: модуль без
+импортов, равенство проверяет tests/test_rule_features_cm.py) добавлена в `RULE_FEATURES` и `MENU_NUM`; верхняя граница K меню — 17 + 4 × 2 = 25.
+Остальные `CM_FEATURES` хранятся в метках (`ev.cm`), но в словарь правил и в словари ролей не входят до своей волны.
 """
 
-RULE_FEATURES = ("coin_class", "utc_session", "side", "range_5m_pct", "ret_5m_pct", "turn_surge_5m", "chg_24h_pct", "spread_bps", "funding_pct")
-MENU_NUM = ("range_5m_pct", "ret_5m_pct", "turn_surge_5m", "chg_24h_pct", "spread_bps", "funding_pct")
+BASE_RULE_FEATURES = ("coin_class", "utc_session", "side", "range_5m_pct", "ret_5m_pct", "turn_surge_5m", "chg_24h_pct", "spread_bps", "funding_pct")
+BASE_MENU_NUM = ("range_5m_pct", "ret_5m_pct", "turn_surge_5m", "chg_24h_pct", "spread_bps", "funding_pct")
+CM_PREFIX = "cm_"
+CM_WAVE = ("cm_imb_025_pct", "cm_oi_liq_5m_pct", "cm_cvd_5m_perp_pct", "cm_wall_pull_15m_pct")      # = tb.logic.cmkt.FIRST_WAVE
+RULE_FEATURES = BASE_RULE_FEATURES + CM_WAVE
+MENU_NUM = BASE_MENU_NUM + CM_WAVE
+CM_RULE_FEATURES = tuple(f for f in RULE_FEATURES if f.startswith(CM_PREFIX))
 MENU_CAT = ("coin_class",)                       # utc_session — вторая итерация (Requirement 18.8)
 
 # словарь значений категориальных признаков правил (совпадает с tb.memory.cases: COIN_CLASSES, SESSIONS; side — только стороны входа)
@@ -22,6 +31,16 @@ CAT_OPS = ("=", "in")
 NUM_OPS = (">=", "<=")
 MAX_COND = 3
 MAX_IN = 8
+
+
+def is_cm(feature):
+    """Признак сводного рынка (cm_*): значение берётся из строки признаков сигнала, а не из события сканера."""
+    return isinstance(feature, str) and feature.startswith(CM_PREFIX)
+
+
+def cond_uses_cm(cond):
+    """В условии есть признак сводного рынка."""
+    return isinstance(cond, list) and any(isinstance(c, dict) and is_cm(c.get("feature")) for c in cond)
 
 
 def menu_cat_values(feature):
