@@ -72,6 +72,7 @@ class BookSnapshot(NamedTuple):
     bids: list                      # [(px_str, size_str)] — исходные строки биржи, единицы инструмента
     asks: list
     rest: bool = False              # снимок вне потока (REST или WS API): уровни дальше границы снимка отбрасываются
+    part: bool = False              # частичный стакан (канал яруса light или book_part на время RESYNC), не полный стакан deep
 
 
 class BookDelta(NamedTuple):
@@ -85,6 +86,7 @@ class BookDelta(NamedTuple):
     checksum: Optional[int]
     bids: list
     asks: list
+    part: bool = False              # дельта частичного канала (Bybit orderbook.50): свой BookState яруса light
 
 
 class Ticker(NamedTuple):
@@ -980,6 +982,7 @@ class VenueAdapter(object):
     book_rules = {}                    # {kind: {"deep": правило, "light": правило}}
     raw_books = ()                     # рынки, чьи стаканы хранят исходные строки (контрольная сумма)
     liq_partial = ()                   # рынки с не больше одной ликвидации на символ в секунду
+    conn_max_s = None                  # принудительный разрыв соединения биржей, с (Binance 24 ч): сборщик меняет соединение заранее
 
     def __init__(self, cfg=None, meta=None):
         self.cfg = cfg if cfg is not None else conf.defaults()
