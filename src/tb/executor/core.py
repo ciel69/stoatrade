@@ -25,32 +25,11 @@ from tb.executor import commands, gate as G, mdsvc, protect, reconcile
 from tb.executor.ports import KIND_UNKNOWN, PortError
 from tb.logic import rules, watch
 from tb.logic.candles import CandleBook, MarketView, tf_min
+from tb.logic.qty import close_qty  # noqa: F401  (R4: округление долей единое с симулятором выходов; core.close_qty остаётся именем модуля)
 
 VERSION = "v2.0-wp5"
 ACTIVE = ("armed", "entered", "managing")
 IN_POS = ("entered", "managing")
-
-
-def close_qty(want, remaining, step, min_qty=None, full_req=False):
-    """Объём закрытия по шагу и минимальному лоту биржи -> (qty, full).
-
-    Доля округляется вниз к шагу. Доля меньше минимального лота (lot = max(шаг, min_qty)) раньше давала 0 и отказ E_STATUS_FORBIDS
-    (инцидент ETH 2026-11-03: остаток 0.01 при шаге 0.01, frac 0.5): теперь неделимый остаток (меньше двух лотов) закрывается целиком,
-    делимый закрывается одним минимальным лотом. Это только снижение риска, больше остатка не закрывается.
-
-    >>> close_qty(0.005, 0.01, 0.01), close_qty(0.003, 0.05, 0.01), close_qty(0.07, 0.14, 0.01)
-    ((0.01, True), (0.01, False), (0.07, False))
-    """
-    step = float(step or 0) or 1e-12
-    remaining = float(remaining)
-    qty = min(remaining, G.floor_step(want, step))
-    full = bool(full_req) or qty >= remaining - step / 2.0
-    lot = max(step, float(min_qty or 0))
-    if not full and remaining > 0 and qty < lot - step / 2.0:
-        if remaining < 2.0 * lot - step / 2.0:
-            return remaining, True
-        qty = lot
-    return (remaining if full else qty), full
 EPS = 1e-9
 SEEN_MAX = 5000
 KLINE_TFS = (1, 5, 15, 60)
