@@ -290,6 +290,104 @@ class TestResolveEvent(Base):
         self.assertEqual((e["seq"], e["d"]["spread_bps"]), (seq, 6.0))
 
 
+class TestEventWhy(Base):
+    """Причина события записи rule_eval (resolve_event_why): событие то же, что у resolve_event; причина только для учёта."""
+
+    def why(self, seq, kinds=KINDS):
+        r = RV.resolve_event_why(self.root, "ETHUSDT", seq, self.now, kinds)
+        self.assertEqual(r["event"], RV.resolve_event(self.root, "ETHUSDT", seq, self.now, kinds))
+        return r["why"], r["kind"], (r["event"] or {}).get("seq")
+
+    def test_in_scope_ok(self):
+        write_events(self.root, [ev(1, "ETHUSDT", "hot_enter", self.now - 100)])
+        self.assertEqual(self.why(1), ("ok", "hot_enter", 1))
+        self.assertEqual(self.why(None), ("ok", "hot_enter", 1))
+
+    def test_patrol_out_of_scope(self):
+        write_events(self.root, [ev(88080, "ETHUSDT", "patrol", self.now - 30), ev(88081, "ETHUSDT", "book_wall", self.now - 20)])
+        self.assertEqual(self.why(88080), ("out_of_scope", "patrol", None))
+        self.assertEqual(self.why(88081), ("out_of_scope", "book_wall", None))
+        self.assertEqual(self.why(None), ("out_of_scope", "book_wall", None))       # chat: последнее событие монеты вне области
+
+    def test_hot_enter_older_than_max_age_stale(self):
+        write_events(self.root, [ev(5, "ETHUSDT", "hot_enter", self.now - 1500), ev(6, "BTCUSDT", "range_5m", self.now - 10)])
+        self.assertEqual(self.why(5), ("stale", "hot_enter", None))
+        self.assertEqual(self.why(None), ("no_event", None, None))                  # без event_seq старое событие не ищется
+
+    def test_no_event(self):
+        self.assertEqual(self.why(None), ("no_event", None, None))                  # шины нет
+        write_events(self.root, [ev(1, "BTCUSDT", "range_5m", self.now - 10), ev(2, "ETHUSDT", "idea_stale", self.now - 5)])
+        for seq in (1, 2, 99, None):                                                # чужая монета, idea_stale, нет такого, нет события монеты
+            self.assertEqual(self.why(seq), ("no_event", None, None), seq)
+        self.assertEqual(self.why(1, kinds=[]), ("no_event", None, None))           # видов нет (конфиг)
+
+    def test_fallback_to_fresh_in_scope_is_ok(self):
+        """Событие задания вне области, но у монеты есть свежее событие вида из области: правила применяются к нему (как прежде) -> ok."""
+        write_events(self.root, [ev(1, "ETHUSDT", "range_5m", self.now - 200), ev(2, "ETHUSDT", "patrol", self.now - 5)])
+        self.assertEqual(self.why(2), ("ok", "range_5m", 1))
+
+
+class TestRuleEvalWhy(Base):
+    """Учёт причин по rule_evals: RULES_NO_EVENT только по no_event и stale (+ прежние no_event=1), покрытие — доля вне области."""
+
+    def rows(self, c, spec):
+        rows = []
+        for i, (why, kind, role) in enumerate(spec):
+            rows.append({"rec_seq": i + 1, "rule_id": "", "ts": int(self.now) - 60, "role": role, "event_seq": 7 if why == "ok" else None,
+                         "no_event": 0 if why == "ok" else 1, "hit": 0, "evaluated": 0, "missing": 0, "event_why": why, "event_kind": kind})
+        store2.insert_rows(c, "rule_evals", rows)
+
+    def test_counts_and_coverage(self):
+        self.db(with_rule=False)
+        c = store.open_rw(self.root)
+        try:
+            store2.migrate_re_why(c)
+            self.rows(c, [("ok", "hot_enter", "entry_scout")] * 4 + [("out_of_scope", "patrol", "entry_scout")] * 3
+                      + [("out_of_scope", "book_wall", "chat")] + [("stale", "hot_enter", "entry_scout"), ("no_event", None, "chat"),
+                                                                  (None, None, "entry_scout")])
+            w = RV.rule_eval_why(c, self.now, 7 * 86400)
+        finally:
+            c.close()
+        self.assertEqual(w["n"], 11)
+        self.assertEqual(w["fail"], 3)                                  # stale + no_event + прежняя строка no_event=1; out_of_scope не считается
+        self.assertEqual(w["why"], {"ok": 4, "no_event": 1, "out_of_scope": 4, "stale": 1, "legacy": 1})
+        cov = w["coverage"]
+        self.assertEqual((cov["n"], cov["in_scope"], cov["out_of_scope"], cov["by_kind"]), (10, 6, 4, {"patrol": 3, "book_wall": 1}))
+        self.assertEqual(cov["share"], 0.4)
+        self.assertEqual(RV.coverage_txt(cov), "вне области правил: 40% (patrol 3, book_wall 1) из 10 решений")
+
+    def test_without_columns_all_legacy(self):
+        self.db(with_rule=False)
+        c = store.open_rw(self.root)
+        try:
+            store2.insert_rows(c, "rule_evals", [{"rec_seq": 1, "rule_id": "", "ts": int(self.now), "no_event": 1, "hit": 0, "evaluated": 0, "missing": 0},
+                                                 {"rec_seq": 2, "rule_id": "", "ts": int(self.now), "no_event": 0, "hit": 0, "evaluated": 0, "missing": 0}])
+            w = RV.rule_eval_why(c, self.now, 86400)
+        finally:
+            c.close()
+        self.assertEqual((w["n"], w["fail"], w["why"]["legacy"], w["coverage"]["n"], w["coverage"]["share"]), (2, 1, 2, 0, None))
+        self.assertIsNone(RV.coverage_txt(w["coverage"]))
+
+    def test_migration_idempotent(self):
+        self.db(with_rule=False)
+        c = store.open_rw(self.root)
+        try:
+            self.assertFalse(store2.has_re_why(c))
+            store2.insert_rows(c, "rule_evals", [{"rec_seq": 1, "rule_id": "", "ts": 1, "no_event": 1, "hit": 0, "evaluated": 0, "missing": 0}])
+            self.assertEqual(store2.migrate_re_why(c), 1)
+            self.assertEqual(store2.migrate_re_why(c), 1)
+            self.assertTrue(store2.has_re_why(c))
+            cols = [r[1] for r in c.execute("PRAGMA table_info(rule_evals)").fetchall()]
+            self.assertEqual((cols.count("event_why"), cols.count("event_kind")), (1, 1))
+            self.assertEqual(c.execute("SELECT event_why, event_kind FROM rule_evals").fetchall(), [(None, None)])   # старые строки: NULL
+            self.assertEqual(c.execute("SELECT v FROM meta WHERE k=?", ("knowledge_re_why_ver",)).fetchone()[0], "1")
+            c.execute("DELETE FROM meta WHERE k='knowledge_re_why_ver'")                     # ключ потерян, колонки есть: без повторного ALTER
+            self.assertEqual(store2.migrate_re_why(c), 1)
+            self.assertTrue(store2.ready(c))
+        finally:
+            c.close()
+
+
 class TestRuleEvalFields(Base):
     def test_fields(self):
         self.db()
@@ -305,6 +403,11 @@ class TestRuleEvalFields(Base):
         res = LR.apply(view, {"ok": True}, MF.rule_features(None, {"side": "long"}, {}))
         f = RV.rule_eval_fields(view, res, {"role": "entry_scout", "event_seq": None, "cands_ok_n": True})
         self.assertEqual((f["event_seq"], f["feat_missing_ids"], f["cands_ok_n"]), (None, ["RL0001"], None))
+        self.assertEqual((f["event_why"], f["event_kind"]), (None, None))
+        f = RV.rule_eval_fields(view, res, {"role": "entry_scout", "event": None, "event_why": "out_of_scope", "event_kind": "patrol"})
+        self.assertEqual((f["event_seq"], f["event_why"], f["event_kind"]), (None, "out_of_scope", "patrol"))
+        f = RV.rule_eval_fields(view, res, {"role": "chat", "event": e})
+        self.assertEqual((f["event_why"], f["event_kind"]), ("ok", "range_5m"))
 
 
 class TestLayers(unittest.TestCase):

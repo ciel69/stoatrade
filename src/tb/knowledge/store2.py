@@ -13,6 +13,7 @@ restore          протокол замены файла (маркер, под�
 disable_v2       выход из режима v2 (копия, затем удаление маркера) при learnloop.enabled=false
 migrate_v2b / apply_v2b, verify_line_chain  (R2.9b) таблицы case_rows/lesson_rows (ключ meta.knowledge_v2b_ver) и их цепочки; verify и check_copy
                  проверяют их (CHAIN_BROKEN - красный), непустая очередь state/knowledge.spool.jsonl - жёлтый SPOOL_PENDING
+migrate_re_why   колонки rule_evals.event_why / event_kind (ключ meta.knowledge_re_why_ver, ALTER TABLE ADD COLUMN, идемпотентно; зовёт rule_eval_import)
 
 Соединение то же, что у сервиса меток (labels.store.open_rw: WAL, busy_timeout). Автовосстановление как сервис - задача 10, она вызывает restore(auto=True).
 """
@@ -261,6 +262,35 @@ def migrate_v2b(conn, root=None, backup=True, now=None, sleep=time.sleep):
     except Exception as e:
         raise KnowledgeMigrationError(S2.KNOWLEDGE_MIGRATION, "миграция v2b не применена: %s: %s" % (e.__class__.__name__, e)) from e
     return ver
+
+
+def has_re_why(conn):
+    """Колонки event_why и event_kind в rule_evals на месте."""
+    cols = _columns(conn, "rule_evals")
+    return all(c in cols for c, _t in S2.RE_WHY_COLS)
+
+
+def migrate_re_why(conn):
+    """Колонки rule_evals.event_why / event_kind (ALTER TABLE ADD COLUMN недостающих) и meta.knowledge_re_why_ver одной транзакцией.
+    Повторный вызов ничего не меняет; нет таблицы rule_evals -> 0 без изменений. Сбой -> ROLLBACK и KnowledgeMigrationError. -> версия."""
+    if not _has_table(conn, "rule_evals"):
+        return 0
+    try:
+        cur = int(_meta_get(conn, S2.META_RE_WHY_KEY) or 0)
+    except (TypeError, ValueError):
+        cur = 0
+    if cur >= S2.RE_WHY_VER and has_re_why(conn):
+        return cur
+    try:
+        with LST.tx(conn):
+            cols = _columns(conn, "rule_evals")
+            for c, t in S2.RE_WHY_COLS:
+                if c not in cols:
+                    conn.execute("ALTER TABLE rule_evals ADD COLUMN %s %s" % (c, t))
+            _meta_set(conn, S2.META_RE_WHY_KEY, str(S2.RE_WHY_VER))
+    except Exception as e:
+        raise KnowledgeMigrationError(S2.KNOWLEDGE_MIGRATION, "колонки rule_evals.event_why/event_kind не добавлены: %s: %s" % (e.__class__.__name__, e)) from e
+    return S2.RE_WHY_VER
 
 
 # ---------------------------------------------------------------- цепочки case_rows / lesson_rows (строки JSONL)

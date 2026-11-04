@@ -182,7 +182,7 @@ class TestCands(RulesBase):
 
     def test_no_db_is_fast(self):
         """Недоступная база не замедляет разметку: режим без применения без чтения шины."""
-        with mock.patch.object(RV, "resolve_event", side_effect=AssertionError("шина не читается без правил")):
+        with mock.patch.object(RV, "resolve_event_why", side_effect=AssertionError("шина не читается без правил")):
             t0 = time.perf_counter()
             for _ in range(20):
                 cands.candidates(fixture_brief(), "SOL", root=self.root, now=self.now)
@@ -332,6 +332,22 @@ class TestSubmit(GwRules):
         self.assertEqual((e["basis"]["event_seq"], e["basis"]["feat_missing_ids"], e["basis"]["rule_hits"]), (None, ["RL0001"], []))
         rows = cycle.rule_eval_rows(e)
         self.assertEqual([(r["rule_id"], r["no_event"], r["missing"]) for r in rows], [("", 1, 1), ("RL0001", 1, 1)])
+        self.assertEqual((e["basis"]["event_why"], rows[0]["event_why"]), ("no_event", "no_event"))   # chat без события монеты в окне
+
+    def test_entry_scout_event_why(self):
+        """Причина события в записи rule_eval шлюза: patrol -> out_of_scope, hot_enter старше 900 с -> stale, в области -> ok. Решение не меняется."""
+        self.active_rule()
+        n = self.now
+        write_events(self.root, [ev(5, "SOL", "hot_enter", n - 1500, dir="down", spread_bps=9.0), ev(6, "SOL", "patrol", n - 30, dir="down", spread_bps=9.0)])
+        for seq, want in ((6, ("out_of_scope", "patrol")), (5, ("stale", "hot_enter"))):
+            self.assertIsNone(self.submit(meta={"role": "entry_scout", "event_seq": seq})["ok"])      # правило не применяется: план в очереди
+            b = self.evals()[-1]["basis"]
+            self.assertEqual((b["event_why"], b["event_kind"], b["event_seq"], b["rule_hits"]), want + (None, []))
+            self.assertEqual(cycle.rule_eval_rows(self.evals()[-1])[0]["event_why"], want[0])
+        write_events(self.root, [ev(7, "SOL", "hot_enter", n - 10, dir="down", spread_bps=1.0)])
+        self.assertIsNone(self.submit(meta={"role": "entry_scout", "event_seq": 7})["ok"])
+        b = self.evals()[-1]["basis"]
+        self.assertEqual((b["event_why"], b["event_kind"], b["event_seq"]), ("ok", "hot_enter", 7))
 
     def test_empty_rulebook_answers_unchanged_and_event_resolved(self):
         """Пустой rulebook: ответ шлюза прежний; запись rule_eval есть и событие разрешено по видам политики P2 (нет ложного RULES_NO_EVENT)."""

@@ -51,7 +51,9 @@ LESSON_ROW_KEYS = {"lesson_id", "src", "status", "reason_code", "txt", "cond_txt
                    "trial", "rule", "can_reject"}
 TRIAL_KEYS = {"trial_id", "rule_id", "state", "verdict", "start_ts", "deadline_ts", "closed_ts"}
 RULE_KEYS = {"rule_id", "rev", "kind", "status", "wait", "reason_code", "from_lesson", "ver_in", "ver_out", "cond_txt", "cond_h", "env_norm", "ts", "in_version"}
-RULES_KEYS = ENV_KEYS | {"mode", "current", "versions", "versions_total", "counts", "active", "waiting", "rules", "rules_total", "feat_missing", "no_event"}
+RULES_KEYS = ENV_KEYS | {"mode", "current", "versions", "versions_total", "counts", "active", "waiting", "rules", "rules_total", "feat_missing", "no_event",
+                         "coverage"}
+COVERAGE_KEYS = {"window_days", "n", "in_scope", "out_of_scope", "share", "by_kind"}
 VERSION_KEYS = {"ver", "parent", "reason_code", "rule_ids", "trial_id", "ts"}
 WAIT_KEYS = {"rule_id", "wait", "since_ts", "waited_s", "deadline_ts", "left_s", "from_lesson", "cond_txt"}
 PATH_KEYS = ENV_KEYS | {"funnel", "paths", "lesson_id"}
@@ -233,8 +235,30 @@ class Contract(Base):
         self.assertEqual(set(br), NUM_KEYS | {"rule_id", "missing"})
         self.assertEqual((br["rule_id"], br["v"], br["n"], br["small"], br["missing"]), (self.r_act, 0.5, 6, True, 3))
         ne = d["no_event"]
-        self.assertEqual(set(ne), NUM_KEYS | {"window_days", "threshold", "yellow"})
+        self.assertEqual(set(ne), NUM_KEYS | {"window_days", "threshold", "yellow", "why"})
         self.assertEqual((ne["v"], ne["n"], ne["small"], ne["threshold"], ne["yellow"]), (0.4, 10, True, 0.2, True))
+        self.assertEqual(ne["why"]["legacy"], 10)                          # строки до учёта причин: прежний no_event
+        cov = d["coverage"]
+        self.assertEqual(set(cov), COVERAGE_KEYS)
+        self.assertEqual((cov["n"], cov["out_of_scope"], cov["by_kind"], cov["share"]["v"]), (0, 0, [], None))
+
+    def test_rules_coverage_and_reasons(self):
+        """Причины событий: out_of_scope в долю «без события» не входит, покрытие правилами — по видам события."""
+        store2.migrate_re_why(self.c)
+        evs = []
+        for i, (why, kind, role) in enumerate([("out_of_scope", "patrol", "entry_scout")] * 6 + [("out_of_scope", "book_wall", "chat")] * 2
+                                              + [("ok", "hot_enter", "entry_scout")] * 3 + [("stale", "hot_enter", "entry_scout")]):
+            evs.append({"rec_seq": 500 + i, "rule_id": "", "ts": NOW - 3600, "role": role, "event_seq": 7 if why == "ok" else None,
+                        "no_event": 0 if why == "ok" else 1, "hit": 0, "evaluated": 0, "missing": 0, "rulebook_ver": "R-0002", "plan": None,
+                        "event_why": why, "event_kind": kind})
+        store2.insert_rows(self.c, "rule_evals", evs)
+        d = MO.memory_rules(self.root, NOW)
+        ne, cov = d["no_event"], d["coverage"]
+        self.assertEqual((ne["n"], ne["v"]), (22, 0.2273))                  # 4 прежних no_event + 1 stale из 22; out_of_scope (8) не в доле
+        self.assertEqual((ne["why"]["out_of_scope"], ne["why"]["stale"], ne["why"]["legacy"]), (8, 1, 10))
+        self.assertEqual((cov["n"], cov["in_scope"], cov["out_of_scope"]), (12, 4, 8))
+        self.assertEqual(cov["by_kind"], [{"kind": "patrol", "n": 6}, {"kind": "book_wall", "n": 2}])
+        self.assertEqual((cov["share"]["v"], cov["share"]["n"]), (0.6667, 12))
 
     def test_waiting_ready_has_no_deadline(self):
         V.set_wait(self.c, self.r_wait, "READY", NOW - D)

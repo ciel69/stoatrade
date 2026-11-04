@@ -91,6 +91,7 @@ export function rulesDetail(now = Date.now() / 1000) {
     rules: [rule('RL0001', 'active', { ver_in: 'RV3', in_version: true }), rule('RL0004', 'trial')], rules_total: 5,
     feat_missing: { window_days: 7, all: num(0.04, 180), by_rule: [{ ...num(0.04, 180), rule_id: 'RL0001', missing: 7 }] },
     no_event: { ...num(0.25, 24), window_days: 7, threshold: 0.2, yellow: true },
+    coverage: { window_days: 7, n: 24, in_scope: 17, out_of_scope: 7, share: num(0.29, 24), by_kind: [{ kind: 'patrol', n: 5 }, { kind: 'book_wall', n: 2 }] },
   }
 }
 

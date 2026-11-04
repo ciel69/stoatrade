@@ -134,4 +134,11 @@ for _t in MEM_TABLES:
     V2B.append("CREATE TRIGGER tr_%s_nu BEFORE UPDATE ON %s BEGIN SELECT RAISE(ABORT, 'APPEND_ONLY %s'); END" % (_t, _t, _t))
     V2B.append("CREATE TRIGGER tr_%s_nd BEFORE DELETE ON %s BEGIN SELECT RAISE(ABORT, 'APPEND_ONLY %s'); END" % (_t, _t, _t))
 V2B_INDEXES = ("ix_case_rows_mt",)
+
+# ---- v2e (причина события записей rule_eval): колонки rule_evals.event_why (ok | no_event | out_of_scope | stale; NULL у строк до миграции —
+# прежний no_event) и event_kind (вид события). Свой ключ версии meta.knowledge_re_why_ver; ALTER TABLE ADD COLUMN идемпотентно
+# (knowledge.store2.migrate_re_why), зовёт шаг rule_eval_import. База без колонок читается (rulebook_view.rule_eval_why: все строки legacy).
+RE_WHY_VER = 1
+META_RE_WHY_KEY = "knowledge_re_why_ver"
+RE_WHY_COLS = (("event_why", "TEXT"), ("event_kind", "TEXT"))
 V2B_TRIGGERS = tuple("tr_%s_%s" % (t, w) for t in MEM_TABLES for w in ("nu", "nd"))

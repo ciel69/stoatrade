@@ -20,10 +20,13 @@ from test_learnloop_cycle import CFG, POLICY, T0
 D = 86400
 
 
-def rec(i, hits=(), evals=(), missing=(), event_seq=100, role="entry_scout", t=None, kind="note", what="rule_eval"):
-    return {"actor": "brain:chat", "kind": kind, "what": what, "t": T0 + 60 * i if t is None else t, "plan": "PL-%d" % i,
-            "basis": {"role": role, "cands_ok_n": 2, "event_seq": event_seq, "rule_hits": list(hits), "rule_eval_ids": list(evals),
-                      "feat_missing_ids": list(missing), "rulebook_ver": "R-0002", "plan": "PL-%d" % i}}
+def rec(i, hits=(), evals=(), missing=(), event_seq=100, role="entry_scout", t=None, kind="note", what="rule_eval", why=None, ekind=None):
+    r = {"actor": "brain:chat", "kind": kind, "what": what, "t": T0 + 60 * i if t is None else t, "plan": "PL-%d" % i,
+         "basis": {"role": role, "cands_ok_n": 2, "event_seq": event_seq, "rule_hits": list(hits), "rule_eval_ids": list(evals),
+                   "feat_missing_ids": list(missing), "rulebook_ver": "R-0002", "plan": "PL-%d" % i}}
+    if why is not None:
+        r["basis"].update(event_why=why, event_kind=ekind)
+    return r
 
 
 class Base(unittest.TestCase):
@@ -161,6 +164,47 @@ class TestNoEvent(Base):
         cy.cfg = cfg2
         cy.update_status(self.c, now, readiness=False)
         self.assertNotIn("RULES_NO_EVENT", cy.codes)
+
+    def test_out_of_scope_does_not_light(self):
+        """Решения на событиях вне области правил (patrol, book_wall) — норма: RULES_NO_EVENT не загорается; stale и no_event — загорается."""
+        now = T0 + D
+        for i in range(10):
+            oos = i < 5
+            self.add(i, evals=() if oos else ["RL0001"], event_seq=None if oos else 100, t=now - 3600 + i,
+                     why="out_of_scope" if oos else "ok", ekind=("patrol" if i < 4 else "book_wall") if oos else "hot_enter")
+        self.imp()
+        self.assertEqual(self.c.execute("SELECT event_why, event_kind, no_event FROM rule_evals WHERE rule_id='' AND event_why='out_of_scope' "
+                                        "ORDER BY rec_seq LIMIT 1").fetchone(), ("out_of_scope", "patrol", 1))
+        n, share, miss = CY.no_event_share(self.c, now)
+        self.assertEqual((n, share), (10, 0.0))
+        cy = CY.Cycle(self.root, copy.deepcopy(CFG), steps=[], policy=POLICY)
+        cy.load(self.c, now)
+        cy.update_status(self.c, now, readiness=False)
+        self.assertNotIn("RULES_NO_EVENT", cy.codes)
+        cov = cy.no_event["coverage"]
+        self.assertEqual((cov["n"], cov["out_of_scope"], cov["by_kind"], cov["share"]), (10, 5, {"patrol": 4, "book_wall": 1}, 0.5))
+        self.assertEqual(cy.no_event["why"]["out_of_scope"], 5)
+        for i in range(10, 13):                                    # 3 запоздавших события из 13 -> 23% > 20%
+            self.add(i, event_seq=None, t=now - 3000 + i, why="stale", ekind="hot_enter")
+        self.imp()
+        cy.update_status(self.c, now, readiness=False)
+        self.assertIn("RULES_NO_EVENT", cy.codes)
+
+    def test_columns_added_by_import(self):
+        self.assertFalse(store2.has_re_why(self.c))
+        self.add(1, why="stale", ekind="hot_enter", event_seq=None)
+        self.add(2)                                                # прежняя запись без причины -> NULL
+        self.imp()
+        self.assertTrue(store2.has_re_why(self.c))
+        self.assertEqual(self.c.execute("SELECT event_why, event_kind FROM rule_evals WHERE rule_id='' ORDER BY rec_seq").fetchall(),
+                         [("stale", "hot_enter"), (None, None)])
+
+    def test_import_without_columns_on_migration_error(self):
+        with mock.patch.object(store2, "migrate_re_why", side_effect=store2.KnowledgeMigrationError(None, "boom")):
+            self.add(1, why="out_of_scope", ekind="patrol", event_seq=None)
+            r = self.imp()
+        self.assertEqual(r["records"], 1)
+        self.assertFalse(store2.has_re_why(self.c))
 
     def test_step_in_every_pass(self):
         cy = CY.Cycle(self.root, copy.deepcopy(CFG), steps=[CY.Step("rule_eval_import", "pass", CY.step_rule_eval_import),

@@ -6,7 +6,8 @@ memory_cases    случаи state/cases.jsonl: число по типам и с
 memory_lessons  уроки state/lessons.jsonl (мозга и меток): статус, источник, n, эффект с 95% t-интервалом, срок, испытание и правило урока.
 memory_rules    rulebook: режим применения (rulebook_view.active), версии, правила, ожидающие правила (wait READY | MAX_ACTIVE | LOSS_CAP, начало
                 ожидания, срок: у LOSS_CAP — wait_since_ts + promotion.loss_cap_wait_days, у остальных срока нет), доля feat_missing_ids по
-                правилам и доля решений без события (rule_evals за 7 суток, как learnloop.cycle.no_event_share).
+                правилам и доля решений без события (rule_evals за 7 суток, как learnloop.cycle.no_event_share: причины no_event и stale);
+                coverage — покрытие правилами (доля решений entry_scout/chat вне области правил по видам события, справочно, без цвета).
 memory_path     путь «кандидат → урок → испытание → правило → версия» по lesson_candidates, lessons.jsonl, trials, rule_rows и воронка.
 Каждое число — объект {"v", "n", "small"} (small: n < 30). База знаний открывается на один вызов через labels.store.open_ro и сразу
 закрывается; постоянных соединений нет. Нет файла или таблиц цикла -> state="no_data" (причина в reason); маркер восстановления ->
@@ -296,16 +297,28 @@ def _window_shares(conn, now):
     t0 = int(now) - WINDOW_S
     by_rule = []
     if not _has(conn, "rule_evals"):
-        return {"window_days": WINDOW_S // DAY, "all": share(0, 0), "by_rule": []}, dict(share(0, 0), window_days=WINDOW_S // DAY,
-                                                                                            threshold=NO_EVENT_YELLOW, yellow=False)
+        return ({"window_days": WINDOW_S // DAY, "all": share(0, 0), "by_rule": []},
+                dict(share(0, 0), window_days=WINDOW_S // DAY, threshold=NO_EVENT_YELLOW, yellow=False, why={}), _coverage(None))
     for rid, n, m in conn.execute("SELECT rule_id, COUNT(*), SUM(missing) FROM rule_evals WHERE rule_id<>'' AND ts>=? GROUP BY rule_id ORDER BY rule_id",
                                   (t0,)).fetchall():
         by_rule.append(dict(share(m, n), rule_id=_s(rid, 32), missing=int(m or 0)))
     m, mm = conn.execute("SELECT COUNT(*), SUM(missing) FROM rule_evals WHERE rule_id<>'' AND ts>=?", (t0,)).fetchone()
-    n, ne = conn.execute("SELECT COUNT(*), SUM(no_event) FROM rule_evals WHERE rule_id='' AND ts>=?", (t0,)).fetchone()
+    w = RV.rule_eval_why(conn, now, WINDOW_S)          # без события = no_event + stale (+ прежние no_event=1); out_of_scope — норма, не в доле
+    n, ne = w["n"], w["fail"]
     fm = {"window_days": WINDOW_S // DAY, "all": share(mm, m), "by_rule": by_rule}
-    noev = dict(share(ne, n), window_days=WINDOW_S // DAY, threshold=NO_EVENT_YELLOW, yellow=bool(n) and float(ne or 0) / n > NO_EVENT_YELLOW)
-    return fm, noev
+    noev = dict(share(ne, n), window_days=WINDOW_S // DAY, threshold=NO_EVENT_YELLOW, yellow=bool(n) and float(ne or 0) / n > NO_EVENT_YELLOW,
+                why=dict((k, int(v)) for k, v in w["why"].items()))
+    return fm, noev, _coverage(w["coverage"])
+
+
+def _coverage(cov):
+    """Покрытие правилами за WINDOW_S (справочно, без цвета): решения entry_scout/chat с известной причиной события — в области правил и вне её
+    (вид события вне видов политики), доля вне области (объект share) и разбивка по виду. Нет данных -> нули."""
+    cov = cov or {}
+    by_kind = sorted(((_s(k, 24) or "?", int(v)) for k, v in (cov.get("by_kind") or {}).items()), key=lambda kv: (-kv[1], kv[0]))
+    n, oos = int(cov.get("n") or 0), int(cov.get("out_of_scope") or 0)
+    return {"window_days": WINDOW_S // DAY, "n": n, "in_scope": int(cov.get("in_scope") or 0), "out_of_scope": oos, "share": share(oos, n),
+            "by_kind": [{"kind": k, "n": v} for k, v in by_kind[:20]]}
 
 
 def memory_rules(root=None, now=None):
@@ -321,7 +334,7 @@ def memory_rules(root=None, now=None):
     try:
         vers = RV.read_versions(conn)
         latest = RV.rules_latest(conn)
-        fm, noev = _window_shares(conn, now)
+        fm, noev, cov = _window_shares(conn, now)
     except sqlite3.Error:
         return _env("error", mode=mode)
     finally:
@@ -348,7 +361,7 @@ def memory_rules(root=None, now=None):
                 for v in reversed(vers[-VERSIONS_OUT:])]
     active = [x for x in rules if x["status"] == "active" and x["in_version"]]
     return _env("ok", mode=mode, current=_s((cur or {}).get("ver"), 12), versions=out_vers, versions_total=len(vers), counts=counts, active=active,
-                waiting=waiting, rules=rules, rules_total=len(latest), feat_missing=fm, no_event=noev)
+                waiting=waiting, rules=rules, rules_total=len(latest), feat_missing=fm, no_event=noev, coverage=cov)
 
 
 # ---------------------------------------------------------------- memory_path

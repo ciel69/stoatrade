@@ -77,11 +77,16 @@ def rule_kinds(view, root=None):
 
 def resolve(root, sym, event_seq, now, view):
     """Событие решения (rulebook_view.resolve_event) или None при ошибке чтения шины/конфига."""
+    return resolve_why(root, sym, event_seq, now, view)["event"]
+
+
+def resolve_why(root, sym, event_seq, now, view):
+    """Событие решения с причиной (rulebook_view.resolve_event_why) -> {"event", "why", "kind"}; ошибка чтения шины/конфига -> no_event."""
     try:
         from tb.knowledge import rulebook_view as RV
-        return RV.resolve_event(root, sym, event_seq, now, rule_kinds(view, root))
+        return RV.resolve_event_why(root, sym, event_seq, now, rule_kinds(view, root))
     except RULE_ERRORS:
-        return None
+        return {"event": None, "why": "no_event", "kind": None}
 
 
 def _mem_cfg(root):
@@ -93,13 +98,19 @@ def _mem_cfg(root):
 
 
 def rule_check(root, sym, side, event_seq=None, now=None, view=None, event=False, cfg=None):
-    """Одно решение (монета, сторона, событие) под действующим rulebook -> {"view", "event", "res"}; res — learn_rules.apply для {"side", "ok": True}.
+    """Одно решение (монета, сторона, событие) под действующим rulebook -> {"view", "event", "res", "event_why", "event_kind"}; res —
+    learn_rules.apply для {"side", "ok": True}; event_why/event_kind — причина события для учёта (rulebook_view.EVENT_WHY), решение не меняют.
 
     event_seq — только из задания раннера entry_scout (для chat None). view — готовый rulebook_view.active (иначе читается). event — уже
     разрешённое событие (False — разрешить здесь). Любая ошибка -> res в режиме без применения (ok=True, ничего не отсечено)."""
     now = time.time() if now is None else now
     view = rule_view(root, now) if view is None else view
-    ev = resolve(root, sym, event_seq, now, view) if event is False else event
+    if event is False:
+        rw = resolve_why(root, sym, event_seq, now, view)
+    else:
+        d = event.get("d") if isinstance(event, dict) else None
+        rw = {"event": event, "why": "ok" if event else "no_event", "kind": d.get("kind") if isinstance(d, dict) else None}
+    ev = rw["event"]
     res = {"ok": True, "fail": None, "hits": [], "eval": [], "missing": [], "blocked": [], "apply": False}
     applies = bool(view and view.get("apply") and view.get("rules"))
     shadow = _shadow_rules(view)
@@ -114,7 +125,7 @@ def rule_check(root, sym, side, event_seq=None, now=None, view=None, event=False
                 res = dict(res, shadow_hits=_shadow_hits(view, {"side": side, "ok": True}, feats))
         except RULE_ERRORS:
             pass
-    return {"view": view, "event": ev, "res": res}
+    return {"view": view, "event": ev, "res": res, "event_why": rw.get("why"), "event_kind": rw.get("kind")}
 
 
 def _shadow_rules(view):

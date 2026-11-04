@@ -7,6 +7,8 @@ active(root, now)      действующая версия и её правил�
 resolve_event(...)     событие scanner_signal монеты для признаков правил: event_seq (только задание раннера, проверка монеты, вида и возраста)
                        или последнее событие монеты вида из scope не старше event_max_age_s; хвост текущего файла шины и предыдущий
                        ротированный, только если его последняя запись моложе event_max_age_s (ротация core/bus.py:451-470).
+resolve_event_why(...) то же с причиной для учёта (EVENT_WHY: ok | no_event | out_of_scope | stale) и видом события; rule_eval_why(conn, ...)
+                       — счёт причин по rule_evals (доля RULES_NO_EVENT только по no_event и stale) и покрытие правилами (доля вне области).
 rule_eval_fields(...)  поля записи decisions kind="note", what="rule_eval"; shadow_hits (вторая итерация, Requirement 18.7) — правила trial и
                        активные в режиме без применения, которые отсекли бы решение (shadow_rules / shadow_hits; решение не меняют).
 
@@ -385,29 +387,131 @@ def resolve_event(root, sym, event_seq, now, kinds, max_age_s=None):
     event_seq (передавать только из задания раннера entry_scout; для chat — None) принимается, только если это scanner_signal той же монеты, вида
     из kinds и не старше event_max_age_s; иначе — последнее такое событие монеты; иначе None (правила к решению не применяются, их идентификаторы
     уходят в feat_missing_ids). События idea_stale и idea_level не берутся никогда. max_age_s по умолчанию — config/learnloop.json
-    apply.event_max_age_s (конфиг не читается -> None)."""
+    apply.event_max_age_s (конфиг не читается -> None). Причину None даёт resolve_event_why."""
+    return resolve_event_why(root, sym, event_seq, now, kinds, max_age_s)["event"]
+
+
+# причина события записи rule_eval (basis.event_why, колонка rule_evals.event_why): ok — правила применены к событию; no_event — события нет
+# (сбой: нет события монеты, не найдено, чужая монета, idea_*, конфиг); out_of_scope — событие есть, но его вид вне области правил (норма:
+# правила на такие входы не распространяются); stale — событие вида из области правил старше event_max_age_s (запаздывание)
+EVENT_WHY = ("ok", "no_event", "out_of_scope", "stale")
+EVENT_WHY_FAIL = ("no_event", "stale")           # входят в долю RULES_NO_EVENT; out_of_scope — нет
+STALE_LOOKBACK_X = 24                            # окно поиска event_seq задания для причины stale: event_max_age_s x 24 (6 ч при 900 с)
+
+
+def _sig_kind(e, sym):
+    """Вид scanner_signal монеты sym (не idea_*) или None."""
+    if not isinstance(e, dict) or e.get("type") != "scanner_signal" or e.get("sym") != sym:
+        return None
+    d = e.get("d")
+    k = d.get("kind") if isinstance(d, dict) else None
+    return k if isinstance(k, str) and k and k not in NEVER_KINDS else None
+
+
+def _why_of(e, sym, kinds):
+    """Причина для события, не прошедшего _event_ok: вид вне kinds -> out_of_scope, вид в kinds (значит, по возрасту) -> stale, иначе no_event."""
+    k = _sig_kind(e, sym)
+    if k is None:
+        return "no_event", None
+    return ("stale" if _kind_ok(k, kinds) else "out_of_scope"), k
+
+
+def resolve_event_why(root, sym, event_seq, now, kinds, max_age_s=None):
+    """resolve_event с причиной -> {"event": конверт|None, "why": EVENT_WHY, "kind": вид события|None}. Решение о событии то же, что у
+    resolve_event; причина только для учёта. Событие нашлось -> ok. Иначе при заданном event_seq — по событию задания (ищется и в окне
+    event_max_age_s x STALE_LOOKBACK_X: вид вне kinds -> out_of_scope, вид из kinds старше порога -> stale, не найдено / чужая монета / idea_* ->
+    no_event); без event_seq — последнее scanner_signal монеты в окне порога: вид вне kinds -> out_of_scope, нет -> no_event."""
     now = time.time() if now is None else now
     max_age_s = event_max_age_s(root) if max_age_s is None else max_age_s
     kinds = [k for k in (kinds or []) if isinstance(k, str)]
+    out = {"event": None, "why": "no_event", "kind": None}
     if not max_age_s or not isinstance(sym, str) or not sym or not kinds:
-        return None
+        return out
     evs = recent_events(root, now, max_age_s)
-    if isinstance(event_seq, int) and not isinstance(event_seq, bool):
+    given = isinstance(event_seq, int) and not isinstance(event_seq, bool)
+    seen = None
+    if given:
         for e in evs:
             if e["seq"] == event_seq:
+                seen = e
                 if _event_ok(e, sym, kinds, now, max_age_s):
-                    return e
+                    return {"event": e, "why": "ok", "kind": _sig_kind(e, sym)}
                 break
     best = None
     for e in evs:
         if _event_ok(e, sym, kinds, now, max_age_s) and (best is None or e["seq"] > best["seq"]):
             best = e
-    return best
+    if best is not None:
+        return {"event": best, "why": "ok", "kind": _sig_kind(best, sym)}
+    if given:
+        if seen is None:
+            seen = next((e for e in recent_events(root, now, float(max_age_s) * STALE_LOOKBACK_X) if e["seq"] == event_seq), None)
+        if seen is None:
+            return out
+        why, k = _why_of(seen, sym, kinds)
+        return dict(out, why=why, kind=k)
+    last = None
+    for e in evs:
+        if _sig_kind(e, sym) is not None and (last is None or e["seq"] > last["seq"]):
+            last = e
+    if last is not None and not _kind_ok(_sig_kind(last, sym), kinds):
+        return dict(out, why="out_of_scope", kind=_sig_kind(last, sym))
+    return out
+
+
+def rule_eval_why(conn, now, window_s, roles=None):
+    """Учёт причин событий записей rule_eval за окно (строки rule_id="" таблицы rule_evals; общий для цикла и вкладки «Память»).
+    -> {"n", "fail", "why": {ok, no_event, out_of_scope, stale, legacy}, "by_kind": {вид: n вне области}, "coverage": {...}}.
+    fail — no_event + stale (+ прежние строки без event_why с no_event=1): числитель RULES_NO_EVENT. coverage — по строкам с известной
+    причиной ролей roles (по умолчанию entry_scout, chat): n, in_scope, out_of_scope, share (доля вне области), by_kind."""
+    t0 = int(now) - int(window_s)
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(rule_evals)").fetchall()]
+    has = "event_why" in cols and "event_kind" in cols
+    why = dict((w, 0) for w in EVENT_WHY)
+    why["legacy"] = 0
+    n = fail = 0
+    roles = tuple(roles or ("entry_scout", "chat"))
+    cov = {"n": 0, "in_scope": 0, "out_of_scope": 0, "by_kind": {}}
+    q = ("SELECT event_why, event_kind, no_event, role, COUNT(*) FROM rule_evals WHERE rule_id='' AND ts>=? GROUP BY event_why, event_kind, no_event, role"
+         if has else "SELECT NULL, NULL, no_event, role, COUNT(*) FROM rule_evals WHERE rule_id='' AND ts>=? GROUP BY no_event, role")
+    by_kind = {}
+    for w, k, ne, role, c in conn.execute(q, (t0,)).fetchall():
+        c = int(c or 0)
+        n += c
+        if w not in EVENT_WHY:
+            why["legacy"] += c
+            fail += c if ne else 0
+            continue
+        why[w] += c
+        fail += c if w in EVENT_WHY_FAIL else 0
+        if w == "out_of_scope":
+            kk = k if isinstance(k, str) and k else "?"
+            by_kind[kk] = by_kind.get(kk, 0) + c
+        if role in roles:
+            cov["n"] += c
+            if w == "out_of_scope":
+                cov["out_of_scope"] += c
+                kk = k if isinstance(k, str) and k else "?"
+                cov["by_kind"][kk] = cov["by_kind"].get(kk, 0) + c
+            else:
+                cov["in_scope"] += c
+    cov["share"] = round(float(cov["out_of_scope"]) / cov["n"], 4) if cov["n"] else None
+    return {"n": n, "fail": fail, "why": why, "by_kind": by_kind, "coverage": cov}
+
+
+def coverage_txt(cov):
+    """Строка покрытия правилами: «вне области правил: 31% (patrol 20, book_wall 5) из 80 решений за 7 суток» или None (нет данных)."""
+    if not isinstance(cov, dict) or not cov.get("n") or cov.get("share") is None:
+        return None
+    kinds = sorted((cov.get("by_kind") or {}).items(), key=lambda kv: (-kv[1], kv[0]))
+    det = ", ".join("%s %d" % kv for kv in kinds[:5])
+    return "вне области правил: %.0f%%%s из %d решений" % (cov["share"] * 100, (" (%s)" % det) if det else "", cov["n"])
 
 
 # ---------------------------------------------------------------- запись rule_eval
 
-RULE_EVAL_KEYS = ("role", "cands_ok_n", "event_seq", "rule_hits", "rule_eval_ids", "feat_missing_ids", "rulebook_ver", "plan", "shadow_hits")
+RULE_EVAL_KEYS = ("role", "cands_ok_n", "event_seq", "rule_hits", "rule_eval_ids", "feat_missing_ids", "rulebook_ver", "plan", "shadow_hits",
+                  "event_why", "event_kind")
 
 
 def shadow_rules(view):
@@ -431,15 +535,23 @@ def shadow_hits(view, cand, feats, ctx=None):
 
 def rule_eval_fields(view, result, ctx):
     """Поля basis записи decisions kind="note", what="rule_eval" (Requirement 7.7): role, cands_ok_n, event_seq, rule_hits, rule_eval_ids,
-    feat_missing_ids, rulebook_ver, plan, shadow_hits (вторая итерация, Requirement 18.7: result["shadow_hits"], иначе []).
-    view — active(root), result — learn_rules.apply (+ shadow_hits), ctx — {"role", "cands_ok_n", "event"|"event_seq", "plan"}."""
+    feat_missing_ids, rulebook_ver, plan, shadow_hits (вторая итерация, Requirement 18.7: result["shadow_hits"], иначе []), event_why
+    (EVENT_WHY из ctx["event_why"]; нет -> ok при событии, иначе None) и event_kind (вид события, если известен).
+    view — active(root), result — learn_rules.apply (+ shadow_hits), ctx — {"role", "cands_ok_n", "event"|"event_seq", "plan", "event_why", "event_kind"}."""
     ctx = ctx or {}
     result = result or {}
     ev = ctx.get("event")
     seq = ev.get("seq") if isinstance(ev, dict) else ctx.get("event_seq")
+    seq = seq if isinstance(seq, int) and not isinstance(seq, bool) else None
     cok = ctx.get("cands_ok_n")
+    why = ctx.get("event_why")
+    why = why if why in EVENT_WHY else ("ok" if seq is not None else None)
+    kind = ctx.get("event_kind")
+    if not (isinstance(kind, str) and kind) and isinstance(ev, dict) and isinstance(ev.get("d"), dict):
+        kind = ev["d"].get("kind")
     return {"role": ctx.get("role"), "cands_ok_n": cok if isinstance(cok, int) and not isinstance(cok, bool) else None,
-            "event_seq": seq if isinstance(seq, int) and not isinstance(seq, bool) else None,
+            "event_seq": seq,
             "rule_hits": list(result.get("hits") or []), "rule_eval_ids": list(result.get("eval") or []),
             "feat_missing_ids": list(result.get("missing") or []), "rulebook_ver": (view or {}).get("ver"), "plan": ctx.get("plan"),
-            "shadow_hits": list(result.get("shadow_hits") or [])}
+            "shadow_hits": list(result.get("shadow_hits") or []), "event_why": why,
+            "event_kind": kind[:24] if isinstance(kind, str) and kind else None}
