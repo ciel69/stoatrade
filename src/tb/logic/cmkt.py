@@ -1095,6 +1095,17 @@ def snap_sym(doc, sym):
 # ---------------------------------------------------------------- совместимый xflow.json (Requirement 17.6; копии без импорта)
 COMPAT_BANDS =(("05", 0.5), ("1", 1.0), ("2", 2.0))
 COMPAT_CORE = ("BTC", "ETH", "SOL")
+# охват xstream (xstream.DEFAULTS: exchanges, book_limit, liq_exchanges, publish_s, n_syms) и параметры xflow.DEFAULTS (wall_mult,
+# min_wall_usd, bucket_pct, stale_s); тест сверяет с оригиналами. Рынки — (рынок cmkt, имя биржи в документе, глубина стакана | None)
+COMPAT_MARKETS = (("okx_perp", "okx", None), ("bitget_perp", "bitget", 15), ("binance_perp", "binanceusdm", 20))
+COMPAT_LIQ = ("binanceusdm",)
+COMPAT_N = 8
+COMPAT_PUBLISH_S = 2.0
+COMPAT_WALL_MULT = 5.0
+COMPAT_MIN_WALL_USD = 200000.0
+COMPAT_BUCKET_PCT = 0.1
+COMPAT_STALE_S = 180.0
+COMPAT_KINDS = ("trades", "book", "ticker", "liq")
 
 
 def compat_symbols(positions, requested, extra, n):
@@ -1156,6 +1167,35 @@ def compat_walls(buckets_, mid, mult, min_usd, bucket_pct):
             out.append({"side": side, "px": v[2], "usd": round(usd, 0), "x": round(usd / med, 1),
                         "dist_pct": round(abs(v[2] - mid) / mid * 100.0, 2), "n_ex": len(v[3])})
     return out
+
+
+def compat_book_row(bids, asks, depth=None, bucket_pct=COMPAT_BUCKET_PCT):
+    """Стакан рынка для совместимого документа: уровни [(цена за монету, монеты)] лучшими первыми, обрезка до depth уровней на сторону
+    (глубина xstream; None — без обрезки) -> [mid, depth_pct, {"05"|"1"|"2": [bid_usd, ask_usd] | None}, [[side, k, usd, max_usd, px]]]
+    или None. Те же числа, что compat_book_stats на стакане ccxt той же глубины (монеты = контракты × contract_size)."""
+    n = None if depth is None else int(depth)
+    ob = {"bids": [[p, a] for p, a in (bids or ())[:n]], "asks": [[p, a] for p, a in (asks or ())[:n]]}
+    bk = {}
+    st = compat_book_stats(ob, 1.0, bk, bucket_pct)
+    if st is None:
+        return None
+    return [st["mid"], st["depth_pct"], st["bands"], [[s, k, v[0], v[1], v[2]] for (s, k), v in sorted(bk.items())]]
+
+
+def compat_book_unpack(row):
+    """Обратное compat_book_row -> {"mid", "depth_pct", "bands", "buckets": {(side, k): [usd, max_usd, px, set()]}} или None."""
+    try:
+        mid, dp, bands_, bks = row
+        mid = num(mid)
+        if not mid or not isinstance(bands_, dict):
+            return None
+        out = {}
+        for s, k, usd, mx, px in bks:
+            if s in ("bid", "ask") and isinstance(k, int) and num(usd) is not None and num(mx) is not None and num(px):
+                out[(s, k)] = [num(usd), num(mx), num(px), set()]
+        return {"mid": mid, "depth_pct": num(dp), "bands": bands_, "buckets": out}
+    except (TypeError, ValueError):
+        return None
 
 
 def compat_merge(books):

@@ -33,6 +33,15 @@ class TestLists(unittest.TestCase):
         self.assertIn("playbook", catalog.TOOLS["get_brief"].out)
         self.assertIn("playbook", model2._BRIEF_ALLOW)
 
+    def test_every_brief_key_passes_gateway(self):
+        """Каждый ключ верхнего уровня, который пишет brief.build (b["x"] = ...), пропускается белым списком get_brief: иначе
+        rpc.finish молча отбрасывает блок и модель его не видит (так было с deriv, crowd, trend, data до 2026-11-04)."""
+        import inspect
+        import re
+        keys = set(re.findall(r'\bb\["([a-z_]+)"\]\s*=', inspect.getsource(brief_mod)))
+        self.assertTrue({"market", "deriv", "cmkt"} <= keys, keys)
+        self.assertEqual(sorted(keys - set(catalog.TOOLS["get_brief"].out)), [])
+
     def test_trim_order(self):
         names = [n for n, _ in brief_mod.TRIM_STEPS]
         self.assertLess(names.index("lessons"), names.index("rulebook"))

@@ -18,7 +18,7 @@
   При `wait=True` ожидание `pending` (повтор раз в 0.25 с) до срока, затем окончательный ответ (`pending` не возвращается).
 - `brief_block(root, sym, now=None, cfg=None)` — блок `cmkt` досье (Requirement 16) в бюджете `brief.max_tokens` (`len(json) / 4`).
 - `detail(root, sym, parts=None, now=None, cfg=None)` — ответ инструмента `get_market_detail` (Requirement 21) не длиннее
-  `tool.max_bytes`.
+  `tool.max_bytes`; `tool_cfg(root, cfg=None)` — его пределы `max_bytes` и `per_hour` с границами.
 
 `cfg` в `brief_block` и `detail` — словарь config/cmkt.json (результат загрузчика сервиса или его разделы); None — файл читается здесь.
 """
@@ -295,13 +295,13 @@ def _brief_fields(s, mode, cov_cfg):
     g = f.get
     out = []
     l5l, l5s = L.num(g("cm_liq_5m_long_musd")), L.num(g("cm_liq_5m_short_musd"))
-    out.append(("imb_05", _rnd(g("cm_imb_05_pct"), 1)))
+    out.append(("imb_025", _rnd(g("cm_imb_025_pct"), 1)))
     out.append(("cvd_ps5", _rnd(g("cm_cvd_ps_5m_pct"), 1)))
     out.append(("oi5", _rnd(g("cm_oi_chg_5m_pct"), 3)))
     out.append(("liq5_net", _rnd(l5l - l5s, 3) if l5l is not None and l5s is not None else None))
     out.append(("fund_w", _rnd(g("cm_fund_w_pct"), 5)))
     out.append(("prem_ps", _rnd(g("cm_prem_ps_bps"), 1)))
-    out.append(("pulled15_net", None))   # в снимке и рядах нет числа снятых стен по сторонам (только сумма) — см. отчёт задачи 16
+    out.append(("pull15", _rnd(g("cm_wall_pull_15m_pct"), 1)))
     out.append(("n_ex", s.get("n_ex") if isinstance(s.get("n_ex"), int) else None))
     out.append(("cov", _cov_min(s)))
     out.append(("lead", s.get("lead") if isinstance(s.get("lead"), str) else None))
@@ -483,6 +483,15 @@ def _part_venues(s, doc):
     return out
 
 
+def tool_cfg(root=None, cfg=None):
+    """Параметры инструмента get_market_detail: {"max_bytes": 512–8192 (2048), "per_hour": 1–1000 (30)} из раздела `tool`. Не бросает."""
+    try:
+        t = _cfg(root, cfg)["tool"]
+    except Exception:                                    # noqa: BLE001
+        t = DEFAULTS["tool"]
+    return {"max_bytes": _int_in(t.get("max_bytes"), 512, 8192, 2048), "per_hour": _int_in(t.get("per_hour"), 1, 1000, 30)}
+
+
 def detail(root, sym, parts=None, now=None, cfg=None):
     """Ответ инструмента: {"sym", "ts", "age_s", "n_ex", "cov", "warn": [...], <части>, "trunc": [отброшенные части]} не длиннее
     tool.max_bytes (UTF-8 компактного JSON); снимка нет или он старше 5 с — warn STALE без чисел; монета вне фокуса — NOT_FOCUS без
@@ -490,7 +499,7 @@ def detail(root, sym, parts=None, now=None, cfg=None):
     out = {"sym": sym if isinstance(sym, str) else None}
     try:
         c = _cfg(root, cfg)
-        max_bytes = _int_in(c["tool"].get("max_bytes"), 512, 8192, 2048)
+        max_bytes = tool_cfg(root, c)["max_bytes"]
         want = [p for p in PARTS if parts is None or p in (parts or ())]
         doc = _read_snap(root)
         if doc is None:

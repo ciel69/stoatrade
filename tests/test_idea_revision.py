@@ -562,7 +562,7 @@ class ReviseRunner(BrainBase):
         j = self.stale_job(kinds=("hot_enter",))
         r.step()
         names = sorted(t["name"] for t in r.client_for("ds-flash").calls[0]["req"].tools)
-        self.assertEqual(names, ["es_revise", "es_skip", "es_take", "es_watch"])
+        self.assertEqual(names, ["es_revise", "es_skip", "es_take", "es_watch", "get_market_detail"])      # + чтение сводного рынка (R1.7, tools_optional)
         self.assertEqual(self.code(j["id"]), "SKIP")
 
     def test_no_revise_tool_without_flagged_idea(self):
@@ -571,7 +571,7 @@ class ReviseRunner(BrainBase):
         self.stale_job(kinds=("hot_enter",))
         r.step()
         names = sorted(t["name"] for t in r.client_for("ds-flash").calls[0]["req"].tools)
-        self.assertEqual(names, ["es_skip", "es_take", "es_watch"])
+        self.assertEqual(names, ["es_skip", "es_take", "es_watch", "get_market_detail"])
 
     def test_watch_note_is_built_by_code(self):
         """Заметка идеи из es_watch собирается кодом из чисел кандидата, текст модели в note не попадает."""

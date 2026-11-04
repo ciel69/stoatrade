@@ -17,6 +17,7 @@ import sys
 import time
 
 from tb import paths
+from tb.core import cmktdoc
 from tb.knowledge import markers as KM
 from tb.knowledge import store2
 from tb.labels import capture, label, policies, query, schema, store
@@ -87,7 +88,7 @@ def backfill(conn, root, since_t, cfg=None, now_s=None, restart=False, max_bytes
         rep["resumed"] = True
         p = _ro_meta(conn, BF_META)
         prev = p if isinstance(p, dict) and p.get("since") == int(since_t) else {}
-    for k in ("new", "seen", "bad_lines"):
+    for k in ("new", "seen", "bad_lines", "cm_added"):
         rep[k] = int(prev.get(k) or 0)
     allowed = set(cfg.get("capture_types") or capture.DEFAULT_CFG["capture_types"])
     specs = capture.policy_specs(root)
@@ -118,8 +119,11 @@ def backfill(conn, root, since_t, cfg=None, now_s=None, restart=False, max_bytes
                 elif sig["t0"] >= since_t and sig["type"] in allowed:
                     rows.append(sig)
             new_off = offset + len(chunk)
+            fresh, upd = _bf_cm(conn, root, rows, now_s)
             with store.tx(conn):
-                rep["new"] += capture.insert_signals(conn, rows, cfg, specs, now_s)
+                rep["new"] += capture.insert_signals(conn, fresh, cfg, specs, now_s)
+                conn.executemany("UPDATE signals SET ev=? WHERE key=?", [(ev, k) for ev, k, _ in upd])
+                rep["cm_added"] += sum(1 for _, _, has_cm in upd if has_cm)
                 rep["seen"] += len(rows)
                 conn.execute("INSERT OR REPLACE INTO cursor(src, path, offset, head_sha, ts) VALUES(?,?,?,?,?)",
                              (src, path, new_off, capture._head_sha(path, new_off), int(now_s)))
@@ -135,8 +139,36 @@ def backfill(conn, root, since_t, cfg=None, now_s=None, restart=False, max_bytes
     return rep
 
 
+def _bf_cm(conn, root, rows, now_s):
+    """R1.7 (Requirement 14.3): признаки сводного рынка для догрузки. -> (новые сигналы с ev.cm | ev.cm_missing, [(ev, key)] для UPDATE).
+    У уже записанного сигнала ev.cm не перезаписывается; нет ev.cm -> дополняется, если строка признаков ещё хранится; ev.cm_missing
+    ставится только сигналу, у которого нет ни того, ни другого (захвачен до R1.7). Ожидание строки (pending) — как у мозга (wait=True)."""
+    fresh, upd = [], []
+    for s in rows:
+        got = conn.execute("SELECT ev FROM signals WHERE key=?", (s["key"],)).fetchone()
+        if got is None:
+            capture.cm_features(root, s, now_s, wait=True)
+            fresh.append(s)
+            continue
+        ev = _jl(got[0])
+        if not isinstance(ev, dict) or isinstance(ev.get("cm"), dict):
+            continue
+        r = cmktdoc.features_at(root, capture.cm_sym(s["sym"]), s["t0"], now=now_s, wait=True)
+        has_cm = isinstance(r.get("cm"), dict)
+        if has_cm:
+            ev["cm"] = r["cm"]
+            ev.pop("cm_missing", None)
+        elif "cm_missing" not in ev and r.get("cm_missing"):
+            ev["cm_missing"] = r["cm_missing"]
+        else:
+            continue
+        upd.append((json.dumps(ev, ensure_ascii=False, separators=(",", ":")), s["key"], has_cm))
+    return fresh, upd
+
+
 def _save_progress(conn, rep, offset, size, now_s, done):
-    d = {"since": rep["since"], "offset": offset, "size": size, "seen": rep["seen"], "new": rep["new"], "bad_lines": rep["bad_lines"], "done": bool(done), "ts": int(now_s)}
+    d = {"since": rep["since"], "offset": offset, "size": size, "seen": rep["seen"], "new": rep["new"], "bad_lines": rep["bad_lines"], "cm_added": rep.get("cm_added", 0),
+         "done": bool(done), "ts": int(now_s)}
     conn.execute("INSERT OR REPLACE INTO meta(k, v) VALUES(?, ?)", (BF_META, json.dumps(d, separators=(",", ":"))))
 
 
@@ -246,8 +278,30 @@ def cmd_status(a, root):
     return 0
 
 
+def cm_stats(root, since=None):
+    """R1.7 (Requirement 14.4): покрытие признаками сводного рынка (capture.cm_coverage) по базе меток; нет базы -> None."""
+    conn = store.open_ro(root)
+    if conn is None:
+        return None
+    try:
+        return capture.cm_coverage(conn, query.since_ts(since), capture.warm_s(root))
+    finally:
+        conn.close()
+
+
+def _cm_lines(cm):
+    if not cm:
+        return ["сводный рынок: нет базы"]
+    fw = " ".join("%s=%s" % (k, _fmt(v, 2)) for k, v in cm["first_wave"].items())
+    miss = " ".join("%s=%s" % (k, v) for k, v in sorted(cm["missing"].items())) or "-"
+    return ["сводный рынок: ev.cm у %s сигналов монет в фокусе >= %s с (n=%s, цель 0.9), у %s всех (n=%s, без полей R1.7 %s); нет строки: %s" % (
+                _fmt(cm["focus"], 3), _fmt(cm["warm_s"], 0), cm["n_focus"], _fmt(cm["all"], 3), cm["n_all"], cm["legacy"], miss),
+            "  первая волна, доля не-None среди ev.cm: %s" % (fw or "-")]
+
+
 def cmd_stats(a, root):
     since = a.since
+    cm = cm_stats(root, since)
     if a.by == "policy":
         rows = query.policy_stats(root, since=since, by=("policy_id", "policy_ver"), kinds=a.kinds.split(",") if a.kinds else None)
         lines = []
@@ -257,11 +311,12 @@ def cmd_stats(a, root):
                 r["policy_id"], r["policy_ver"], r["n"], _fmt(r["fill_rate"], 2), _fmt(r["win"], 2), _fmt(r["avg_r_net"]), _fmt(r["se_r"]),
                 "inf" if r["pf_inf"] else _fmt(r["pf"], 2), _fmt(r["mfe_r"], 2), _fmt(r["mae_r"], 2), _fmt(r["p"], 4), _fmt(r["alpha_adj"], 4),
                 " (n<min)" if r["small"] else "", ex))
-        _out({"by": "policy", "since": since, "rows": rows}, a.text, lines or ["нет данных"])
+        _out({"by": "policy", "since": since, "rows": rows, "cm": cm}, a.text, (lines or ["нет данных"]) + _cm_lines(cm))
     else:
         rows = query.outcome_stats(root, since=since, by=("type",), horizon=a.horizon)
-        _out({"by": "type", "since": since, "horizon": a.horizon, "rows": rows}, a.text,
-             ["%s h=%s n=%s ret=%s net_dir=%s net>0=%s" % (r["type"], r["h"], r["n"], _fmt(r["avg_ret_pct"]), _fmt(r["avg_net_dir_pct"]), _fmt(r["net_pos_share"], 2)) for r in rows] or ["нет данных"])
+        _out({"by": "type", "since": since, "horizon": a.horizon, "rows": rows, "cm": cm}, a.text,
+             (["%s h=%s n=%s ret=%s net_dir=%s net>0=%s" % (r["type"], r["h"], r["n"], _fmt(r["avg_ret_pct"]), _fmt(r["avg_net_dir_pct"]), _fmt(r["net_pos_share"], 2)) for r in rows]
+              or ["нет данных"]) + _cm_lines(cm))
     return 0
 
 

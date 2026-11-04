@@ -1,25 +1,19 @@
-"""Кросс-биржевой поток через ccxt (только публичное чтение, без ключей): подтверждают ли другие биржи то, что идёт на Bybit. Всё — числа.
+"""Кросс-биржевой поток (только публичное чтение, без ключей): подтверждают ли другие биржи то, что идёт на Bybit. Всё — числа.
 
-По небольшому набору монет (первые n_syms символов intel; BTC/ETH/SOL всегда первые) на bybit, binanceusdm, okx, bitget, каждая биржа своим потоком:
-  сделки (раз в trades_s): последние N сделок (fetch_trades без since: since у Bybit игнорируется, у Bitget режет выдачу), склейка по id в ленту;
-      CVD = агрессивные покупки минус продажи в USD (количество x contractSize x цена) за 5 и 15 мин; окна считаются от последней сделки по монете
-      на всех биржах (часы бирж, а не локальные: локальные могут отставать на десятки секунд). Полная страница, которая не дотянулась до прошлого
-      опроса, = разрыв: лента начинается заново, покрытие окна cov (0..1) честно меньше 1;
-  стакан (раз в book_s): ликвидность bid/ask в полосах ±0.5/1/2 % от середины (USD с contractSize), дисбаланс (bid-ask)/(bid+ask)*100 по бирже и
-      суммарно; полоса считается только у биржи, чья выдача стакана её покрывает (глубина выдачи depth_pct); стены суммарно по всем биржам:
-      корзины bucket_pct % от середины, корзина в wall_mult раз крупнее медианы корзин стороны и не меньше min_wall_usd, до 3 на сторону;
-  медленное (раз в slow_s, только другие биржи: у Bybit свои oi_/ls_ источники intel): long/short ratio (последнее), история OI (изменение за 1 и 24 ч),
-      фандинг за 3 последних расчёта, ликвидации за 1 ч там, где ccxt отдаёт их публично (на 2026-11 ни одна из четырёх бирж: честно отсутствуют).
-Метод, которого у биржи нет (has[...] пусто или NotSupported), больше не вызывается. Любая другая ошибка биржи = backoff этой биржи (VPN, гео-блок),
-остальные работают. Результат: runtime/intel/xflow.json (числа и идентификаторы), сжатие в facts: summary() -> store.build_facts deriv[SYM]["x"].
+Файл runtime/intel/xflow.json пишет один производитель: поток по сокетам tb.xdata.xstream (сервис intel) или, при config/cmkt.json
+compat_xflow=true, сводный рынок tb.cmkt.compat (формат XStream.document, src="cmkt"). Опросный класс XFlow удалён (R1.7, задача 22;
+вызовов не было). Здесь остаются общие части формата:
+  Tape — лента сделок одной монеты на одной бирже: CVD = агрессивные покупки минус продажи в USD (количество x contractSize x цена) за 5 и 15 мин,
+      покрытие окна cov (0..1) честно меньше 1 при разрыве;
+  book_stats — ликвидность bid/ask в полосах ±0.5/1/2 % от середины (USD с contractSize); полоса считается только у биржи, чья выдача стакана
+      её покрывает (глубина выдачи depth_pct); корзины bucket_pct % для стен;
+  walls — стены суммарно по всем биржам: корзина в wall_mult раз крупнее медианы корзин стороны и не меньше min_wall_usd, до 3 на сторону;
+  oi_changes, read, summary — чтение документа и сжатие в facts: summary() -> store.build_facts deriv[SYM]["x"].
 """
-import concurrent.futures
 import statistics
-import time
 from collections import deque
 
 from tb import paths
-from tb.core import filelock
 from tb.intel import xex as ixex
 
 DEFAULTS = {"enabled": True, "exchanges": list(ixex.DEFAULT_EXCHANGES), "n_syms": 8, "trades_s": 20.0, "book_s": 45.0, "slow_s": 300.0,
@@ -27,7 +21,6 @@ DEFAULTS = {"enabled": True, "exchanges": list(ixex.DEFAULT_EXCHANGES), "n_syms"
             "trades_limit": {"okx": 500}, "book_limit": {"bybit": 500, "binanceusdm": 1000, "okx": 1000, "bitget": 100}}
 BANDS = (("05", 0.5), ("1", 1.0), ("2", 2.0))
 KEEP_S = 960.0
-BITGET_PREC = ("scale0", "scale1", "scale2")       # слияние уровней Bitget: выдача всего 100 уровней, у BTC без слияния это ±0.03 %
 
 
 def fcfg(cfg):
@@ -48,14 +41,6 @@ _f = ixex._f
 
 def _r(x, nd=0):
     return None if x is None else (int(round(x)) if nd == 0 else round(x, nd))
-
-
-def _cs(ex, m):
-    return _f(((ex.markets or {}).get(m) or {}).get("contractSize")) or 1.0
-
-
-def _unsupported(e):
-    return type(e).__name__ in ("NotSupported",)
 
 
 class Tape(object):
@@ -170,189 +155,6 @@ def walls(buckets, mid, mult, min_usd, bucket_pct):
             out.append({"side": side, "px": v[2], "usd": round(usd, 0), "x": round(usd / med, 1), "dist_pct": round(abs(v[2] - mid) / mid * 100.0, 2),
                         "n_ex": len(v[3])})
     return out
-
-
-class XFlow(object):
-    def __init__(self, root, cfg, clock=time.time, factory=None, log=None, parallel=True):
-        self.root, self.cfg, self.clock = root, cfg, clock
-        self.c = fcfg(cfg)
-        self.log = log or (lambda m: None)
-        self.col = ixex.Collector(root, cfg, clock, factory=factory, log=self.log)     # свои объекты бирж: xex живёт в другом потоке
-        self.factory = factory
-        self.parallel = parallel
-        self.tapes = {}                     # (eid, sym) -> Tape
-        self.books = {}                     # (eid, sym) -> {"at", "mid", "depth_pct", "bands", "buckets"}
-        self.slow = {}                      # (eid, sym) -> {"at", "ls", "oi1h_pct", "oi24h_pct", "oi_usd", "fundh_pct", "liq_long_usd", "liq_short_usd"}
-        self.st = {e: {"ok": None, "fails": 0, "next_try": 0.0, "err": None, "t_trades": -1e18, "t_book": -1e18, "t_slow": -1e18} for e in self.c["exchanges"]}
-        self.nosup = {}                     # eid -> {вид: True}: метода нет, больше не вызываем
-        self.prec = {}                      # (eid, sym) -> индекс BITGET_PREC
-        self.reqs = deque(maxlen=5000)      # время запросов (бюджет)
-
-    def _call(self, eid, kind, fn):
-        if self.nosup.get(eid, {}).get(kind):
-            return None
-        self.reqs.append(self.clock())
-        try:
-            return fn()
-        except Exception as e:  # noqa: BLE001
-            if _unsupported(e):
-                self.nosup.setdefault(eid, {})[kind] = True
-                return None
-            raise
-
-    def _has(self, ex, eid, name, kind):
-        if not (getattr(ex, "has", None) or {}).get(name):
-            self.nosup.setdefault(eid, {})[kind] = True
-        return not self.nosup.get(eid, {}).get(kind)
-
-    # ---- одна биржа: всё, у чего подошёл срок; исключения наружу (backoff в _run)
-    def _exchange_round(self, eid, symbols, now):
-        s = self.st[eid]
-        do_t, do_b, do_s = (now - s["t_trades"] >= self.c["trades_s"], now - s["t_book"] >= self.c["book_s"],
-                            eid != "bybit" and now - s["t_slow"] >= self.c["slow_s"])
-        if not (do_t or do_b or do_s):
-            return False
-        ex = self.col._exchange(eid, now)
-        mk = {sym: "%s/USDT:USDT" % sym for sym in symbols if "%s/USDT:USDT" % sym in (ex.markets or {})}
-        if do_t:
-            page = int(self.c["trades_limit"].get(eid, 1000))
-            for sym, m in mk.items():
-                if self._has(ex, eid, "fetchTrades", "trades"):
-                    tr = self._call(eid, "trades", lambda: ex.fetch_trades(m, None, page))
-                    if tr is not None:
-                        self.tapes.setdefault((eid, sym), Tape()).merge(tr, _cs(ex, m), page, now)
-            s["t_trades"] = now
-        if do_b:
-            for sym, m in mk.items():
-                if not self._has(ex, eid, "fetchOrderBook", "book"):
-                    break
-                lim, params = int(self.c["book_limit"].get(eid, 100)), {}
-                if eid == "bitget":
-                    params = {"precision": BITGET_PREC[self.prec.get((eid, sym), 1)], "limit": "max"}
-                    lim = None
-                ob = self._call(eid, "book", lambda: ex.fetch_order_book(m, lim, params))
-                if ob is None:
-                    continue
-                bk = {}
-                st = book_stats(ob, _cs(ex, m), bk, self.c["bucket_pct"])
-                if st is None:
-                    continue
-                st.update({"at": now, "buckets": bk})
-                self.books[(eid, sym)] = st
-                if eid == "bitget":                                   # слияние подстраивается: полоса ±1 % должна быть видна, но без лишней грубости
-                    i = self.prec.get((eid, sym), 1)
-                    self.prec[(eid, sym)] = min(2, i + 1) if st["depth_pct"] < 1.0 else (max(0, i - 1) if st["depth_pct"] >= 4.0 else i)
-            s["t_book"] = now
-        if do_s:
-            for sym, m in mk.items():
-                self.slow[(eid, sym)] = self._slow_one(ex, eid, m, now)
-            s["t_slow"] = now
-        return True
-
-    def _slow_one(self, ex, eid, m, now):
-        row = {"at": now}
-        if self._has(ex, eid, "fetchLongShortRatioHistory", "ls"):
-            r = self._call(eid, "ls", lambda: ex.fetch_long_short_ratio_history(m, "5m", None, 3)) or []
-            r = sorted([x for x in r if isinstance(x, dict) and _f(x.get("longShortRatio")) and _f(x.get("timestamp"))], key=lambda x: x["timestamp"])
-            if r:
-                row["ls"] = round(_f(r[-1]["longShortRatio"]), 3)
-        if self._has(ex, eid, "fetchOpenInterestHistory", "oih"):
-            r = self._call(eid, "oih", lambda: ex.fetch_open_interest_history(m, "1h", None, 26)) or []
-            row.update(oi_changes(r))
-        if self._has(ex, eid, "fetchFundingRateHistory", "frh"):
-            r = self._call(eid, "frh", lambda: ex.fetch_funding_rate_history(m, None, 3)) or []
-            fs = [_f(x.get("fundingRate")) for x in sorted([x for x in r if isinstance(x, dict) and _f(x.get("timestamp"))], key=lambda x: x["timestamp"])[-3:]]
-            fs = [x for x in fs if x is not None]
-            if fs:
-                row["fundh_pct"] = round(sum(fs) / len(fs) * 100.0, 5)
-        if self._has(ex, eid, "fetchLiquidations", "liq"):
-            r = self._call(eid, "liq", lambda: ex.fetch_liquidations(m, int(now * 1000 - 3600000))) or []
-            lo = sh = 0.0
-            for x in r:
-                if not isinstance(x, dict):
-                    continue
-                usd = _f(x.get("quoteValue"))
-                if usd is None and _f(x.get("contracts")) and _f(x.get("price")):
-                    usd = _f(x["contracts"]) * (_f(x.get("contractSize")) or _cs(ex, m)) * _f(x["price"])
-                side = x.get("side")
-                if usd is None:
-                    continue
-                if side in ("long", "sell"):                             # ликвидация лонга исполняется продажей
-                    lo += usd
-                elif side in ("short", "buy"):
-                    sh += usd
-            row["liq_long_usd"], row["liq_short_usd"] = round(lo, 0), round(sh, 0)
-        return row
-
-    def _run(self, eid, symbols, now):
-        s = self.st[eid]
-        if now < s["next_try"]:
-            return
-        try:
-            if self._exchange_round(eid, symbols, now):
-                s.update({"ok": True, "fails": 0, "err": None})
-        except Exception as e:  # noqa: BLE001 - ни одна биржа не роняет intel
-            s["fails"] += 1
-            s.update({"ok": False, "err": type(e).__name__[:40], "next_try": now + min(1800.0, 30.0 * 2 ** (s["fails"] - 1))})
-            if s["fails"] in (1, 4):
-                self.log("intel: xflow %s недоступен (%s)" % (eid, type(e).__name__))
-
-    def step(self, symbols, now=None):
-        """Опрос бирж, у которых подошёл срок, и запись xflow.json. Не бросает. -> документ или None."""
-        now = self.clock() if now is None else now
-        if not ixex.available() and self.factory is None:
-            return None
-        syms = list(dict.fromkeys(["BTC", "ETH", "SOL"] + [x for x in symbols or [] if isinstance(x, str)]))[:int(self.c["n_syms"])]
-        exs = [e for e in self.c["exchanges"] if e in self.st]
-        if self.parallel and len(exs) > 1:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=len(exs)) as pool:
-                list(pool.map(lambda e: self._run(e, syms, now), exs))
-        else:
-            for e in exs:
-                self._run(e, syms, now)
-        try:
-            doc = self.document(syms, now)
-            filelock.atomic_write_json(xflow_path(self.root), doc, indent=None)
-            return doc
-        except (OSError, ValueError, TypeError) as e:
-            self.log("intel: xflow не записан (%s)" % type(e).__name__)
-            return None
-
-    def req_per_min(self, now):
-        return sum(1 for t in self.reqs if now - t <= 60)
-
-    def document(self, syms, now):
-        c = self.c
-        out = {"ts_epoch": now, "req_min": self.req_per_min(now),
-               "ex": {e: {"ok": s["ok"], "fails": s["fails"], "err": s["err"], "nosup": sorted(self.nosup.get(e, {}))} for e, s in self.st.items()}, "syms": {}}
-        for sym in syms:
-            row = {}
-            tapes = {e: t for (e, s), t in self.tapes.items() if s == sym and t.at is not None and now - t.at <= c["stale_s"]}
-            if tapes:
-                anchor = max(t.newest for t in tapes.values() if t.newest is not None) if any(t.newest for t in tapes.values()) else None
-                if anchor is not None:
-                    row["cvd"] = {e: {"w5": _w(t.window(anchor, 300)), "w15": _w(t.window(anchor, 900))} for e, t in tapes.items()}
-                    row["cvd_anchor"] = anchor
-            bks = {e: b for (e, s), b in self.books.items() if s == sym and now - b["at"] <= c["stale_s"]}
-            if bks:
-                row["ob"] = {e: {"mid": b["mid"], "depth_pct": b["depth_pct"], "bands": b["bands"]} for e, b in bks.items()}
-                mids = sorted(b["mid"] for b in bks.values())
-                mid = mids[len(mids) // 2]
-                agg = {}
-                for e, b in bks.items():
-                    for k, v in b["buckets"].items():
-                        a = agg.setdefault(k, [0.0, 0.0, v[2], set()])
-                        a[0] += v[0]
-                        if v[1] > a[1]:
-                            a[1], a[2] = v[1], v[2]
-                        a[3].add(e)
-                row["walls"] = walls(agg, mid, c["wall_mult"], c["min_wall_usd"], c["bucket_pct"])
-            sl = {e: {k: v for k, v in r.items() if k != "at"} for (e, s), r in self.slow.items() if s == sym and now - r["at"] <= c["slow_stale_s"]}
-            if sl:
-                row["slow"] = sl
-            if row:
-                out["syms"][sym] = row
-        return out
 
 
 def _w(w):

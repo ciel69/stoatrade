@@ -354,6 +354,18 @@ def load(root=None):
     return (None, errs) if errs else (raw, [])
 
 
+def compat_active(cfg):
+    """Совместимый runtime/intel/xflow.json пишет cmkt (задача 22): сводный рынок включён и `compat_xflow = true`."""
+    return isinstance(cfg, dict) and cfg.get("enabled") is True and cfg.get("compat_xflow") is True
+
+
+def compat_xflow_on(root=None):
+    """Для сервиса intel (не запускать XStream): годный config/cmkt.json с compat_active. Битый файл -> False: сервис cmkt с ним
+    не стартует (код 2), писателем остаётся XStream — у файла всегда один писатель."""
+    cfg, errs = load(root)
+    return not errs and compat_active(cfg)
+
+
 def load_strict(root=None):
     """Как load, но битый конфиг -> ConfError (сервис выходит с кодом 2)."""
     cfg, errs = load(root)

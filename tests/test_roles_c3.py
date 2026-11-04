@@ -103,7 +103,7 @@ class RolesAndPrompts(unittest.TestCase):
             for t in self.reg.get(rid).tools:
                 self.assertIn(t, catalog.TOOLS, (rid, t))
         self.assertEqual(self.reg.get("day_auditor").tools, [])
-        self.assertEqual(sorted(self.reg.get("position_manager").tools), ["get_brief", "show_plan"])
+        self.assertEqual(sorted(self.reg.get("position_manager").tools), ["get_brief", "get_market_detail", "show_plan"])     # R1.7: get_market_detail как tools_optional
         for forbidden in ("submit_plan", "amend_plan", "stop_plan", "close_plan", "cancel_plan", "hold_plan", "release_plan", "ack_events"):
             for rid in ("morning_analyst", "reviewer", "day_auditor"):
                 self.assertNotIn(forbidden, self.reg.get(rid).tools, (rid, forbidden))

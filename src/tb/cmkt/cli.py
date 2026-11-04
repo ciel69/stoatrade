@@ -3,6 +3,7 @@
 - `status [--json]` — сводка (`runtime/platform/cmkt.hb.json`) и рынки: код в последнем снимке, `lag_ms`, `offset_ms`, подписки,
   соединения (живых/всего), восстановления стаканов (переподключений и RESYNC с запуска процесса), использованный REST-вес, CPU, RSS,
   p99 задержки обработки, трафик (из `runtime/platform/cmkt@<venue><p|s>.hb.json`); бюджет процессов и размеры ярусов фокуса;
+  совместимый `runtime/intel/xflow.json` (флаг `compat_xflow`, писатель `src`, возраст, ошибки записи сводки);
 - `show SYM [--json]` — последний снимок монеты (`runtime/cmkt/snap.json`, разбор `logic.cmkt.snap_sym`);
 - `at SYM TS [--json]` — строка ряда на момент сигнала `TS` (секунды эпохи или ISO-время) через `tb.core.cmktdoc.features_at`;
 - `focus [--json]` — набор монет и причины (`runtime/cmkt/focus.json`).
@@ -16,6 +17,7 @@ import time
 
 from tb import paths
 from tb.cmkt import aggregate as AG
+from tb.cmkt import compat as CX
 from tb.cmkt import conf
 from tb.cmkt import focus as FO
 from tb.cmkt.collector import service_name
@@ -79,7 +81,19 @@ def status_doc(root, now=None):
                         "n_ex": (snap or {}).get("n_ex"), "warn": (snap or {}).get("warn") or hb.get("warn") or [], "skew_ms": (snap or {}).get("skew_ms"),
                         "tick_ms_p99": hb.get("tick_ms_p99"), "cpu_cores": hb.get("cpu_cores"), "rss_mb": hb.get("rss_mb"),
                         "store_code": hb.get("store_code"), "venues_out": hb.get("venues_out") or {}, "budget": hb.get("budget")},
-            "markets": mkts, "tiers": tiers}
+            "markets": mkts, "tiers": tiers, "xflow": _xflow_state(root, cfg, hb, now)}
+
+
+def _xflow_state(root, cfg, hb, now):
+    """Совместимый runtime/intel/xflow.json (задача 22): флаг, ошибки записи сводки, кто писал файл последним и его возраст."""
+    try:
+        with open(CX.xflow_path(root), encoding="utf-8") as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        d = None
+    ts = d.get("ts_epoch") if isinstance(d, dict) and isinstance(d.get("ts_epoch"), (int, float)) else None
+    return {"compat_xflow": conf.compat_active(cfg), "compat_err": hb.get("compat_err"), "src": d.get("src") if isinstance(d, dict) else None,
+            "age_s": None if ts is None else round(now - ts, 1), "n_syms": len(d.get("syms") or {}) if isinstance(d, dict) else None}
 
 
 def status_text(d):
@@ -102,6 +116,10 @@ def status_text(d):
         out.append("бюджет (%s процессов): CPU %s ядра, p99 CPU %s, RSS %s МБ, обработка p99 %s мс, трафик %s Мбит/с, запись %s ГБ/сут%s" % (
             b.get("n"), _f(b.get("cpu_cores")), _f(b.get("cpu_p99_cores")), _f(b.get("rss_mb")), _f(b.get("proc_p99_ms")), _f(b.get("net_mbit")),
             _f(b.get("disk_gb_day")), ("; ПРЕВЫШЕНО: " + ", ".join(b["over"])) if b.get("over") else ""))
+    x = d.get("xflow") or {}
+    if x:
+        out.append("xflow.json: compat_xflow=%s, писатель %s, возраст %s с, монет %s, ошибок записи %s" % (
+            "true" if x.get("compat_xflow") else "false", x.get("src") or "нет файла", _f(x.get("age_s")), _f(x.get("n_syms")), _f(x.get("compat_err"))))
     t = d.get("tiers")
     out.append("ярусы: deep %s, light %s (предел light %s)" % (t["deep"], t["light"], _f(t.get("light_cap"))) if t else "ярусы: нет focus.json")
     out.append("%-14s %-10s %-7s %-7s %-6s %-5s %-7s %-6s %-6s %-6s %-6s %-6s %-6s %s" % (

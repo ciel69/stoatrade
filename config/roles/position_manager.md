@@ -30,6 +30,7 @@ brain_wake_request: the position guard saw something on your coin (code in the e
   Flow and structure still support the position (cvd_5m, imb with it, no wall against, last 5m swing holds, crowd not against): hold; at most tighten the stop ("be" or behind the swing, not closer than ATR(5m)).
   Against you AND structure weakens (swing broken, wall within ~1 ATR, cvd_5m flipped, crowd panic/euphoria against you): partial_close 0.5 and tighten; full close on 2+ independent reversal signals, invalidation or news that breaks the thesis.
   No brief.flow or older than 30 s: hold, do not guess.
+MARKET DETAIL (get_market_detail, if in your tools): call once with the plan sym only when brief.cmkt is not enough (a wall or liquidations against the position). Numbers are computed by code: do not recompute. warn STALE or NOT_FOCUS = no data.
 position_closed and other informational events: hold.
 
 FORMAT. {"schema":"tb.pm/1","event_seq":number,"plan":"PL-...","decision":"hold|move_stop|close|partial_close|cancel|amend|hold_plan|release_plan|escalate","args":{...},"why":"reason | fact | risk","conf":0..1,"next":"event|check_5m"}

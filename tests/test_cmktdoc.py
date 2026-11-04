@@ -303,8 +303,10 @@ class Snapshot(Base):
         self.assertLessEqual(tokens(blk), 90)
         leaves_ok(self, blk)
         sol = blk["syms"]["SOL"]
-        for k in ("imb_05", "cvd_ps5", "oi5", "liq5_net", "fund_w", "prem_ps", "n_ex", "cov", "lead", "flags"):
+        for k in ("imb_025", "cvd_ps5", "oi5", "liq5_net", "fund_w", "prem_ps", "pull15", "n_ex", "cov", "lead", "flags"):
             self.assertIn(k, sol)
+        self.assertNotIn("imb_05", sol)
+        self.assertNotIn("pulled15_net", sol)
         self.assertNotIn("bands", sol)
         self.assertEqual(sol["lead"], MKTS[7])
         self.assertEqual(sol["flags"], ["stale_ex"])
@@ -315,10 +317,12 @@ class Snapshot(Base):
         f = full_feats()
         f["cm_prem_ps_bps"] = None
         f["cm_cvd_ps_5m_pct"] = None
+        f["cm_wall_pull_15m_pct"] = None
         write_snap(self.root, DAY0 + 100, {"SOL": snap_row(f=f)})
         sol = D.brief_block(self.root, "SOL", DAY0 + 101, self.cfg_brief())["syms"]["SOL"]
         self.assertNotIn("prem_ps", sol)
         self.assertNotIn("cvd_ps5", sol)
+        self.assertNotIn("pull15", sol)
         leaves_ok(self, sol)
 
     def test_brief_full_at_600_tokens(self):
@@ -352,7 +356,7 @@ class Snapshot(Base):
         blk = D.brief_block(self.root, "SOL", DAY0 + 101, self.cfg_brief(mode="full", max_tokens=40))
         self.assertLessEqual(tokens(blk), 40)
         sol = blk["syms"]["SOL"]
-        self.assertIn("imb_05", sol)                                 # поля уходят с конца списка вида
+        self.assertIn("imb_025", sol)                                # поля уходят с конца списка вида
         self.assertNotIn("walls", sol)
 
     def test_brief_stale_missing_not_focus(self):

@@ -275,6 +275,9 @@ class Collector(object):
         self.sub_per_msg = int(getattr(mod, "PER_MSG", 10) or 10)
         self.sub_hist = {}                             # cid -> deque[(t, sub_msgs всего)] за час
         self.pending_subs = deque()                    # (cid, op, [Sub]) — ждут места в пределе запросов подписки в час
+        # совместимый xflow.json (задача 22): у рынков охвата xstream при compat_xflow — стакан монет focus.compat, обрезанный до глубины xstream
+        cx = dict((m, d) for m, _, d in L.COMPAT_MARKETS)
+        self.cx = (True, cx[self.mkt]) if conf.compat_active(self.cfg) and self.mkt in cx else None
 
     # ------------------------------------------------------------ метаданные
     def load_meta(self, now=None):
@@ -769,6 +772,29 @@ class Collector(object):
             return "down"
         return "ok"
 
+    def compat_books(self, now):
+        """Поле `cx` документа рынка: {SYM: logic.cmkt.compat_book_row} для монет `focus.compat` (до 8) со стаканом в порядке (ok или
+        свежий частичный), стакан обрезан до глубины xstream (`self.cx[1]`). Сбой одной монеты — монеты нет в поле."""
+        out = {}
+        syms = (self.focus_doc or {}).get("compat") if isinstance(self.focus_doc, dict) else None
+        for sym in [s for s in syms or () if isinstance(s, str)][:L.COMPAT_N]:
+            c = self.coins.get(sym)
+            if c is None or c.inst is None or not ("book" in c.kinds or "book_part" in c.kinds):
+                continue
+            try:
+                book, _ = self._book_now(c, now)
+                if book is None:
+                    continue
+                cs = c.inst.contract_size if c.inst.kind == "perp" else 1.0
+                bids, asks = book.levels(cs or 1.0, c.inst.coin_mult)
+                r = L.compat_book_row(bids, asks, self.cx[1])
+            except Exception:                                # noqa: BLE001
+                self.counters["err"] += 1
+                continue
+            if r is not None:
+                out[sym] = r
+        return out
+
     def publish(self, T, now=None):
         """Состояние рынка на секунду T -> ex/<market>.json атомарно. -> документ или None (T не новее прошлой публикации)."""
         now = self.clock() if now is None else now
@@ -802,7 +828,9 @@ class Collector(object):
                "resync": sum(1 for c in self.coins.values() if c.book is not None and c.book.status != "ok"
                              and ("book" in c.kinds or "book_part" in c.kinds)),
                "cols": list(COLS), "syms": rows}
-        extra = getattr(self.adapter, "doc_extra", None)              # поля рынка вне монет (Coinbase: "fx" — курс USDT-USD на T)
+        if self.cx is not None:
+            doc["cx"] = self.compat_books(now)
+        extra = getattr(self.adapter, "doc_extra", None)             # поля рынка вне монет (Coinbase: "fx" — курс USDT-USD на T)
         if extra is not None:
             try:
                 for k, v in (extra(self.kind, T, now) or {}).items():

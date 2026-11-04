@@ -390,6 +390,15 @@ def _b_flow(c, sym):
     return flowdoc.flow_for(c.root, sym, c.now)
 
 
+def _b_cmkt(c, sym):
+    """Сводный рынок монеты события (R1.7, Requirement 16): блок cmktdoc.brief_block по config/cmkt.json: brief (вид compact | full, syms,
+    max_tokens). Числа и пометки считает код; None у поля -> ключа нет. Снимок старше 5 с -> {"stale_s": N}; снимка нет или сбой -> None."""
+    if not sym:
+        return None
+    from tb.core import cmktdoc
+    return cmktdoc.brief_block(c.root, sym, c.now)
+
+
 def _b_playbook(c, b, sym):
     """Карточки сетапов (brain/playbook.py) по сигналам события и режиму монеты: 1-2 карточки с условием входа, стопом, целью, инвалидацией и тем, чего избегать. Нет карточек -> None."""
     if not sym or not getattr(c, "root", None):
@@ -1390,7 +1399,7 @@ def _trim_struct(b):
 
 
 TRIM_STEPS = (
-    ("lessons", _drop("lessons")), ("rulebook", _drop("rulebook")), ("missing", _drop("missing")), ("memory", _drop("memory")), ("playbook", _drop("playbook")), ("deriv", _drop("deriv")), ("flow", _drop("flow")), ("since_last", _drop("since_last")), ("paper_history", _drop("paper_history")), ("checklist_text", _checklist_ids), ("recent>5", _trim_recent(5)),
+    ("lessons", _drop("lessons")), ("rulebook", _drop("rulebook")), ("missing", _drop("missing")), ("memory", _drop("memory")), ("playbook", _drop("playbook")), ("deriv", _drop("deriv")), ("flow", _drop("flow")), ("cmkt", _drop("cmkt")), ("since_last", _drop("since_last")), ("paper_history", _drop("paper_history")), ("checklist_text", _checklist_ids), ("recent>5", _trim_recent(5)),
     ("hot>3", _trim_hot(3)), ("ideas>4", _trim_ideas(4)), ("struct>3", _trim_struct), ("levels", _trim_levels), ("recent>3", _trim_recent(3)), ("pending", _drop("pending")),
     ("hot", _drop("hot")), ("ideas", _drop("ideas")), ("experiments", _drop("experiments")), ("cands", _drop("cands")), ("struct", _drop("struct")), ("news_digest", _drop("news_digest")), ("intel", _drop("intel")), ("recent>1", _trim_recent(1)), ("checklist", _drop("checklist")), ("market", _drop("market")),
     ("recent", _drop("recent")),
@@ -1498,6 +1507,7 @@ def build(scope="start", since=None, budget_tokens=None, root=None, now=None, co
         b["pause"] = _safe("pause", lambda: _b_pause(c, syms), missing) if syms else None
         b["flash"] = _safe("flash", lambda: _b_flash(c, job_sym), missing) if job_sym else None
         b["flow"] = _safe("flow", lambda: _b_flow(c, job_sym), missing) if job_sym else None
+        b["cmkt"] = _safe("cmkt", lambda: _b_cmkt(c, job_sym), missing) if job_sym else None      # сводный рынок 6 бирж (R1.7): числа посчитаны кодом
         sig = next((e for e in reversed(b["recent"] or []) if e.get("type") in ("scanner_signal", "news_flash") and job_sym and e.get("sym") == job_sym), None)
         sd = (sig or {}).get("d") if isinstance((sig or {}).get("d"), dict) else {}
         sfeats = {k: float(sd[k]) for k in ("range_5m_pct", "ret_5m_pct") if isinstance(sd.get(k), (int, float)) and not isinstance(sd.get(k), bool)}

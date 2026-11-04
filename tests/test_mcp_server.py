@@ -58,7 +58,7 @@ class TestProtocol(McpBase):
 
     def test_tools_list_per_agent(self):
         names = lambda a: {t["name"] for t in self.req(self.srv(a), "tools/list")["result"]["tools"]}
-        self.assertEqual(len(names("chat")), 20)  # + revise_idea (право idea.write, как у add_idea)
+        self.assertEqual(len(names("chat")), 21)  # + revise_idea (право idea.write, как у add_idea), + get_market_detail (R1.7, право read)
         self.assertNotIn("submit_plan", names("ro"))
         self.assertIn("get_brief", names("ro"))
         self.assertEqual(names("ghost"), set())
@@ -159,7 +159,7 @@ class TestSubprocess(_gw.GwBase):
         self.assertEqual(rc, 0, err)
         by = {m["id"]: m for m in msgs}
         self.assertEqual(sorted(by), [1, 2, 3, 4])
-        self.assertEqual(len(by[2]["result"]["tools"]), 20)
+        self.assertEqual(len(by[2]["result"]["tools"]), 21)
         self.assertTrue(by[3]["result"]["structuredContent"]["ok"])
         self.assertTrue(by[4]["result"]["structuredContent"]["brief_id"].startswith("B-"))
         self.assertTrue(os.path.exists(paths.state("gateway_audit.jsonl", root=self.root)))

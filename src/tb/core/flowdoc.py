@@ -12,7 +12,7 @@ def _f(x):
 
 
 def xlive_for(root, sym, now, max_age_s=XFLOW_MAX_AGE_S):
-    """Кросс-биржевой поток (runtime/intel/xflow.json, пишет tb.xdata.xstream или intel/xflow): {"liq5_long_usd","liq5_short_usd","liq1h_long_usd","liq1h_short_usd",
+    """Кросс-биржевой поток (runtime/intel/xflow.json, пишет tb.xdata.xstream или, при config/cmkt.json compat_xflow=true, tb.cmkt.compat): {"liq5_long_usd","liq5_short_usd","liq1h_long_usd","liq1h_short_usd",
     "walls":[...],"oi5_pct","fund_pct","n_ex"} по монете (суммы и средние по биржам; стены кросс-биржевые) или None (нет файла, устарел, монеты нет)."""
     doc = ideas.read_json(paths.runtime("intel", "xflow.json", root=root))
     ts = _f((doc or {}).get("ts_epoch")) if isinstance(doc, dict) else None

@@ -23,7 +23,8 @@
    `logic.cmkt.market_codes(рынки конфига)`: 0–10 у рынков `MARKETS`, 11+ у новых бирж в порядке конфига.
 4. `runtime/cmkt/snap.json` раз в `sync.snap_every_s` (2 с) и всегда, когда ни один рынок не включён (Requirement 11.1); строки рядов
    (`tb.cmkt.store.Store`: `deep` каждую секунду, `light` при `ts % 5 = 0`; `wr_ts` — время вставки; `gap_s` — пропущенные секунды
-   яруса; `by_ex`; флаги) каждую секунду; совместимый `runtime/intel/xflow.json` — точка подключения `Aggregator.compat` (задача 22).
+   яруса; `by_ex`; флаги) каждую секунду; совместимый `runtime/intel/xflow.json` раз в 2 с при `compat_xflow = true`
+   (`Aggregator.compat` = `tb.cmkt.compat.Writer`, задача 22).
 5. `ts` строго растёт: шаг часов назад — такты пропускаются до `ts` больше последнего, счётчик `clock_back`, флаг `clock_back` у
    строк первого снимка после шага.
 
@@ -47,6 +48,7 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 
 from tb import paths
+from tb.cmkt import compat as CX
 from tb.cmkt import conf
 from tb.cmkt import focus as FO
 from tb.cmkt import store as ST
@@ -171,7 +173,7 @@ class Aggregator(object):
         self._cb_flag = False
         self.lead = {}                               # sym -> (ts расчёта, результат)
         self._prices = (None, None, None)            # (sig, ts_epoch, prices)
-        self.compat = None                           # задача 22: fn(ts, ctx) -> пишет runtime/intel/xflow.json при compat_xflow
+        self.compat = CX.Writer(root) if conf.compat_active(self.cfg) else None   # задача 22: совместимый runtime/intel/xflow.json
         self.tick_ms = deque(maxlen=600)
         self.stats = {"ticks": 0, "snaps": 0, "snap_err": 0, "rows": 0, "store_code": None, "read_err": 0, "skipped": 0,
                       "gap_s_max": 0, "lead_runs": 0, "compat_err": 0}
