@@ -93,7 +93,7 @@ class TestMigration(Base):
         self.assertTrue(set(S2.INDEXES) <= self.names(c, "index"))
         self.assertTrue(set(S2.TRIGGERS) <= self.names(c, "trigger"))
         self.assertEqual(c.execute("SELECT v FROM meta WHERE k='knowledge_v2_ver'").fetchone()[0], "1")
-        self.assertEqual(c.execute("SELECT v FROM meta WHERE k=?", (LS.META_VER_KEY,)).fetchone()[0], "1")   # ключ R1 не тронут
+        self.assertEqual(c.execute("SELECT v FROM meta WHERE k=?", (LS.META_VER_KEY,)).fetchone()[0], str(LS.SCHEMA_VER))   # ключ R1 не тронут
         self.assertTrue(KM.has_v2(self.root))
         self.assertEqual([b["reason"] for b in store2.list_backups(self.root)], ["premigrate"])
         cols = [r[1] for r in c.execute("PRAGMA table_info(cluster_runs)")]
@@ -128,7 +128,7 @@ class TestMigration(Base):
         self.assertFalse(c.in_transaction)
         self.close_all()
         c2 = self.rw()                                                         # сервис меток открывает базу как раньше (SchemaMigrationError нет)
-        self.assertEqual(c2.execute("SELECT v FROM meta WHERE k=?", (LS.META_VER_KEY,)).fetchone()[0], "1")
+        self.assertEqual(c2.execute("SELECT v FROM meta WHERE k=?", (LS.META_VER_KEY,)).fetchone()[0], str(LS.SCHEMA_VER))
 
 
 # ---------------------------------------------------------------- свойство 2: неизменяемость

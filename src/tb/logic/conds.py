@@ -16,6 +16,10 @@
 остаётся None (отсутствие данных не превращается в сигнал).
 
 Границы: price_beyond нестрогий (>=, <=); закрытие свечи строгое (close > level / close < level); прокол с допуском 1e-9.
+
+R4 (Requirement 9.6): виды `mfe_r` (наибольший достигнутый результат в R по rt.pos.best_px) и `since_peak_min` (минут с последнего пика
+по rt.pos.t_best) вычисляются здесь, но используются только правилами политики выхода (`tb.logic.exitpol.compile`); словарь условий
+плана для мозга (core/plan_schema.COND_KINDS) их не содержит.
 """
 import copy
 import math
@@ -112,6 +116,70 @@ def r_multiple(pos, price, side=None):
     if s is None:
         return None
     return s * (px - avg) / ru
+
+
+def _best(pos, px, s):
+    """Лучшая цена позиции с учётом текущей (px может быть None): rt.pos.best_px обновляет исполнитель после правил."""
+    best = _f((pos or {}).get("best_px"))
+    if px is None:
+        return best
+    if best is None:
+        return px
+    return max(best, px) if s == 1 else min(best, px)
+
+
+def mfe_r(pos, px=None, ctx=None):
+    """-> float | None: наибольший достигнутый результат в R по rt.pos.best_px (и текущей цене px, если она лучше).
+
+    >>> mfe_r({"avg": 100.0, "initial_stop": 99.0, "r_unit": 1.0, "best_px": 101.5}, 100.5)
+    1.5
+    >>> mfe_r({"avg": 100.0, "initial_stop": 101.0, "r_unit": 1.0, "best_px": 99.0}, 98.0)
+    2.0
+    """
+    s = pos_side(pos, ctx)
+    if not pos or s is None:
+        return None
+    best = _best(pos, _f(px), s)
+    return r_multiple(pos, best, s) if best is not None else None
+
+
+def since_peak_min(pos, view, ctx=None):
+    """-> float | None: минут с последнего пика MFE (rt.pos.t_best, секунды epoch; нет — время входа). Текущая свежая цена лучше
+    best_px — пик сейчас (0).
+
+    >>> from tb.logic.candles import MarketView
+    >>> v = MarketView("X", 100.5, 100.4, 100.6, 100.5, 700.0, None, 700.0)
+    >>> since_peak_min({"avg": 100.0, "initial_stop": 99.0, "best_px": 101.0, "t_best": 100.0}, v)
+    10.0
+    """
+    now = _f(getattr(view, "now", None))
+    if not pos or now is None:
+        return None
+    s = pos_side(pos, ctx)
+    px = _fresh_price(view, ctx)
+    best = _f(pos.get("best_px"))
+    if px is not None and s is not None and best is not None and s * (px - best) > 0:
+        return 0.0
+    tb = _f(pos.get("t_best"))
+    if tb is None:
+        ent = _f((ctx or {}).get("entered_ms"))
+        tb = ent / 1000.0 if ent is not None else None
+    if tb is None:
+        return None
+    return max(0.0, (now - tb) / 60.0)
+
+
+def _cmp(v, cond):
+    """Сравнение числа с порогами gte / gt / lte / lt условия (все заданные). Неверный порог -> (None, why)."""
+    ok = True
+    for k, f in (("gte", lambda a, b: _ge(a, b)), ("gt", lambda a, b: a > b + _EPS),
+                 ("lte", lambda a, b: _le(a, b)), ("lt", lambda a, b: a < b - _EPS)):
+        if k in cond:
+            t = _f(cond[k])
+            if t is None:
+                return None, "неверный порог"
+            ok = ok and f(v, t)
+    return ok, ""
 
 
 # ---------------------------------------------------------------- листья
@@ -242,15 +310,17 @@ def _eval_leaf(cond, view, st, ctx, path):
         r = r_multiple(ctx.get("pos"), px, pos_side(ctx.get("pos"), ctx)) if px is not None else None
         if r is None:
             return None, "нет позиции или цены"
-        ok = True
-        for k, f in (("gte", lambda a, b: _ge(a, b)), ("gt", lambda a, b: a > b + _EPS),
-                     ("lte", lambda a, b: _le(a, b)), ("lt", lambda a, b: a < b - _EPS)):
-            if k in cond:
-                v = _f(cond[k])
-                if v is None:
-                    return None, "неверный порог"
-                ok = ok and f(r, v)
-        return ok, ""
+        return _cmp(r, cond)
+    if kind == "mfe_r":                       # только правила политики выхода (R4, Requirement 9.6); в словаре плана нет
+        r = mfe_r(ctx.get("pos"), _fresh_price(view, ctx), ctx)
+        if r is None:
+            return None, "нет позиции"
+        return _cmp(r, cond)
+    if kind == "since_peak_min":              # только правила политики выхода (R4, Requirement 9.6); в словаре плана нет
+        m = since_peak_min(ctx.get("pos"), view, ctx)
+        if m is None:
+            return None, "нет времени пика"
+        return _cmp(m, cond)
     if kind == "elapsed":
         base = _base_ms(ctx)
         m = _f(cond.get("min"))
@@ -382,6 +452,9 @@ def _text(cond):
     if k == "pnl_r":
         parts = ["%s %s" % ({"gte": ">=", "gt": ">", "lte": "<=", "lt": "<"}[o], _fmt(cond[o])) for o in ("gte", "gt", "lte", "lt") if o in cond]
         return "результат %sR" % " и ".join(parts)
+    if k in ("mfe_r", "since_peak_min"):
+        parts = ["%s %s" % ({"gte": ">=", "gt": ">", "lte": "<=", "lt": "<"}[o], _fmt(cond[o])) for o in ("gte", "gt", "lte", "lt") if o in cond]
+        return ("лучший результат %sR" if k == "mfe_r" else "без нового пика %s мин") % " и ".join(parts)
     if k == "elapsed":
         return "прошло >= %s мин" % _fmt(cond.get("min"))
     if k == "target_filled":

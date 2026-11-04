@@ -823,20 +823,22 @@ class TestLayers(unittest.TestCase):
 
     def test_learnloop_does_not_write_config(self):
         """Запись в config/ из пакета tb.learnloop невозможна (Requirement 8.4): ни одна функция не строит путь в config/ и не пишет файл;
-        paths.config есть только в загрузчике conf (только чтение)."""
+        paths.config есть только в загрузчиках conf и exits_conf (R4, config/exits.json; только чтение)."""
         scan = ConfigWrites()
         bad = {}
+        loaders = ("tb.learnloop.conf", "tb.learnloop.exits_conf")
         for path in py_files("learnloop"):
             mod = module_name(path)
             w = scan.writers(mod)
             if w:
                 bad[mod] = w
-            if mod != "tb.learnloop.conf" and "paths.config" in read(path):
+            if mod not in loaders and "paths.config" in read(path):
                 bad.setdefault(mod, []).append("paths.config")
         self.assertEqual(bad, {})
-        conf = scan.module("tb.learnloop.conf")
-        self.assertTrue(conf["load"]["ref"])                     # анализатор видит путь загрузчика
-        self.assertFalse(any(v["write"] for v in conf.values()))
+        for mod in loaders:
+            conf = scan.module(mod)
+            self.assertTrue(conf["load"]["ref"], mod)                # анализатор видит путь загрузчика
+            self.assertFalse(any(v["write"] for v in conf.values()), mod)
         self.assertTrue(scan.module("tb.learnloop.watch")["write_lease"]["write"])      # и видит запись аренды (в runtime/, не в config/)
         self.assertFalse(scan.module("tb.learnloop.watch")["write_lease"]["ref"])
 
