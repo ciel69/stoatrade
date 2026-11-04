@@ -389,6 +389,34 @@ class TestHttpTimeHosts(unittest.TestCase):
             h2.get("https://www.binance.com/fapi/v1/time")
         self.assertEqual(b.avail("meta", 30.0), 0)                           # пауза 60 с
 
+    def test_http_gzip_and_own_timeout(self):
+        """Тело запрашивается сжатым и распаковывается по Content-Encoding (задачи 11–13: списки инструментов Gate, Bitget до 1.7 МБ);
+        свой предел запроса передаётся в opener, без него — 5 с."""
+        import gzip
+        import io
+        cfg = C.defaults()
+        seen = []
+
+        def opener(req, timeout):
+            seen.append((timeout, req.headers.get("Accept-encoding")))
+            gz = "gz" in req.full_url
+
+            class R(io.BytesIO):
+                status = 200
+                headers = {"Content-Encoding": "gzip"} if gz else {}
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *a):
+                    return False
+            body = b'[{"name": "BTC_USDT"}]'
+            return R(gzip.compress(body) if gz else body)
+        h = A.Http(cfg, "gate", opener=opener)
+        self.assertEqual(h.get_json("https://api.gateio.ws/api/v4/gz", timeout=30), [{"name": "BTC_USDT"}])
+        self.assertEqual(h.get_json("https://api.gateio.ws/api/v4/plain"), [{"name": "BTC_USDT"}])
+        self.assertEqual(seen, [(30.0, "gzip"), (5.0, "gzip")])
+
     def test_clock_offset_and_skew(self):
         off, rtt = A.best_offset([(0.0, 40.5, 0.4), (1.0, 41.05, 1.1), (2.0, 43.0, 3.0)])
         self.assertAlmostEqual(off, 40.0, places=6)                          # запрос с наименьшим RTT (0.1 с)

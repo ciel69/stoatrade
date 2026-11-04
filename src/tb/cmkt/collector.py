@@ -28,7 +28,9 @@
      "st": "ok" | "meta" (нет метаданных) | "down" (нет живых соединений) | "err", "err": None | "PARSE" | "HOST_DENIED" | ...,
      "conns": [соединений, живых], "lag_ms": задержка последнего сообщения рынка, "lag_p50": p50 за 30 с, "t_ex": время биржи
      последнего сообщения, "off_ms": offset (часы биржи − локальные), "rtt_ms": RTT лучшего замера, "off_age_s": возраст оценки,
-     "liq_partial": bool, "resync": стаканов не в ok, "cols": COLS, "syms": {SYM: [значения по COLS]}}
+     "liq_partial": bool, "resync": стаканов не в ok, "cols": COLS, "syms": {SYM: [значения по COLS]},
+     поля адаптера `doc_extra(kind, T, now)` (только у Coinbase: "fx": {"usdt_usd": середина USDT-USD | None, "age_s": возраст
+     котировки на T по t_rx, "src": "ws" | "rest"} — курс для cm_prem_cb_bps, Requirement 10.3)}
 
     COLS (значение None — нет данных):
       tier "d" | "l";  st — стакан "ok" | "part" (частичный на время RESYNC) | "resync" | "nobook" (стакана нет, Coinbase) | "nl" | "err";
@@ -262,6 +264,7 @@ class Collector(object):
         self._liq_partial = self.mkt in tuple(getattr(self.adapter, "liq_partial", ()) or ())
         self._plan_rs = _accepts(self.adapter.plan, "resync")
         self._meta_now = _accepts(self.adapter.load_meta, "now")
+        self._meta_kind = _accepts(self.adapter.load_meta, "kind")   # адаптер грузит только инструменты своего рынка
         self._time_kind = _accepts(self.adapter.server_time, "kind")
         self._planned_rs = frozenset()
         self._crc = type(self.adapter).checksum is not A.VenueAdapter.checksum
@@ -284,7 +287,10 @@ class Collector(object):
         return self._meta_done(res, now)
 
     def _call_meta(self, now):
-        return self.adapter.load_meta(self.http, now=now) if self._meta_now else self.adapter.load_meta(self.http)
+        kw = {"now": now} if self._meta_now else {}
+        if self._meta_kind:
+            kw["kind"] = self.kind
+        return self.adapter.load_meta(self.http, **kw)
 
     def _server_time(self):
         return self.adapter.server_time(self.http, kind=self.kind) if self._time_kind else self.adapter.server_time(self.http)
@@ -796,6 +802,13 @@ class Collector(object):
                "resync": sum(1 for c in self.coins.values() if c.book is not None and c.book.status != "ok"
                              and ("book" in c.kinds or "book_part" in c.kinds)),
                "cols": list(COLS), "syms": rows}
+        extra = getattr(self.adapter, "doc_extra", None)              # поля рынка вне монет (Coinbase: "fx" — курс USDT-USD на T)
+        if extra is not None:
+            try:
+                for k, v in (extra(self.kind, T, now) or {}).items():
+                    doc.setdefault(k, v)
+            except Exception:                                # noqa: BLE001
+                self.counters["err"] += 1
         try:
             text = json.dumps(doc, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
             filelock.atomic_write(ex_path(self.mkt, self.root), text)
@@ -1090,6 +1103,14 @@ class Collector(object):
                     if evs:
                         self.on_events(list(evs), self.clock())
                 self._job("poll", lambda: self.adapter.poll(self.http, self.kind, due, now), poll_done)
+        side = getattr(self.adapter, "side_poll", None)                # REST рынка вне монет фокуса (курс USDT-USD Coinbase)
+        if side is not None and self.meta_ok and "side" not in self._jobs:
+            side_due = getattr(self.adapter, "side_due", None)
+            if side_due is None or side_due(self.kind, now):
+                def side_done(evs):
+                    if evs:
+                        self.on_events(list(evs), self.clock())
+                self._job("side", lambda: side(self.http, self.kind, now), side_done)
         job = None if "snap" in self._jobs else self.resync_jobs(now)
         if job is not None:
             mode, sym, limit = job

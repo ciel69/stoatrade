@@ -4,6 +4,7 @@ import json
 import os
 import random
 import threading
+import time
 import unittest
 
 import _bootstrap  # noqa: F401
@@ -242,7 +243,15 @@ class TestFlowThroughCtl(Base):
         cid = r[1]["id"]
         res = client.wait_result(cid, self.e.root, timeout=5)
         self.assertEqual(res["code"], "OK")
-        a = [x for x in self.e.audit() if x["id"] == cid][-1]
+        # ctl пишет ответ раньше строки аудита (handlers.finish): под нагрузкой ждём строку
+        rows, deadline = [], time.monotonic() + 15.0
+        while time.monotonic() < deadline:
+            rows = [x for x in self.e.audit() if x["id"] == cid]
+            if rows:
+                break
+            time.sleep(0.05)
+        self.assertTrue(rows, "строка аудита не появилась за 15 с")
+        a = rows[-1]
         self.assertEqual(a["src"], "dash")
 
     def test_live_challenge_nonce_and_typing_rules(self):

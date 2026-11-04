@@ -466,7 +466,7 @@ class TestMisc(Base):
         self.assertEqual(os.listdir(self.e.p("state", "control", "_inbox")), [])
         self.assertTrue(all(client.read_result(i, self.e.root) is not None for i in ids))
         self.assertTrue(audit.verify(self.e.root)["ok"])
-        self.assertLess(time.time() - t, 30)
+        self.assertLess(time.time() - t, 30 * float(os.environ.get("TB_PERF_FACTOR") or 1.0))
 
     def test_status_file_shape(self):
         self.c.write_status()

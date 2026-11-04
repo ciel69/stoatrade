@@ -23,6 +23,8 @@
 """
 import asyncio
 import binascii
+import gzip
+import inspect
 import json
 import math
 import random
@@ -826,20 +828,23 @@ class Http(object):
         self.calls = self.errors = 0
         self.last_weight_hdr = None
 
-    def get(self, url, weight=1, kind="meta"):
-        """-> (status, headers dict, тело bytes). HostDenied / BudgetExceeded / HttpError / OSError."""
+    def get(self, url, weight=1, kind="meta", timeout=None):
+        """-> (status, headers dict, тело bytes). HostDenied / BudgetExceeded / HttpError / OSError. Тело запрашивается сжатым (gzip),
+        если биржа умеет; timeout — свой предел запроса (метаданные Gate — 1.1–1.4 МБ, около 5 с с IP машины), иначе 5 с."""
         if host_check(self.cfg, self.venue, url, self.allow_plain) is not None:
             raise HostDenied(url)
         now = self.clock()
         if self.budget is not None and not self.budget.spend(kind, weight, now):
             raise BudgetExceeded(url)
-        req = urllib.request.Request(url, headers={"User-Agent": "tb-cmkt/1", "Accept": "application/json"})
+        req = urllib.request.Request(url, headers={"User-Agent": "tb-cmkt/1", "Accept": "application/json", "Accept-Encoding": "gzip"})
         self.calls += 1
         try:
-            with self.opener(req, timeout=self.timeout) as r:
+            with self.opener(req, timeout=self.timeout if timeout is None else float(timeout)) as r:
                 body = r.read()
                 hdr = dict((k.lower(), v) for k, v in r.headers.items())
                 status = getattr(r, "status", 200)
+            if str(hdr.get("content-encoding") or "").lower() == "gzip":
+                body = gzip.decompress(body)
         except urllib.error.HTTPError as e:
             self.errors += 1
             if e.code in (418, 429) and self.budget is not None:
@@ -851,8 +856,8 @@ class Http(object):
         self.last_weight_hdr = hdr.get("x-mbx-used-weight-1m")
         return status, hdr, body
 
-    def get_json(self, url, weight=1, kind="meta"):
-        return json.loads(self.get(url, weight, kind)[2].decode("utf-8"))
+    def get_json(self, url, weight=1, kind="meta", timeout=None):
+        return json.loads(self.get(url, weight, kind, timeout)[2].decode("utf-8"))
 
 
 # ---------------------------------------------------------------- время, задержка, живость (Requirements 4.1–4.4)
@@ -1020,7 +1025,11 @@ class VenueAdapter(object):
         return self.sub_msgs(book, "unsubscribe") + self.sub_msgs(book, "subscribe")
 
     def ping(self):
-        """Текст пинга биржи или None (пинг кадром WS)."""
+        """Текст пинга биржи или None (пинг кадром WS). Адаптер может принять вид рынка: ping(kind) (см. ping_text)."""
+        return None
+
+    def ws_headers(self, kind):
+        """Дополнительные заголовки рукопожатия WS или None (Gate: X-Gate-Size-Decimal — размеры с дробной частью)."""
         return None
 
     def parse(self, kind, raw, t_rx):
@@ -1057,6 +1066,15 @@ class VenueAdapter(object):
 # ---------------------------------------------------------------- соединение (Requirements 4.4, 12.1, 12.2)
 def _lim(cfg, sec, key, default):
     return ((cfg or {}).get(sec) or {}).get(key, default)
+
+
+def ping_text(adapter, kind):
+    """Текст пинга адаптера: ping(kind), если адаптер принимает вид рынка (у Gate `futures.ping` и `spot.ping`), иначе ping()."""
+    try:
+        takes_kind = "kind" in inspect.signature(adapter.ping).parameters
+    except (TypeError, ValueError):
+        takes_kind = False
+    return adapter.ping(kind) if takes_kind else adapter.ping()
 
 
 class _Client(wsclient.WSClient):
@@ -1123,7 +1141,8 @@ class VenueConn(object):
         self.client = _Client(
             url, allow_plain=allow_plain, silence_timeout=silent_s, connect_timeout=10.0,
             backoff_base=float(_lim(self.cfg, "limits", "backoff_s", 1)), backoff_max=float(_lim(self.cfg, "limits", "backoff_max_s", 60)),
-            jitter=0.2, keepalive_text=adapter.ping(), keepalive_interval=ping_s, rng=rng, name=conn_id, on_connect=self._on_connect)
+            jitter=0.2, keepalive_text=ping_text(adapter, kind), keepalive_interval=ping_s, rng=rng, name=conn_id,
+            on_connect=self._on_connect, extra_headers=(getattr(adapter, "ws_headers", None) or (lambda k: None))(kind))
         self.client.on_control = lambda op: self.live.on_pong(self.clock()) if op == wsclient.OP_PONG else self.live.on_msg(self.clock())
         self.offset = offset
         self.lag = LagMeter()

@@ -26,14 +26,16 @@ class HostChain(object):
     def order(self):
         return ([self.good] if self.good else []) + [h for h in self.hosts if h != self.good]
 
-    def get_json(self, http, path, weight=1, kind="meta"):
+    def get_json(self, http, path, weight=1, kind="meta", timeout=None):
+        """timeout — свой предел запроса (передаётся в Http, только если задан)."""
         now = self.clock()
         if self.down_until is not None and now < self.down_until:
             raise A.HttpError(0, "hosts down")
         last = None
         for h in self.order():
             try:
-                r = http.get_json("https://%s%s" % (h, path), weight, kind)
+                url = "https://%s%s" % (h, path)
+                r = http.get_json(url, weight, kind) if timeout is None else http.get_json(url, weight, kind, timeout=timeout)
             except A.BudgetExceeded:
                 raise
             except A.HttpError as e:

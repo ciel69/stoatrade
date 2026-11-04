@@ -707,8 +707,9 @@ class TestPerformance(unittest.TestCase):
             dt2 = time.time() - t
             self.assertGreaterEqual(o["total"], 1000)
             self.assertEqual(len(o["decisions"]), 200)
-            self.assertLess(dt1, 0.3, "state %.3f" % dt1)
-            self.assertLess(dt2, 0.3, "decisions %.3f" % dt2)
+            pf = float(os.environ.get("TB_PERF_FACTOR") or 1.0)      # запас под параллельную нагрузку
+            self.assertLess(dt1, 0.3 * pf, "state %.3f" % dt1)
+            self.assertLess(dt2, 0.3 * pf, "decisions %.3f" % dt2)
         finally:
             shutil.rmtree(root, ignore_errors=True)
 

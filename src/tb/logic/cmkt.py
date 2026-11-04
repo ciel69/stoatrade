@@ -111,6 +111,11 @@ CM_VER = _cm_ver()                    # первые 8 hex sha256 списка �
 # ---------------------------------------------------------------- общие мелочи
 def num(x):
     """Конечное число или None (строки биржи разбираются)."""
+    t = type(x)
+    if t is float:                                       # быстрый путь сводки (такт 140 монет × 11 рынков): тот же результат
+        return x if x - x == 0.0 else None
+    if t is int:
+        return float(x)
     if isinstance(x, bool) or x is None:
         return None
     try:
@@ -406,7 +411,8 @@ def agg_bands(mk):
     out = {}
     for kind in ("perp", "spot", "all"):
         elig = {m: s for m, s in _of(mk, kind).items() if s.get("has_book", True)}
-        tot = sum(_w(s) for s in elig.values())
+        wts = {m: _w(s) for m, s in elig.items()}
+        tot = sum(wts.values())
         row = {}
         for label, _ in BANDS:
             by = {}
@@ -419,7 +425,7 @@ def agg_bands(mk):
                 continue
             bid, ask = sum(v[0] for v in by.values()), sum(v[1] for v in by.values())
             row[label] = {"bid": bid, "ask": ask, "imb": imbalance(bid, ask), "n_ex": len(by),
-                          "cov": share(sum(_w(elig[m]) for m in by), tot, len(by), len(elig)), "by": by}
+                          "cov": share(sum(wts[m] for m in by), tot, len(by), len(elig)), "by": by}
         out[kind] = row
     return out
 
@@ -482,7 +488,8 @@ def agg_cvd(mk, label):
     out = {}
     for kind in ("perp", "spot", "all"):
         elig = _of(mk, kind)
-        tot = sum(_w(s) for s in elig.values())
+        wts = {m: _w(s) for m, s in elig.items()}
+        tot = sum(wts.values())
         buy = sell = 0.0
         by = {}
         for m, s in elig.items():
@@ -497,7 +504,7 @@ def agg_cvd(mk, label):
             by[m] = b - sl
         out[kind] = {"buy": buy, "sell": sell, "net": buy - sell,
                      "pct": (buy - sell) / (buy + sell) * 100.0 if by and buy + sell > 0 else None,
-                     "n_ex": len(by), "cov": share(sum(_w(elig[m]) for m in by), tot, len(by), len(elig)) if elig else None, "by": by}
+                     "n_ex": len(by), "cov": share(sum(wts[m] for m in by), tot, len(by), len(elig)) if elig else None, "by": by}
     return out
 
 
@@ -521,11 +528,11 @@ def _oi_base(mk):
     return allp, w_all, inc
 
 
-def oi_change(mk, label, c=None):
+def oi_change(mk, label, c=None, base=None):
     """Изменение суммарного OI за окно, %, в монетах по набору рынков, у которых есть значение и сейчас, и на T − w (Requirement 7.3).
     -> (pct | None, n_ex, cov)."""
     c = c or DEFAULTS["cov"]
-    allp, w_all, inc = _oi_base(mk)
+    allp, w_all, inc = base or _oi_base(mk)
     tot = sum(w_all.values())
     sel = {m: s for m, s in inc.items() if num((s.get("oi") or {}).get(label)) is not None}
     cov = share(sum(w_all[m] for m in sel), tot, len(sel), len(allp))
@@ -536,11 +543,11 @@ def oi_change(mk, label, c=None):
     return ((now / then - 1.0) * 100.0 if then > 0 else None), len(sel), cov
 
 
-def oi_liq(mk, c=None):
+def oi_liq(mk, c=None, base=None):
     """cm_oi_liq_5m_pct (Requirement 7.4): (ΔOI_5м + ликвидации_5м) / OI × 100 в монетах по одному набору рынков perp с потоком
     ликвидаций и обоими значениями OI; None, если OI набора < liq_min_cov от OI включённых рынков или n_ex < min_n_ex."""
     c = c or DEFAULTS["cov"]
-    allp, w_all, inc = _oi_base(mk)
+    allp, w_all, inc = base or _oi_base(mk)
     inc_usd = sum(w_all[m] for m in inc)
     sel = {m: s for m, s in inc.items() if (s.get("liq") or {}).get("has") and num(s["oi"].get("5m")) is not None
            and isinstance((s.get("liq") or {}).get("5m_coins"), (list, tuple))}
@@ -553,11 +560,11 @@ def oi_liq(mk, c=None):
     return (d + lq) / now * 100.0 if now > 0 else None
 
 
-def agg_liq(mk, c=None):
+def agg_liq(mk, c=None, base=None):
     """Ликвидации включённых рынков perp с потоком: {"5m": [long, short], "1h": [long, short], "liq_cov", "n_ex", "partial", "ok"}.
     liq_cov — доля OI в USD рынков с потоком среди включённых perp; ok=False -> признаки ликвидаций None, а не 0 (Requirement 9.2)."""
     c = c or DEFAULTS["cov"]
-    allp, w_all, inc = _oi_base(mk)
+    allp, w_all, inc = base or _oi_base(mk)
     inc_all = {m: s for m, s in allp.items() if s.get("code") is None}
     den = sum(w_all[m] for m in inc_all)
     sel = {m: s for m, s in inc_all.items() if (s.get("liq") or {}).get("has")}
@@ -581,19 +588,19 @@ def fund_8h(f, interval_h):
     return None if f is None or not h or h <= 0 else f * 8.0 / h
 
 
-def fund_weights(mk):
+def fund_weights(mk, base=None):
     """Веса funding: OI в USD включённых рынков perp со ставкой; неотрицательны, в сумме 1. -> {mkt: вес}."""
-    allp, w_all, inc = _oi_base(mk)
+    allp, w_all, inc = base or _oi_base(mk)
     sel = {m: w_all[m] for m, s in inc.items() if fund_8h(s.get("fund"), s.get("fund_h")) is not None and w_all[m] > 0}
     tot = sum(sel.values())
     return {m: v / tot for m, v in sel.items()} if tot > 0 else {}
 
 
-def agg_funding(mk, c=None):
+def agg_funding(mk, c=None, base=None):
     """-> (cm_fund_w_pct, cm_fund_spread_pct, n_ex, cov): среднее к 8 ч, взвешенное по OI в USD, и разброс (наибольшая − наименьшая), %."""
     c = c or DEFAULTS["cov"]
-    allp, w_all, inc = _oi_base(mk)
-    wts = fund_weights(mk)
+    allp, w_all, inc = base or _oi_base(mk)
+    wts = fund_weights(mk, (allp, w_all, inc))
     cov = share(sum(w_all[m] for m in wts), sum(w_all.values()), len(wts), len(allp))
     if not ok_cov(len(wts), cov, c):
         return None, None, len(wts), cov
@@ -700,10 +707,22 @@ def _r(x):
     return None if x is None else float(x)
 
 
-def features(mk, focus_s, cfg=None, usdt_usd=None, lead=None, mm_unchecked=False):
+def market_codes(mkts=()):
+    """Коды cm_lead_ex: рынки MARKETS — свои индексы 0–10; прочие рынки (новая биржа записью конфига) — 11, 12, … в порядке mkts
+    (порядок бирж config/cmkt.json, включая выключенные, — нумерация не сдвигается при выключении биржи). -> {mkt: код}."""
+    out = dict(MARKET_INDEX)
+    for m in mkts or ():
+        if isinstance(m, str) and m not in out:
+            out[m] = len(out)
+    return out
+
+
+def features(mk, focus_s, cfg=None, usdt_usd=None, lead=None, mm_unchecked=False, mkt_index=None):
     """Признаки монеты на такте по состояниям рынков mk (включённые и исключённые).
     -> {"f": {имя: значение | None} по CM_FEATURES, "flags": [имена FLAG_BITS], "bands", "buckets", "walls", "cvd", "liq", "by_ex",
-        "n_ex", "cov"}. focus_s — сколько монета в фокусе (окно w даёт None, пока focus_s < w); lead — результат lead_market."""
+        "n_ex", "cov"}. focus_s — сколько монета в фокусе (окно w даёт None, пока focus_s < w); lead — результат lead_market;
+    mkt_index — коды cm_lead_ex (market_codes; по умолчанию MARKET_INDEX)."""
+    idx = mkt_index if mkt_index is not None else MARKET_INDEX
     c, b = _cfg(cfg, "cov"), _cfg(cfg, "book")
     fs = num(focus_s) or 0.0
     inc = _inc(mk)
@@ -775,18 +794,19 @@ def features(mk, focus_s, cfg=None, usdt_usd=None, lead=None, mm_unchecked=False
             f["cm_cvd_ps_5m_pct"] = f["cm_cvd_5m_perp_pct"] - f["cm_cvd_5m_spot_pct"]
 
     # OI
-    allp, w_all, oi_inc = _oi_base(mk)
+    base = _oi_base(mk)                                             # один раз на монету (такт сводки)
+    allp, w_all, oi_inc = base
     oi_cov = share(sum(w_all[m] for m in oi_inc), sum(w_all.values()), len(oi_inc), len(allp))
     if ok_cov(len(oi_inc), oi_cov, c):
         f["cm_oi_musd"] = sum(w_all[m] for m in oi_inc) / 1e6
     for label, w in WINDOWS:
         if fs >= w:
-            f["cm_oi_chg_%s_pct" % label] = oi_change(mk, label, c)[0]
+            f["cm_oi_chg_%s_pct" % label] = oi_change(mk, label, c, base)[0]
     if fs >= 300:
-        f["cm_oi_liq_5m_pct"] = oi_liq(mk, c)
+        f["cm_oi_liq_5m_pct"] = oi_liq(mk, c, base)
 
     # ликвидации
-    lq = agg_liq(mk, c)
+    lq = agg_liq(mk, c, base)
     f["cm_liq_cov"] = lq["liq_cov"]
     if lq["ok"]:
         if fs >= 300:
@@ -796,14 +816,14 @@ def features(mk, focus_s, cfg=None, usdt_usd=None, lead=None, mm_unchecked=False
             f["cm_liq_1h_net_musd"] = (lq["1h"][0] - lq["1h"][1]) / 1e6
 
     # funding, премии
-    fw, fsp, _, _ = agg_funding(mk, c)
+    fw, fsp, _, _ = agg_funding(mk, c, base)
     f["cm_fund_w_pct"], f["cm_fund_spread_pct"] = fw, fsp
     f["cm_prem_ps_bps"] = prem_ps(mk)
     f["cm_prem_cb_bps"] = prem_cb(mk, usdt_usd)
 
     # лидерство
-    if lead and fs >= LEAD_WINDOW_S and lead.get("mkt") in MARKET_INDEX:
-        f["cm_lead_ex"] = MARKET_INDEX[lead["mkt"]]
+    if lead and fs >= LEAD_WINDOW_S and lead.get("mkt") in idx:
+        f["cm_lead_ex"] = idx[lead["mkt"]]
         f["cm_lead_lag_s"] = int(lead["lag_s"])
 
     f = {k: (None if v is None or (isinstance(v, float) and not math.isfinite(v)) else v) for k, v in f.items()}
@@ -1024,8 +1044,56 @@ def ev_cm(values, tier, focus_s, rts, cm_ver=CM_VER, max_bytes=EV_CM_MAX_BYTES, 
     return out
 
 
+# ---------------------------------------------------------------- снимок runtime/cmkt/snap.json (пишет tb.cmkt.aggregate, читает cmktdoc)
+SNAP_SCHEMA = "tb.cmkt/1"
+SNAP_SYM_COLS = ("tier", "focus_s", "f", "mk", "bands", "walls", "cvd", "liq", "flags", "n_ex", "cov", "mid", "skew_ms")
+SNAP_MK_COLS = ("code", "lag_ms", "mid", "oi_usd", "fund8_pct", "cvd5", "doi5", "liq5_long", "liq5_short", "pulled15")
+SNAP_BAND_COLS = ("bid", "ask", "imb", "n_ex", "cov")
+SNAP_CVD_COLS = ("pct", "net", "n_ex", "cov")
+SNAP_WALL_COLS = ("side", "px", "usd", "dist_pct", "n_ex", "mkts", "age_s")
+SNAP_LIQ_COLS = ("l5_long", "l5_short", "l1h_long", "l1h_short", "liq_cov", "partial", "ok", "n_ex")
+SNAP_EX_COLS = ("code", "lag_ms", "off_ms", "age_ms")
+
+
+def _zip(cols, row):
+    return dict(zip(cols, row)) if isinstance(row, (list, tuple)) else None
+
+
+def snap_sym(doc, sym):
+    """Строка монеты снимка -> словарь (чистая функция для tb.core.cmktdoc; не бросает). None — монеты нет или чужая схема.
+    -> {"sym", "ts", "tier", "focus_s", "f": {признак: значение | None}, "mk": {рынок: {SNAP_MK_COLS}}, "bands": {вид: {полоса: {...} | None}},
+        "walls": [{SNAP_WALL_COLS}], "cvd": {окно: {вид: {...}}}, "liq": {SNAP_LIQ_COLS} | None, "flags", "n_ex", "cov", "mid", "skew_ms",
+        "lead": имя рынка cm_lead_ex | None}."""
+    try:
+        if not isinstance(doc, dict) or doc.get("schema") != SNAP_SCHEMA:
+            return None
+        row = (doc.get("syms") or {}).get(sym)
+        cols = doc.get("sym_cols") or SNAP_SYM_COLS
+        r = _zip(cols, row)
+        if r is None:
+            return None
+        names = doc.get("cols") or CM_FEATURES
+        out = {"sym": sym, "ts": doc.get("ts"), "tier": r.get("tier"), "focus_s": r.get("focus_s"),
+               "f": dict(zip(names, r.get("f") or ())), "flags": list(r.get("flags") or ()), "n_ex": r.get("n_ex"), "cov": r.get("cov"),
+               "mid": r.get("mid"), "skew_ms": r.get("skew_ms")}
+        mkc = doc.get("mk_cols") or SNAP_MK_COLS
+        out["mk"] = dict((m, _zip(mkc, v)) for m, v in (r.get("mk") or {}).items())
+        labels = [lab for lab, _ in BANDS]
+        out["bands"] = dict((k, dict((lab, _zip(SNAP_BAND_COLS, v)) for lab, v in zip(labels, rows or ())))
+                            for k, rows in (r.get("bands") or {}).items())
+        out["walls"] = [_zip(SNAP_WALL_COLS, w) for w in r.get("walls") or ()]
+        out["cvd"] = dict((w, dict((k, _zip(SNAP_CVD_COLS, v)) for k, v in (kinds or {}).items())) for w, kinds in (r.get("cvd") or {}).items())
+        out["liq"] = _zip(SNAP_LIQ_COLS, r.get("liq"))
+        code = out["f"].get("cm_lead_ex")
+        mk_names = doc.get("mkts") or MARKETS
+        out["lead"] = mk_names[code] if isinstance(code, int) and 0 <= code < len(mk_names) else None
+        return out
+    except (TypeError, ValueError, AttributeError, IndexError):
+        return None
+
+
 # ---------------------------------------------------------------- совместимый xflow.json (Requirement 17.6; копии без импорта)
-COMPAT_BANDS = (("05", 0.5), ("1", 1.0), ("2", 2.0))
+COMPAT_BANDS =(("05", 0.5), ("1", 1.0), ("2", 2.0))
 COMPAT_CORE = ("BTC", "ETH", "SOL")
 
 
