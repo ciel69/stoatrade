@@ -23,6 +23,7 @@ dumps/
 CLAUDE.md
 CLAUDE.local.md
 .claude/
+.opencode/
 .impeccable/
 config/*.local.json
 scratchpad/
