@@ -919,12 +919,18 @@ def encode_f(values):
     return bytes(buf)
 
 
-def decode_f(blob, names=CM_FEATURES):
-    """BLOB -> {имя: значение | None}; names — список признаков cm_ver файла (по умолчанию текущий)."""
+def decode_f(blob, names=CM_FEATURES, scales=None):
+    """BLOB -> {имя: значение | None}; names — список признаков cm_ver файла (по умолчанию текущий), scales — его масштабы
+    {имя: масштаб} (файл со старым cm_ver; по умолчанию текущие SCALES)."""
     data, i, out = bytes(blob or b""), 0, {}
+    sc_map = SCALES if scales is None else scales
     for n in names:
         q, i = _get_opt(data, i)
-        out[n] = dequantize(n, q) if n in SCALES else q
+        sc = sc_map.get(n)
+        if q is None or sc is None:
+            out[n] = q
+        else:
+            out[n] = int(q) if sc == 1 else round(q / float(sc), 6)
     if i != len(data):
         raise ValueError("f: лишние байты")
     return out
