@@ -4,6 +4,7 @@
 (пишет супервизор раз в status_s; у файла только блок сервисов, а живые поля — exec, kill, шина, сканер, непрочитанное — считает build_status).
 Цвет: green | yellow | red | off (платформа не запущена). Красный: сервис сдался, исполнитель упал/не отвечает при открытых позициях.
 """
+import os
 import time
 
 from tb import paths
@@ -164,6 +165,93 @@ def learnloop_line(lb):
         ("; заглушки: %s" % ",".join(lb["stubs"])) if lb.get("stubs") else "")
 
 
+CMKT_SNAP_MAX_AGE_S = 5.0     # R1.7, Requirement 11.4: снимок старше — жёлтый
+CMKT_OUT_S = 300.0            # 2 и более бирж вне сводки дольше 300 с — жёлтый
+CMKT_OUT_MIN = 2
+CMKT_COV_MIN = 0.9            # доля сигналов монет в фокусе с признаками за 24 ч
+CMKT_START_S = 15.0           # первые секунды после старта сводки снимка ещё может не быть
+CMKT_WARN = ("CLOCK_SKEW", "BUDGET", "FOCUS_NO_HEAT")
+
+
+def _num(x):
+    return float(x) if isinstance(x, (int, float)) and not isinstance(x, bool) else None
+
+
+def cmkt_family(name):
+    """Сводка `cmkt` или сборщик `cmkt@*`: красного статуса эти сервисы не дают (торговля от них не зависит)."""
+    return name == "cmkt" or S.cmkt_market(name) is not None
+
+
+def cmkt_cov(lhb):
+    """Доля сигналов монет в фокусе с признаками ev.cm за 24 ч из heartbeat labels (`cm_cov_24h`: число или {"focus": число}); нет -> None."""
+    v = (lhb or {}).get("cm_cov_24h") if isinstance(lhb, dict) else None
+    if isinstance(v, dict):
+        v = v.get("focus")
+    return _num(v)
+
+
+def cmkt_block(hb, now, snap_mtime=None, cov24=None, uptime_s=None):
+    """R1.7 (Requirement 11.4): строка `cmkt` статуса по heartbeat сводки. Нет heartbeat -> None. Выключен -> {"state": "off", "color": "off"}.
+    Жёлтый (красного нет): снимок старше 5 с (SNAP_STALE), 2 и более бирж вне сводки дольше 300 с (VENUES_OUT), CLOCK_SKEW, доля сигналов
+    монет в фокусе с признаками за 24 ч < 0.9 (CM_COV), DISK_LOW, BUDGET, FOCUS_NO_HEAT; битый config/cmkt.json (CONF)."""
+    if not isinstance(hb, dict) or not hb:
+        return None
+    if hb.get("state") == "OFF":
+        return {"state": "off", "color": "off", "codes": [], "reasons": [], "items": []}
+    items = []
+    if hb.get("state") == "E_CONF":
+        errs = [e for e in hb.get("errors") or [] if isinstance(e, str)]
+        items.append(("CONF", "сводный рынок: config/cmkt.json не годен (%s), сбор не идёт" % ",".join(errs[:3])))
+    else:
+        mt = _num(snap_mtime)
+        age = max(0.0, now - mt) if mt is not None else None
+        if age is None and _num(hb.get("snap_ts")) is not None:
+            age = max(0.0, now - _num(hb["snap_ts"]))
+        started = uptime_s is None or uptime_s >= CMKT_START_S
+        if age is not None and age > CMKT_SNAP_MAX_AGE_S:
+            items.append(("SNAP_STALE", "сводный рынок: снимок не обновляется %d с (порог %d)" % (age, CMKT_SNAP_MAX_AGE_S)))
+        elif age is None and started:
+            items.append(("SNAP_STALE", "сводный рынок: снимка ещё нет"))
+        out = [v for v, t in (hb.get("venues_out") or {}).items() if _num(t) is not None and now - float(t) > CMKT_OUT_S]
+        if len(out) >= CMKT_OUT_MIN:
+            items.append(("VENUES_OUT", "сводный рынок: вне сводки дольше %d мин биржи %s" % (CMKT_OUT_S // 60, ", ".join(sorted(out)))))
+        warn = [w for w in hb.get("warn") or [] if isinstance(w, str)]
+        store = hb.get("store") if isinstance(hb.get("store"), dict) else {}
+        if store.get("disk_low") or hb.get("store_code") == "DISK_LOW":
+            items.append(("DISK_LOW", "сводный рынок: мало места на диске (DISK_LOW), ряды не пишутся"))
+        texts = {"CLOCK_SKEW": "сводный рынок: сбились локальные часы (CLOCK_SKEW, offset > 500 мс у 4 и более бирж)",
+                 "BUDGET": "сводный рынок: превышен бюджет ресурсов (BUDGET), ярус light урезан",
+                 "FOCUS_NO_HEAT": "сводный рынок: нет heat.json (FOCUS_NO_HEAT), в фокусе только ядро и динамика"}
+        for c in CMKT_WARN:
+            if c in warn:
+                items.append((c, texts[c]))
+        if cov24 is not None and cov24 < CMKT_COV_MIN:
+            items.append(("CM_COV", "сводный рынок: признаки есть у %d%% сигналов монет в фокусе за 24 ч (порог %d%%)" % (round(cov24 * 100), round(CMKT_COV_MIN * 100))))
+    n_ex = hb.get("n_ex") if isinstance(hb.get("n_ex"), dict) else {}
+    return {"state": hb.get("state"), "color": "yellow" if items else "green", "codes": [c for c, _ in items], "reasons": [t for _, t in items],
+            "items": [{"code": c, "text": t} for c, t in items], "n_ex": n_ex, "n_syms": hb.get("n_syms"), "cov24": cov24,
+            "venues_out": sorted((hb.get("venues_out") or {}).keys()) if isinstance(hb.get("venues_out"), dict) else []}
+
+
+def cmkt_line(cb):
+    """Строка ./tb status про сводный рынок."""
+    if cb.get("state") == "off":
+        return "сводный рынок: выключен (config/cmkt.json: enabled=false)"
+    n = cb.get("n_ex") or {}
+    return "сводный рынок: %s, рынков в сводке perp %s / spot %s, монет %s%s%s" % (
+        {"green": "в норме", "yellow": "ЖЁЛТЫЙ"}.get(cb.get("color"), cb.get("color")), n.get("perp", "-"), n.get("spot", "-"),
+        cb.get("n_syms") if cb.get("n_syms") is not None else "-",
+        ("; вне сводки: %s" % ",".join(cb["venues_out"])) if cb.get("venues_out") else "",
+        ("; коды: %s" % ",".join(cb["codes"])) if cb.get("codes") else "")
+
+
+def _cmkt_snap_mtime(root):
+    try:
+        return os.stat(paths.runtime("cmkt", "snap.json", root=root)).st_mtime
+    except OSError:
+        return None
+
+
 def build_status(root=None, now=None):
     now = time.time() if now is None else now
     cfg = S.load_cfg(root)
@@ -207,7 +295,7 @@ def build_status(root=None, now=None):
         for n, v in svcs.items():
             st = v.get("state")
             if st == "failed":
-                color = worse("red")
+                color = worse("yellow" if cmkt_family(n) else "red")     # сводный рынок красного не даёт (R1.7, Requirement 11.4)
                 reasons.append("сервис %s не поднимается (%s)" % (n, v.get("last_error") or "сбой"))
             elif st in ("backoff", "starting"):
                 color = worse("yellow")
@@ -252,6 +340,15 @@ def build_status(root=None, now=None):
             color = worse(lb["color"])
             seen = set((kb or {}).get("codes") or [])          # DB_CORRUPT, CHAIN_BROKEN, AUTO_RESTORED уже показал блок базы знаний
             reasons.extend(it["text"] for it in lb["items"] if it["code"] is None or it["code"] not in seen)
+    cb = None
+    if "cmkt" in svcs or (running and "cmkt" in (sup.get("services") or [])):
+        csv = svcs.get("cmkt") or {}
+        _a, chb = S.read_hb("cmkt", root, now)
+        _a, lhb2 = S.read_hb("labels", root, now)
+        cb = cmkt_block(chb, now, snap_mtime=_cmkt_snap_mtime(root), cov24=cmkt_cov(lhb2), uptime_s=csv.get("uptime_s"))
+        if cb is not None and running and csv.get("state") == "running" and cb["color"] == "yellow":
+            color = worse("yellow")
+            reasons.extend(cb["reasons"])
     exec_expected = "exec" in svcs or (running and "exec" in (sup.get("services") or []))
     if exec_expected and not ex["alive"] and running:
         if (svcs.get("exec") or {}).get("state") == "running" and (svcs.get("exec") or {}).get("uptime_s", 0) < 60:
@@ -279,7 +376,7 @@ def build_status(root=None, now=None):
             "supervisor": {"pid": sup.get("pid") or None, "started": sup.get("started"), "uptime_s": round(now - sup["started"], 1) if running and isinstance(sup.get("started"), (int, float)) else None,
                            "profile": profile, "observe": sup.get("observe") if running else None, "services": sup.get("services") if running else None},
             "services": svcs, "exec": ex, "kill": kill is not None, "kill_info": kill, "bus": bus_b, "scanner": scan_b, **({"knowledge": kb} if kb is not None else {}),
-            **({"learnloop": lb} if lb is not None else {}),
+            **({"learnloop": lb} if lb is not None else {}), **({"cmkt": cb} if cb is not None else {}),
             "unread": unread, "unread_total": total, "links": links}
 
 
@@ -288,8 +385,13 @@ def format_line(st):
     mark = {"green": "OK", "yellow": "WARN", "red": "RED", "off": "OFF"}.get(st.get("color"), "?")
     prof = (st.get("supervisor") or {}).get("profile") or "-"
     parts = ["TB", prof, mark]
+    cols = [v for n, v in (st.get("services") or {}).items() if S.cmkt_market(n) is not None]
     for n, v in (st.get("services") or {}).items():
+        if S.cmkt_market(n) is not None:
+            continue                                   # сборщики сводного рынка — одним счётчиком cmkt@:живых/всего
         parts.append("%s:%s" % (n, {"running": "ok", "failed": "DOWN", "backoff": "retry", "starting": "start", "unavailable": "n/a", "stopped": "off"}.get(v.get("state"), "?")))
+    if cols:
+        parts.append("cmkt@:%d/%d" % (sum(1 for v in cols if v.get("state") == "running"), len(cols)))
     for sid, u in (st.get("unread") or {}).items():
         if isinstance(u, dict) and u.get("unread"):
             parts.append("%s:%d%s" % (sid, u["unread"], "!" if u.get("wake_unread") else ""))
@@ -322,6 +424,8 @@ def format_text(st):
         cl = coverage_line(st["learnloop"])
         if cl:
             out.append(cl)
+    if st.get("cmkt"):
+        out.append(cmkt_line(st["cmkt"]))
     for n, u in st["links"].items():
         out.append("ссылка %s: %s" % (n, u))
     return "\n".join(out)

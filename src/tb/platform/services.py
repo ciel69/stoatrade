@@ -1,6 +1,7 @@
 """Сервисы платформы: конфиг `config/platform.json`, пути `runtime/platform/`, команды и окружение дочерних процессов. Владелец: WP11-B.
 
-Сервис = дочерний процесс супервизора. Список и порядок запуска: exec, scan, feed, context, intel, sync, dispatch, ctl, dash (дашборд), labels (фабрика меток, без ключей), learnloop (цикл обучения R2, без ключей), mcp, brain. Ключи Bybit получают ТОЛЬКО исполнитель
+Сервис = дочерний процесс супервизора. Список и порядок запуска: exec, scan, feed, cmkt (сводный рынок R1.7: сводка `cmkt` и сборщики
+рынков `cmkt@<venue><p|s>`, без ключей), context, intel, sync, dispatch, ctl, dash (дашборд), labels (фабрика меток, без ключей), learnloop (цикл обучения R2, без ключей), mcp, brain. Ключи Bybit получают ТОЛЬКО исполнитель
 (launcher грузит ключ в его собственный процесс для testnet/trade) и сервис sync (launcher грузит читающий ключ `read`, только баланс); окружение остальных чистится в `child_env`.
 Без fork и сигнальных API: только subprocess (кроссплатформенно); сетевых вызовов и торговых модулей здесь нет.
 """
@@ -16,12 +17,15 @@ from tb.core import localcfg
 from tb.core.filelock import atomic_write_json
 
 PROFILES = ("paper", "testnet", "trade")
-ORDER = ("exec", "scan", "feed", "context", "intel", "sync", "dispatch", "ctl", "dash", "labels", "learnloop", "mcp", "brain")      # порядок запуска; остановка в обратном, но exec последним (см. stop_order)
+ORDER = ("exec", "scan", "feed", "cmkt", "context", "intel", "sync", "dispatch", "ctl", "dash", "labels", "learnloop", "mcp", "brain")      # порядок запуска; остановка в обратном, но exec последним (см. stop_order)
 SERVICE_NAMES = ORDER
 SECRET_PREFIXES = ("BYBIT_", "ANTHROPIC_")                        # не передаются никому, кроме процесса, который грузит их сам (launcher)
 LABELS_SECRET_PREFIXES = ("BYBIT_", "ANTHROPIC_", "DEEPSEEK_", "OPENAI_")      # сервис labels (R1.6, требование 14.3): никаких ключей, чистка шире общей
 LABELS_SECRET_SUFFIXES = ("_API_KEY", "_SECRET", "_TOKEN")
-SCRUBBED_SERVICES = ("labels", "learnloop")                                    # сервисы без ключей: чистка окружения по labels_secret (R2, Requirement 15.1)
+SCRUBBED_SERVICES = ("labels", "learnloop", "cmkt")                            # сервисы без ключей: чистка окружения по labels_secret (R2, Requirement 15.1;
+                                                                                # R1.7 Requirement 3.1: и любой сборщик cmkt@*, см. scrubbed)
+RE_CMKT = re.compile(r"^cmkt@[a-z][a-z0-9]{1,11}$")                             # сборщик рынка: cmkt@<venue><p|s> (R1.7, Requirement 18.3)
+CMKT_KINDS = {"p": "perp", "s": "spot"}
 PROXY_VARS = ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY")
 # что сделать, чтобы закрыть предстартовую проверку P1-P16 (lifecycle.preflight и дашборд показывают одну строку действия)
 PREFLIGHT_FIX = {
@@ -48,9 +52,9 @@ DEFAULTS = {
     "version": 1,
     "profile": "paper",
     "services": {                       # какие сервисы поднимаются по умолчанию в профиле (`--services` перекрывает)
-        "paper": ["exec", "scan", "feed", "context", "intel", "sync", "dispatch", "ctl", "dash", "labels", "learnloop", "brain"],
-        "testnet": ["exec", "scan", "feed", "context", "intel", "sync", "dispatch", "ctl", "dash", "labels", "learnloop", "brain"],
-        "trade": ["exec", "scan", "feed", "context", "intel", "sync", "dispatch", "ctl", "dash", "labels", "learnloop"],
+        "paper": ["exec", "scan", "feed", "cmkt", "context", "intel", "sync", "dispatch", "ctl", "dash", "labels", "learnloop", "brain"],
+        "testnet": ["exec", "scan", "feed", "cmkt", "context", "intel", "sync", "dispatch", "ctl", "dash", "labels", "learnloop", "brain"],
+        "trade": ["exec", "scan", "feed", "cmkt", "context", "intel", "sync", "dispatch", "ctl", "dash", "labels", "learnloop"],
     },
     "supervisor": {
         "poll_s": 1.0,                  # период цикла контроля
@@ -79,6 +83,8 @@ DEFAULTS = {
         "sync": {"hb": "file", "hb_stale_s": 900.0, "grace_s": 90.0},
         "labels": {"hb": "file", "hb_stale_s": 120.0, "grace_s": 90.0},        # фабрика меток (tb.labels.service): захват сигналов и разметка свечами, ключей нет
         "learnloop": {"hb": "file", "hb_stale_s": 900.0, "grace_s": 120.0},    # цикл обучения R2 (tb.learnloop.service): ключей и сети нет; heartbeat и между шагами прохода
+        "cmkt": {"hb": "file", "hb_stale_s": 30.0, "grace_s": 60.0},           # сводка сводного рынка R1.7 (tb.cmkt.service): heartbeat раз в 5 с
+        "cmkt@": {"hb": "file", "hb_stale_s": 30.0, "grace_s": 60.0},          # шаблон настроек всех сборщиков cmkt@<venue><p|s> (svc_cfg)
     },
     "context": {"poll_s": 15.0},        # период цикла сервиса context (публичные источники: деривативы, DVOL, индекс страха, макро-блэкаут); интервалы источников в config/context_config.json
     "sync": {                           # автосинхронизация капитала: баланс читающим ключом read -> state/portfolio.json
@@ -235,12 +241,70 @@ class ConfigError(Exception):
 
 
 def default_services(profile, cfg, root=None):
-    """Сервисы по умолчанию. cfg["exec_per_exchange"]=true (config/platform.json): `exec` заменяется исполнителями всех разрешённых бирж (exec_services); по умолчанию false: один `exec`."""
+    """Сервисы по умолчанию. cfg["exec_per_exchange"]=true (config/platform.json): `exec` заменяется исполнителями всех разрешённых бирж (exec_services); по умолчанию false: один `exec`.
+    `cmkt` профиля всегда раскрывается в сводку и сборщики включённых рынков config/cmkt.json (cmkt_services; R1.7, Requirement 18.3)."""
     names = list((cfg.get("services") or {}).get(profile) or DEFAULTS["services"][profile])
     if cfg.get("exec_per_exchange") is True and "exec" in names:
         i = names.index("exec")
         names[i:i + 1] = exec_services(root)
+    if "cmkt" in names:
+        i = names.index("cmkt")
+        names[i:i + 1] = cmkt_services(root)
     return names
+
+
+def cmkt_market(name):
+    """Имя сервиса сборщика -> (venue, kind): `cmkt@binancep` -> ("binance", "perp"), `cmkt@coinbases` -> ("coinbase", "spot");
+    сводка `cmkt` и любое другое имя -> None. Правило имени `^cmkt@[a-z][a-z0-9]{1,11}$`, последняя буква — p (perp) или s (spot)."""
+    if not isinstance(name, str) or not RE_CMKT.match(name):
+        return None
+    kind = CMKT_KINDS.get(name[-1])
+    return (name[5:-1], kind) if kind else None
+
+
+def cmkt_name(venue, kind):
+    """(venue, kind) -> имя сервиса сборщика: ("okx", "spot") -> `cmkt@okxs`."""
+    return "cmkt@%s%s" % (venue, kind[0])
+
+
+def cmkt_services(root=None):
+    """Раскрытие сервиса `cmkt` профиля: ['cmkt'] + сборщики включённых рынков config/cmkt.json в порядке файла.
+    Сводный рынок выключен (`enabled: false`) -> [] (ничего не запускается). Битый конфиг -> ['cmkt']: сводка выйдет с кодом 2
+    и причиной в heartbeat (видно в ./tb status), сборщики без годного конфига не поднимаются."""
+    try:
+        from tb.cmkt import conf as cmkt_conf
+        c, errs = cmkt_conf.load(root)
+    except Exception:
+        return ["cmkt"]
+    if errs or not isinstance(c, dict):
+        return ["cmkt"]
+    if c.get("enabled") is False:
+        return []
+    out = ["cmkt"]
+    for v, k in cmkt_conf.markets(c, enabled_only=True):
+        n = cmkt_name(v, k)
+        if cmkt_market(n) == (v, k) and n not in out:
+            out.append(n)
+    return out
+
+
+def known_service(name):
+    """Имя сервиса платформы: из SERVICE_NAMES, исполнитель биржи `exec@<id>` или сборщик `cmkt@<venue><p|s>`."""
+    return name in SERVICE_NAMES or exec_venue(name) is not None or cmkt_market(name) is not None
+
+
+def svc_cfg(cfg, name):
+    """Настройки svc сервиса: по точному имени; у сборщика cmkt@* без своей записи — шаблон svc["cmkt@"]."""
+    svc = (cfg or {}).get("svc") or {}
+    sc = svc.get(name)
+    if sc is None and cmkt_market(name) is not None:
+        sc = svc.get("cmkt@")
+    return sc if isinstance(sc, dict) else {}
+
+
+def scrubbed(name):
+    """Сервис без ключей (окружение чистится по labels_secret): labels, learnloop, сводка cmkt и любой сборщик cmkt@*."""
+    return name in SCRUBBED_SERVICES or cmkt_market(name) is not None
 
 
 def exec_venue(name):
@@ -269,24 +333,39 @@ def exec_services(root=None):
 
 
 def parse_services(text, cfg=None):
-    """'exec,scan' -> ['exec','scan'] в порядке запуска; неизвестное имя -> ConfigError. Допустимы исполнители бирж `exec@<id>` (идут сразу за `exec`)."""
+    """'exec,scan' -> ['exec','scan'] в порядке запуска; неизвестное имя -> ConfigError. Допустимы исполнители бирж `exec@<id>` (идут сразу за `exec`)
+    и сборщики сводного рынка `cmkt@<venue><p|s>` (идут сразу за местом `cmkt` в ORDER, в порядке ввода; без сводки тоже допустимы)."""
     names = [x.strip() for x in (text or "").split(",") if x.strip()]
-    bad = [n for n in names if n not in SERVICE_NAMES and exec_venue(n) is None]
+    bad = [n for n in names if not known_service(n)]
     if bad or not names:
-        raise ConfigError("неизвестные сервисы: %s (доступны: %s)" % (",".join(bad) or "-", ",".join(SERVICE_NAMES)))
+        raise ConfigError("неизвестные сервисы: %s (доступны: %s, exec@<id>, cmkt@<venue><p|s>)" % (",".join(bad) or "-", ",".join(SERVICE_NAMES)))
     extra = sorted(n for n in names if n.startswith("exec@"))
+    cols = []
+    for n in names:
+        if cmkt_market(n) is not None and n not in cols:
+            cols.append(n)
     out = []
     for n in ORDER:
         if n in names:
             out.append(n)
             if n == "exec":
                 out += extra
+        if n == "cmkt":
+            out += cols
     return out + ([n for n in extra if n not in out])
 
 
 def stop_order(selected):
-    """Остановка: сначала потребители, исполнители (все биржи) последними (пока они живы, позиции ведутся)."""
-    return [n for n in reversed(ORDER) if n in selected and n != "exec"] + [n for n in selected if n.startswith("exec@")] + (["exec"] if "exec" in selected else [])
+    """Остановка: сначала потребители, исполнители (все биржи) последними (пока они живы, позиции ведутся).
+    Сводка `cmkt` останавливается раньше своих сборщиков `cmkt@*` (Requirement 18.3)."""
+    cols = [n for n in selected if cmkt_market(n) is not None]
+    out = []
+    for n in reversed(ORDER):
+        if n in selected and n != "exec":
+            out.append(n)
+        if n == "cmkt":
+            out += cols
+    return out + [n for n in selected if n.startswith("exec@")] + (["exec"] if "exec" in selected else [])
 
 
 def module_available(module):
@@ -321,6 +400,10 @@ def service_cmd(name, profile, observe, cfg, py=None):
         return [py, "-m", "tb.labels.service", "run"]
     if name == "learnloop":
         return [py, "-m", "tb.learnloop.service", "run"]
+    if name == "cmkt":
+        return [py, "-m", "tb.cmkt.service", "run"]
+    if cmkt_market(name) is not None:              # сборщик рынка: свой процесс (падение одного рынка не трогает остальные, Requirement 11.3)
+        return [py, "-m", "tb.cmkt.collector", "run", "--market", "%s_%s" % cmkt_market(name)]
     if name == "sync":
         return launcher + ["sync", "run"]              # launcher загружает читающий ключ read в окружение ЭТОГО процесса (не супервизора)
     if name == "ctl":
@@ -355,7 +438,7 @@ def child_env(name, base, root, selected=(), profile="paper"):
         ku = k.upper()
         if ku.startswith(SECRET_PREFIXES) or ku in PROXY_VARS:
             continue
-        if name in SCRUBBED_SERVICES and labels_secret(k):
+        if scrubbed(name) and labels_secret(k):
             continue
         env[k] = v
     env["TB_ROOT"] = os.path.abspath(root)
