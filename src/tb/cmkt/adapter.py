@@ -24,6 +24,7 @@
 import asyncio
 import binascii
 import gzip
+import heapq
 import inspect
 import json
 import math
@@ -333,7 +334,7 @@ class BookState(object):
         self.check, self.rest = RULES[rule]
         self.raw = bool(raw)
         self.cross_max_s = float(cross_max_s)
-        self.bids, self.asks = {}, {}
+        self._clear_levels()
         self.seq, self.synced = None, False
         self.bound_bid = self.bound_ask = None
         self.status, self.reason, self.since = "empty", None, None
@@ -343,14 +344,20 @@ class BookState(object):
         self.t_ex = None
 
     # --- служебное
+    def _clear_levels(self):
+        self.bids, self.asks = {}, {}
+        # лучшие цены без полного прохода по уровням на каждой дельте (задача 23: best() по 400–1000 уровням был главной ценой
+        # CPU сборщика): кучи (цена, ключ) с ленивым удалением — ключ на вершине, которого уже нет в стакане, снимается при чтении
+        self._hb, self._ha = [], []
+
     def _key(self, px):
         return str(px) if self.raw else _f(px)
 
     def _set(self, side, px, size, bounded):
-        k = self._key(px)
         p = _f(px)
-        if k is None or p is None or p <= 0:
+        if p is None or p <= 0:
             return
+        k = str(px) if self.raw else p                  # = _key(px) без второго преобразования цены
         s = _f(size)
         book = self.bids if side == "bid" else self.asks
         if s is None or s <= 0:
@@ -359,11 +366,26 @@ class BookState(object):
         if bounded and ((side == "bid" and self.bound_bid is not None and p < self.bound_bid)
                         or (side == "ask" and self.bound_ask is not None and p > self.bound_ask)):
             return                                     # уровень дальше границы REST-снимка (Requirement 5.3)
+        if k not in book:
+            h = self._hb if side == "bid" else self._ha
+            heapq.heappush(h, (-p, k) if side == "bid" else (p, k))
+            if len(h) > 2 * len(book) + 64:            # снятые уровни копятся в куче: пересборка по живым уровням
+                self._rebuild(side)
         book[k] = str(size) if self.raw else s
+
+    def _rebuild(self, side):
+        book = self.bids if side == "bid" else self.asks
+        sign = -1.0 if side == "bid" else 1.0
+        h = [(sign * _f(k), k) for k in book]
+        heapq.heapify(h)
+        if side == "bid":
+            self._hb = h
+        else:
+            self._ha = h
 
     def resync(self, reason, now=None):
         self.status, self.reason, self.since = "resync", reason, now
-        self.bids, self.asks = {}, {}
+        self._clear_levels()
         self.seq, self.synced = None, False
         self.bound_bid = self.bound_ask = None
         self.cross_since = None
@@ -375,7 +397,7 @@ class BookState(object):
     # --- применение
     def apply_snapshot(self, snap, now=None, checksum=None):
         """Снимок: замена уровней; у снимка вне потока — граница по сторонам и повтор накопленных дельт (`U ≤ id ≤ u` и далее)."""
-        self.bids, self.asks = {}, {}
+        self._clear_levels()
         self.seq, self.synced = snap.seq, False
         self.bound_bid = self.bound_ask = None
         for px, size in snap.bids or ():
@@ -466,9 +488,18 @@ class BookState(object):
 
     # --- чтение
     def best(self):
-        bb = max((_f(p) for p in self.bids), default=None)
-        ba = min((_f(p) for p in self.asks), default=None)
-        return bb, ba
+        hb, ha, bids, asks = self._hb, self._ha, self.bids, self.asks
+        while hb and hb[0][1] not in bids:
+            heapq.heappop(hb)
+        while ha and ha[0][1] not in asks:
+            heapq.heappop(ha)
+        if len(hb) < len(bids):                        # уровни положены в словарь в обход _set: куча по словарю
+            self._rebuild("bid")
+            hb = self._hb
+        if len(ha) < len(asks):
+            self._rebuild("ask")
+            ha = self._ha
+        return (-hb[0][0] if hb else None), (ha[0][0] if ha else None)
 
     def raw_sorted(self):
         """Уровни исходными строками: bids по убыванию цены, asks по возрастанию."""
@@ -911,6 +942,9 @@ def clock_skew(offsets_ms, warn_ms=500, need=4):
 class LagMeter(object):
     """lag = t_rx − (t_ex − offset) последнего сообщения стакана или сделок, мс; p50 за 30 с (справочно)."""
 
+    SAMPLE_S = 0.02                   # точка окна p50 не чаще раза в 20 мс (≤ 1 500 за 30 с): p50 считается раз в секунду при
+                                      # публикации, а сортировка всех сообщений окна (до 150 тыс. у Bybit perp) стоила до 10 % CPU (задача 23)
+
     def __init__(self, window_s=30.0):
         self.window_s = float(window_s)
         self.rows = deque()
@@ -923,6 +957,8 @@ class LagMeter(object):
             t_ex = t_rx
         lag = (t_rx - (t_ex - (offset_s or 0.0))) * 1000.0
         self.last_ms = lag
+        if self.rows and t_rx - self.rows[-1][0] < self.SAMPLE_S:
+            return lag
         self.rows.append((t_rx, lag))
         while self.rows and t_rx - self.rows[0][0] > self.window_s:
             self.rows.popleft()

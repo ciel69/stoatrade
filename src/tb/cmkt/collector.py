@@ -575,10 +575,20 @@ class Collector(object):
             dm, dp = st["msgs"] - old[1], st["parse_err"] - old[2]
             self.err_code = "PARSE" if dm >= 20 and dp > PARSE_ERR_SHARE * dm else (None if self.err_code == "PARSE" else self.err_code)
 
+    def _drop_unlisted(self):
+        """Монета без инструмента на рынке (nl) не восстанавливается: снимка нет, а запрос с приоритетом плана или ядра тратил бы вес
+        снимков раз в resync_min_s и оставлял без веса стаканы торгуемых монет (задача 23: 12 монет nl Binance perp — TradFi из топа
+        и планов — съедали остаток веса, 3 из 8 стаканов deep висели в RESYNC)."""
+        if not self.meta_ok or not self.rq.req:
+            return
+        for sym in [s for s in self.rq.req if not self.adapter.meta.listed(self.mkt, s)]:
+            self.rq.drop(sym)
+
     def resync_jobs(self, now=None):
         """Следующее восстановление стакана: ("ws", sym, None) — повторная подписка; ("rest", sym, limit) — снимок вне потока
         (вес уже списан из остатка RestBudget); None — нечего, рано или нет веса."""
         now = self.clock() if now is None else now
+        self._drop_unlisted()
         nxt = self.rq.next(now, self.budget, lambda p: self.adapter.snapshot_cost(self.kind, p))
         if nxt is None:
             return None

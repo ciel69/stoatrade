@@ -138,6 +138,49 @@ class TestBookContinuity(unittest.TestCase):
         self.assertEqual(st.apply_delta(A.BookDelta("fakex_perp", "BTC", 1, 1, None, 2, None, None, [], []), 0.5), "ok")
 
 
+class TestBookBest(unittest.TestCase):
+    """Задача 23: `best()` читает вершины куч с ленивым удалением вместо прохода по всем уровням. Свойство: на любой смеси операций
+    (снимок, дельты, удаления уровней нулевым размером, повторная постановка цены, RESYNC) результат совпадает с наивным max/min по
+    словарю уровней — куча не может «забыть» живой уровень и не может вернуть снятый."""
+
+    def test_best_equals_naive_scan_on_2000_random_ops(self):
+        for raw in (False, True):
+            rng = random.Random(20261104)
+            st = A.BookState("fakex_perp", "BTC", "bybit", raw=raw)
+            seq = [1]
+            mid = [50000.0]
+
+            def snapshot(px):
+                seq[0] += 1
+                bids = [("%.2f" % (px - 0.5 * (i + 1)), "%.3f" % rng.uniform(0.1, 5.0)) for i in range(rng.randint(20, 60))]
+                asks = [("%.2f" % (px + 0.5 * (i + 1)), "%.3f" % rng.uniform(0.1, 5.0)) for i in range(rng.randint(20, 60))]
+                st.apply_snapshot(A.BookSnapshot("fakex_perp", "BTC", 1.0, 1.0, seq[0], bids, asks), 1.0)
+                mid[0] = px
+
+            def naive():
+                return (max((float(p) for p in st.bids), default=None), min((float(p) for p in st.asks), default=None))
+
+            snapshot(mid[0])
+            for k in range(2000):
+                r = rng.random()
+                if r < 0.04:                                   # новый снимок: замена всех уровней
+                    snapshot(mid[0] + rng.uniform(-200, 200))
+                elif r < 0.07:                                 # RESYNC: уровни сброшены
+                    st.resync("test", 1.0)
+                elif r < 0.10:                                 # восстановление после RESYNC
+                    if st.status != "ok":
+                        snapshot(mid[0])
+                else:
+                    seq[0] += 1
+                    lo, hi = mid[0] - rng.uniform(0, 50), mid[0] + rng.uniform(0, 50)
+                    bids = [("%.2f" % (lo - 0.5 * rng.randint(0, 80)), "0" if rng.random() < 0.35 else
+                             "%.3f" % rng.uniform(0.1, 5.0)) for _ in range(rng.randint(1, 8))]     # 0 — удаление уровня
+                    asks = [("%.2f" % (hi + 0.5 * rng.randint(0, 80)), "0" if rng.random() < 0.35 else
+                             "%.3f" % rng.uniform(0.1, 5.0)) for _ in range(rng.randint(1, 8))]
+                    st.apply_delta(A.BookDelta("fakex_perp", "BTC", 1.0, 1.0, None, seq[0], None, None, bids, asks), 1.0)
+                self.assertEqual(st.best(), naive(), (raw, k, st.status))
+
+
 class TestUnitsAndMeta(unittest.TestCase):
     def test_instrument_selection(self):
         a = F.FakexAdapter()
