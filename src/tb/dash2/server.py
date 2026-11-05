@@ -190,6 +190,10 @@ class Hub(object):
                     await self.day_report_op(ws, m)
                 elif m.get("op") == "exp":
                     await self.exp_op(ws, m)
+                elif m.get("op") == "cmkt_sym":
+                    await self.cmkt_sym_op(ws, m)
+                elif m.get("op") == "exits_status":
+                    await self.exits_status_op(ws, m)
                 elif m.get("op") == "learning":
                     await self.learning_op(ws, m)
                 elif m.get("op") in memory_ops.READ_OPS:
@@ -262,6 +266,31 @@ class Hub(object):
             res = {"ok": False, "by": by, "mode": mode, "error": "failed"}
         try:
             await ws.send(self._msg("exp_detail", 0, res))
+        except Exception:
+            pass
+
+    async def cmkt_sym_op(self, ws, m):
+        """Монета сводного рынка по запросу (чтение, R1.7 задача 29): ответ `cmkt_sym_detail` только этому соединению.
+        Символ проверяется в topics.cmkt_symbol; битый снимок не рвёт соединение."""
+        sym = m.get("sym") if isinstance(m.get("sym"), str) else None
+        try:
+            res = await asyncio.to_thread(topics.cmkt_symbol, self.root, sym, None)
+        except Exception:
+            res = {"ok": False, "sym": sym, "warn": ["STALE"]}
+        try:
+            await ws.send(self._msg("cmkt_sym_detail", 0, res))
+        except Exception:
+            pass
+
+    async def exits_status_op(self, ws, m):
+        """Состояние политики выхода по запросу (чтение, R4): ответ `exits_status_detail` только этому соединению.
+        База недоступна — отчёт с файловыми полями и ok:false (код причины в db), соединение живо."""
+        try:
+            res = await asyncio.to_thread(topics.exits_policy, self.root, None)
+        except Exception:
+            res = {"ok": False, "db": "DB_ERROR", "error": "failed"}
+        try:
+            await ws.send(self._msg("exits_status_detail", 0, res))
         except Exception:
             pass
 

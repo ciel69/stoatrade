@@ -1033,8 +1033,55 @@ def learning_detail(root, mode, now=None):
     return model.scrub(dashapi.detail(root, mode, now))
 
 
-TOPICS = {"brain": brain, "ctl": ctl, "day": day, "events": events, "market": market, "news": news, "notify": notify, "briefs": briefs, "system": system, "settings": settings}
-INTERVAL = {"decisions": 3.0, "models": 30.0, "ideas": 10.0, "market": 5.0, "news": 15.0, "notify": 5.0, "day": 5.0, "briefs": 10.0, "system": 5.0, "settings": 15.0}      # тема -> не чаще раза в N секунд (по умолчанию HEAVY_S сервера)
+def cmkt(root=None, now=None):
+    """Сводный рынок (R1.7, задача 29): свежий снимок runtime/cmkt/snap.json через tb.core.cmktdoc — рынки, монеты, свежесть
+    и коды бирж, флаги. Снимка нет или он старше 5 с — ok False со state "stale" и без чисел (экран покажет «нет данных»)."""
+    from tb.core import cmktdoc
+    now = time.time() if now is None else now
+    doc = cmktdoc.latest(root, now=now)
+    if doc is None:
+        return {"ok": False, "state": "stale", "ts": None, "age_s": None, "n_ex": {"perp": 0, "spot": 0},
+                "n_syms": 0, "skew_ms": None, "warn": ["STALE"], "venues": [], "coins": []}
+    venues = []
+    for mkt, row in sorted((doc.get("ex") or {}).items()):
+        r = row if isinstance(row, (list, tuple)) else ()
+        age_ms = _num(r[3]) if len(r) > 3 else None
+        venues.append({"mkt": str(mkt), "code": str(r[0]) if r and r[0] else "OK", "lag_ms": _num(r[1]) if len(r) > 1 else None,
+                       "age_s": None if age_ms is None else round(age_ms / 1000.0, 1)})
+    ne = doc.get("n_ex") if isinstance(doc.get("n_ex"), dict) else {}
+    coins = cmktdoc.symbols(root, now)
+    return {"ok": True, "state": "ok", "ts": int(doc["ts"]), "age_s": round(float(now) - float(doc["ts"]), 1),
+            "n_ex": {"perp": _num(ne.get("perp")) or 0, "spot": _num(ne.get("spot")) or 0}, "n_syms": len(coins),
+            "skew_ms": _num(doc.get("skew_ms")), "warn": [str(w) for w in (doc.get("warn") or [])],
+            "venues": venues, "coins": coins}
+
+
+def cmkt_symbol(root, sym, now=None):
+    """Монета сводного рынка по запросу (R1.7, задача 29): полосы стакана, стены, CVD, OI, ликвидации, funding и состояние бирж
+    из tb.core.cmktdoc.detail (тот же читатель, что у мозга; лимит tool.max_bytes) и лестница сводного стакана из файлов рынков
+    (tb.core.cmktdoc.book). Нет снимка — warn STALE, монета вне фокуса — NOT_FOCUS."""
+    from tb.core import cmktdoc
+    s = str(sym)[:20] if isinstance(sym, str) else None
+    d = cmktdoc.detail(root, s, parts=None, now=now)
+    return {"ok": not (d.get("warn") or []), "sym": d.get("sym"), "ts": d.get("ts"), "age_s": d.get("age_s"),
+            "n_ex": d.get("n_ex"), "cov": d.get("cov"), "warn": [str(w) for w in (d.get("warn") or [])],
+            "book": d.get("book"), "cvd": d.get("cvd"), "oi": d.get("oi"), "liq": d.get("liq"),
+            "funding": d.get("funding"), "venues": d.get("venues"), "trunc": d.get("trunc"),
+            "ladder": cmktdoc.book(root, s)}
+
+
+def exits_policy(root=None, now=None):
+    """Политика выхода (R4, только чтение): версия, что видит исполнитель, выключатель, режим, аренда, испытания, сторож и ошибки
+    конфига — тот же отчёт, что `./tb exits status`. База недоступна — ok False с кодом причины, файловые поля остаются."""
+    from tb.knowledge import exits_cli
+    rep = exits_cli.status_view(root, now)
+    keep = ("ok", "ts", "db", "error", "version", "versions", "effective", "snapshot", "lease", "switch",
+            "promotion", "trials", "watch", "config")
+    return dict((k, rep.get(k)) for k in keep)
+
+
+TOPICS = {"brain": brain, "ctl": ctl, "day": day, "events": events, "market": market, "cmkt": cmkt, "news": news, "notify": notify, "briefs": briefs, "system": system, "settings": settings}
+INTERVAL = {"decisions": 3.0, "models": 30.0, "ideas": 10.0, "market": 5.0, "cmkt": 5.0, "news": 15.0, "notify": 5.0, "day": 5.0, "briefs": 10.0, "system": 5.0, "settings": 15.0}      # тема -> не чаще раза в N секунд (по умолчанию HEAVY_S сервера)
 MODE_TOPICS = {"home": home, "trades": trades, "decisions": decisions, "models": models, "plans": plans, "ideas": ideas}        # зависят от режима клиента: строятся для каждого режима, который сейчас смотрит хотя бы один клиент
 
 

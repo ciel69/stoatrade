@@ -3,6 +3,7 @@ import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useControlStore } from '@/entities/control'
 import { useSystemStore } from '@/entities/system'
+import { ExitsPolicy } from '@/widgets/system/exits-policy'
 import { KillRelease } from '@/widgets/system/kill-release'
 import { PlatformHero } from '@/widgets/system/platform-hero'
 import { RiskLevel } from '@/widgets/system/risk-level'
@@ -38,6 +39,7 @@ function close(): void {
     <div class="w-risk"><RiskLevel /></div>
     <div class="w-nodes"><SystemNodes /></div>
     <div class="w-lim"><SystemLimits /></div>
+    <div class="w-exit"><ExitsPolicy /></div>
     <div class="w-more"><SystemMore :selected="panel" @open="open" /></div>
     <UiSidePanel :open="!!panel" label="Подробности системы" @close="close">
       <SystemPanel v-if="panel" :key="panel" :kind="panel" @close="close" />
@@ -47,15 +49,16 @@ function close(): void {
 
 <style scoped>
 .page { gap: var(--space-5); }
-.w-hero, .w-risk, .w-nodes, .w-lim, .w-more { min-width: 0; }
+.w-hero, .w-risk, .w-nodes, .w-lim, .w-exit, .w-more { min-width: 0; }
 .w-hero { display: grid; gap: var(--space-5); }        /* состояние и (при аварийной остановке) блок её снятия одной группой: ряды сетки на широком экране не сдвигаются */
-/* от 1500 px: состояние на всю ширину, под ним уровень риска, ниже слева узлы, справа подробности, под ними сессия, запас и капитал тремя колонками */
+/* от 1500 px: состояние на всю ширину, под ним уровень риска, ниже слева узлы, справа подробности, под ними слева сессия, запас и капитал, справа политика выхода */
 @media (min-width: 1500px) {
   .page { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); column-gap: var(--space-5); align-items: start; }
   .w-hero, .w-risk, .w-lim { grid-column: 1 / -1; }
   .w-risk { grid-row: 2; }
   .w-nodes { grid-column: 1; grid-row: 3; }
   .w-more { grid-column: 2; grid-row: 3; }
-  .w-lim { grid-row: 4; }
+  .w-lim { grid-column: 1; grid-row: 4; }
+  .w-exit { grid-column: 2; grid-row: 4; }
 }
 </style>

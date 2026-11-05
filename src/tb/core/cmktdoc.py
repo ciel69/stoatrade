@@ -37,6 +37,8 @@ TIER_DEEP, TIER_LIGHT = 1, 2                  # tb.cmkt.store.TIERS
 STEPS = ((TIER_DEEP, "deep", 1), (TIER_LIGHT, "light", 5))
 SNAP_MAX_AGE_S = 5.0
 WAIT_POLL_S = 0.25
+EX_SCHEMA = "tb.cmkt_ex/1"                     # файлы рынков runtime/cmkt/ex/<market>.json (пишет tb.cmkt.collector)
+LADDER_LEVELS = 14                             # уровней на сторону в сводном стакане для экрана
 CODES_MISSING = ("not_focus", "no_row", "late", "db", "no_t0")
 DEFAULTS = {"sync": {"accept_s": 3}, "store": {"dir": "state/cmkt"}, "cov": dict(L.DEFAULTS["cov"]),
             "brief": {"mode": "compact", "max_tokens": 90, "syms": 1, "experiment": False},
@@ -139,6 +141,30 @@ def latest(root=None, now=None, max_age_s=SNAP_MAX_AGE_S):
         return d
     except Exception:                                    # noqa: BLE001 — читатель не бросает
         return None
+
+
+def symbols(root=None, now=None):
+    """Монеты свежего снимка для экранов дашборда (R1.7, задача 29): [{sym, tier, focus_s, cov, mid, flags, n_ex}] без стакана и стен.
+    Снимка нет или он старше SNAP_MAX_AGE_S — []. Не бросает: экран показывает пустое состояние."""
+    try:
+        doc = _read_snap(root)
+        if doc is None or _age(doc, now) > SNAP_MAX_AGE_S:
+            return []
+        cols = doc.get("sym_cols") or L.SNAP_SYM_COLS
+        pos = dict((name, i) for i, name in enumerate(cols))
+        out = []
+        for sym, row in (doc.get("syms") or {}).items():
+            if not isinstance(row, (list, tuple)):
+                continue
+            cell = lambda name: row[pos[name]] if name in pos and pos[name] < len(row) else None      # noqa: E731
+            flags = cell("flags")
+            out.append({"sym": str(sym), "tier": cell("tier"), "focus_s": L.num(cell("focus_s")), "cov": L.num(cell("cov")),
+                        "mid": L.num(cell("mid")), "n_ex": cell("n_ex"),
+                        "flags": [str(f) for f in flags] if isinstance(flags, (list, tuple)) else []})
+        out.sort(key=lambda x: (0 if x["tier"] in (TIER_DEEP, "deep") else 1, x["sym"]))
+        return out
+    except Exception:                                    # noqa: BLE001 — читатель не бросает
+        return []
 
 
 # ---------------------------------------------------------------- строка признаков сигнала
@@ -541,3 +567,155 @@ def detail(root, sym, parts=None, now=None, cfg=None):
         return out
     except Exception:                                    # noqa: BLE001
         return {"sym": out.get("sym"), "warn": ["STALE"]}
+
+
+
+BOOK_BUCKETS = 8
+BOOK_BUCKET_BPS = 25.0
+BOOK_BAND_STEPS = (0.25, 0.5, 1.0, 2.0)
+
+
+def _book_put(dst, side, pos, px, pct, usd, mkt):
+    key = (side, pos)
+    cur = dst.get(key)
+    if cur is None:
+        dst[key] = {"px": px, "pct": pct, "musd": usd / 1e6, "mkts": [mkt]}
+        return
+    total = cur["musd"] + usd / 1e6
+    if cur["px"] is not None and px is not None and total > 0:
+        cur["px"] = (cur["px"] * cur["musd"] + px * (usd / 1e6)) / total
+    cur["musd"] = total
+    if mkt not in cur["mkts"]:
+        cur["mkts"].append(mkt)
+
+
+def _book_rows(levels, side, mid, max_levels):
+    rows = [v for (s, _pos), v in levels.items() if s == side]
+    for lv in rows:
+        if lv.get("px") is None and mid:
+            sign = -1.0 if side == "b" else 1.0
+            lv["px"] = round(mid * (1.0 + sign * lv["pct"] / 100.0), 8)
+    rows.sort(key=lambda x: x["px"] if x.get("px") is not None else 0.0, reverse=(side == "b"))
+    out = []
+    acc = 0.0
+    for lv in rows[:max_levels]:
+        acc += lv["musd"]
+        lv["cum"] = round(acc, 6)
+        out.append(lv)
+    return out
+
+
+def book(root=None, sym=None, max_levels=LADDER_LEVELS):
+    """Сводный стакан по файлам рынков `runtime/cmkt/ex/*.json` (R1.7, задача 29): глубина всех бирж одной книгой, отдельно перп и спот.
+
+    Источник уровней: корзины 25 б.п. до ±2 % (`bk`, deep), иначе полосы 0.25/0.5/1/2 % (`bands`), иначе крупные уровни (`walls`).
+    Берутся только рынки со статусом `ok`; объём в USD, отдаётся в MUSD; одинаковые полосы бирж складываются, у уровня остаются
+    рынки-источники. -> {"sym", "ts" (самый старый `tx`), "kinds": {"perp": {"mid", "best_bid", "best_ask", "spread_pct",
+    "source", "n_mkts", "levels": {"ask": [...], "bid": [...]}, "markets": {mkt: {code, lag_ms, mid}}}, "spot": {...}}}.
+    Уровни: ask и bid от середины наружу (лучший первым), у каждого px, pct, musd, cum и mkts. Не бросает.
+    """
+    if not isinstance(sym, str) or not sym:
+        return None
+    try:
+        doc = _read_snap(root)
+        s = L.snap_sym(doc, sym) if doc is not None else None
+        if s is None:
+            return None
+        ex_dir = paths.runtime("cmkt", "ex", root=root)
+        if not os.path.isdir(ex_dir):
+            return None
+        kinds = dict((k, {"bk": {}, "bands": {}, "walls": {}, "mids": [], "markets": {}, "bids": [], "asks": []})
+                     for k in ("perp", "spot"))
+        ts = None
+        for name in sorted(os.listdir(ex_dir)):
+            if not name.endswith(".json"):
+                continue
+            try:
+                with open(os.path.join(ex_dir, name), encoding="utf-8") as f:
+                    d = json.load(f)
+            except (OSError, ValueError):
+                continue
+            if not isinstance(d, dict) or d.get("schema") != EX_SCHEMA:
+                continue
+            kind = d.get("kind")
+            row = (d.get("syms") or {}).get(sym)
+            cols = d.get("cols") or []
+            if kind not in kinds or not isinstance(row, (list, tuple)) or not cols:
+                continue
+            pos = dict((k, i) for i, k in enumerate(cols))
+            get = lambda k: row[pos[k]] if k in pos and pos[k] < len(row) else None      # noqa: E731
+            if get("st") != "ok":
+                continue
+            bucket = kinds[kind]
+            mkt = str(d.get("mkt") or name[:-5])
+            mid = L.num(get("mid"))
+            bucket["markets"][mkt] = {"code": get("st") or "OK", "lag_ms": L.num(get("lag")), "mid": mid}
+            if mid is not None:
+                bucket["mids"].append(mid)
+            tx = L.num(get("tx"))
+            if tx is not None:
+                ts = tx if ts is None else min(ts, tx)
+            tk = get("tk")
+            if isinstance(tk, (list, tuple)) and len(tk) > 3:
+                bid, ask = L.num(tk[2]), L.num(tk[3])
+                if bid is not None and bid > 0:
+                    bucket["bids"].append(bid)
+                if ask is not None and ask > 0:
+                    bucket["asks"].append(ask)
+            walls = get("walls")
+            if isinstance(walls, list):
+                for lv in walls:
+                    if not isinstance(lv, (list, tuple)) or len(lv) < 3:
+                        continue
+                    side, px, usd = lv[0], L.num(lv[1]), L.num(lv[2])
+                    if side not in ("b", "a") or px is None or px <= 0 or usd is None or usd <= 0 or not mid:
+                        continue
+                    pct = abs(px - mid) / mid * 100.0
+                    _book_put(bucket["walls"], side, int(round(px * 100)), px, pct, usd, mkt)
+            bk = get("bk")
+            if isinstance(bk, list) and len(bk) == 2 and mid:
+                for side, arr in (("b", bk[0]), ("a", bk[1])):
+                    if not isinstance(arr, list):
+                        continue
+                    for i, usd in enumerate(arr[:BOOK_BUCKETS]):
+                        usd = L.num(usd)
+                        if usd is not None and usd > 0:
+                            pct = BOOK_BUCKET_BPS * (i + 1) / 100.0
+                            _book_put(bucket["bk"], side, i, None, pct, usd, mkt)
+            else:
+                bands = get("bands")
+                if isinstance(bands, list) and mid:
+                    for i, pair in enumerate(bands[:len(BOOK_BAND_STEPS)]):
+                        if not isinstance(pair, (list, tuple)) or len(pair) < 2:
+                            continue
+                        for side, usd in (("b", pair[0]), ("a", pair[1])):
+                            usd = L.num(usd)
+                            if usd is not None and usd > 0:
+                                _book_put(bucket["bands"], side, i, None, BOOK_BAND_STEPS[i], usd, mkt)
+        out = {}
+        for kind, bucket in kinds.items():
+            levels = bucket["bk"] or bucket["bands"] or bucket["walls"]
+            if not levels:
+                continue
+            source = "bk" if bucket["bk"] else ("bands" if bucket["bands"] else "walls")
+            mid = sum(bucket["mids"]) / len(bucket["mids"]) if bucket["mids"] else None
+            wall_asks = _book_rows(bucket["walls"], "a", mid, min(max_levels, 10))
+            wall_bids = _book_rows(bucket["walls"], "b", mid, min(max_levels, 10))
+            if source == "walls":
+                asks, bids = wall_asks, wall_bids
+            else:
+                asks = _book_rows(bucket[source], "a", mid, max_levels)
+                bids = _book_rows(bucket[source], "b", mid, max_levels)
+            best_bid = max(bucket["bids"]) if bucket["bids"] else None
+            best_ask = min(bucket["asks"]) if bucket["asks"] else None
+            spread = None
+            if best_bid is not None and best_ask is not None and mid:
+                spread = (best_ask - best_bid) / mid * 100.0
+            out[kind] = {"mid": mid, "best_bid": best_bid, "best_ask": best_ask, "spread_pct": spread, "source": source,
+                         "n_mkts": len(bucket["markets"]), "levels": {"ask": asks, "bid": bids},
+                         "walls": {"ask": wall_asks, "bid": wall_bids}, "markets": bucket["markets"]}
+        if not out:
+            return None
+        return {"sym": sym, "ts": ts, "kinds": out}
+    except Exception:                                    # noqa: BLE001 — читатель не бросает
+        return None
