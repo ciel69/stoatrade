@@ -1,12 +1,14 @@
 """R2, задача 13 (Requirement 7.4): блок досье `rulebook` — во всех трёх перечнях блоков (brain/brief.py, gateway get_brief, dash/model2),
 до 5 правил и <= 300 токенов (render_cond), сжимается раньше playbook, но не раньше lessons; блок playbook не меняется; при пустом
-rulebook и недоступной базе блока нет и досье прежнее. Всё во временном корне."""
+rulebook и недоступной базе блока нет и досье прежнее. R4, задача 18 (Requirement 11.4): блок `exit` плюс общая проверка — каждый ключ,
+который пишет `brief.build`, проходит белый список `get_brief` (иначе фильтр выхода шлюза молча снимает блок). Всё во временном корне."""
 import time
 import unittest
 from unittest import mock
 
 import _bootstrap  # noqa: F401
 import test_brain_rules as TR
+import test_brief as TB
 from tb.brain import brief as brief_mod
 from tb.dash import model2
 from tb.gateway import catalog
@@ -32,11 +34,22 @@ class TestLists(unittest.TestCase):
         self.assertIn("rulebook", model2._BRIEF_ALLOW)
         self.assertIn("playbook", catalog.TOOLS["get_brief"].out)
         self.assertIn("playbook", model2._BRIEF_ALLOW)
+        self.assertIn("exit", catalog.TOOLS["get_brief"].out)          # R4 (Requirement 11.4): блок «что сделает код»
 
     def test_trim_order(self):
         names = [n for n, _ in brief_mod.TRIM_STEPS]
         self.assertLess(names.index("lessons"), names.index("rulebook"))
         self.assertLess(names.index("rulebook"), names.index("playbook"))
+
+
+class TestEveryBuiltKeyIsWhitelisted(TB.Base):
+    """Каждый ключ, который пишет `brief.build`, пропущен шлюзом: иначе `finish` молча снимает блок и мозг его не видит."""
+
+    def test_start_event_and_plan_scopes(self):
+        out = set(catalog.TOOLS["get_brief"].out)
+        for scope, kw in (("start", {}), ("event", {"sym": "SOL"}), ("plan:PL-1028-SOL-01", {})):
+            b = brief_mod.build(scope, root=self.root, now=TB.NOW, **kw)
+            self.assertEqual(sorted(set(b) - out), [], scope)
 
 
 class TestBlock(unittest.TestCase):

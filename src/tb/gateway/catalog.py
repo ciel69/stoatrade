@@ -30,6 +30,7 @@ WAIT_MAX_S = 60
 DOWN_REPEAT_S = 300.0
 RE_TAG = r"^[a-z0-9._-]{2,40}$"
 _KEY_OK = re.compile(r"^[A-Za-z0-9_.:-]{1,40}$")
+EXIT_RULE_PREFIXES = ("xp_", "auto_")      # R4 (Requirement 11.2): правила политики выхода и пола защиты принадлежат коду, не мозгу
 _JOURNAL_LOCK = threading.Lock()
 _DOWN_AT = {}
 
@@ -249,6 +250,34 @@ def check_scope(agent, symbol, mode):
         raise ToolError("E_SYMBOL_FORBIDDEN", "символ %s не разрешён агенту" % common.clean_text(str(symbol), 20), "symbol", "denied")
     if mode not in lim["modes"]:
         raise ToolError("E_MODE_FORBIDDEN", "режим %s не разрешён агенту (разрешено: %s)" % (common.clean_text(str(mode), 10), ",".join(lim["modes"])), "mode", "denied")
+
+
+def _policy_rule_ids(o, path=""):
+    """Пути и идентификаторы правил `manage` вида `xp_*`/`auto_*` (правила политики выхода и пола защиты; R4, Requirement 11.2).
+    Ищет во всём объекте: патч `amend` (в том числе внутри `shadow_variants`) и итоговый план. -> [(путь, id)]."""
+    out = []
+    if isinstance(o, dict):
+        mg = o.get("manage")
+        rules = mg.values() if isinstance(mg, dict) else mg if isinstance(mg, list) else ()
+        for i, r in enumerate(rules):
+            if isinstance(r, dict) and isinstance(r.get("id"), str) and r["id"].startswith(EXIT_RULE_PREFIXES):
+                base = "%s.manage" % path if path else "manage"
+                out.append(("%s[%d].id" % (base, i), r["id"]))
+        for k, v in o.items():
+            out.extend(_policy_rule_ids(v, "%s.%s" % (path, k) if path else str(k)))
+    elif isinstance(o, list):
+        for i, v in enumerate(o):
+            out.extend(_policy_rule_ids(v, "%s[%d]" % (path, i) if path else "[%d]" % i))
+    return out
+
+
+def _no_exit_policy_touch(patch):
+    """`amend_plan` не имеет права трогать правила кода: правило политики выхода (`xp_*`) или пола защиты (`auto_*`) -> E_EXIT_POLICY
+    (Requirement 11.2, свойство 20). Мозг может только строже: стоп, `close_plan`, `close_plan frac`, `stop_plan`, правила плана."""
+    hits = _policy_rule_ids(patch)
+    if hits:
+        p, rid = hits[0]
+        raise ToolError("E_EXIT_POLICY", "правило %s принадлежит коду (политика выхода): менять его мозг не может" % common.clean_text(rid, 24), p, "denied")
 
 
 def check_plan(ctx, plan):
@@ -713,6 +742,7 @@ def h_submit(ctx, a):
         raw["mode"] = "paper"
     if len(json.dumps(raw, ensure_ascii=False).encode("utf-8")) > plan_schema.MAX_PLAN_BYTES:
         raise ToolError("E_TOO_LARGE", "план больше %d байт" % plan_schema.MAX_PLAN_BYTES)
+    _no_exit_policy_touch(raw)         # R4: id правил xp_*/auto_* в плане мозга делили бы состояние rt.rules с правилами кода и могли бы их погасить
     th = raw.get("thesis")
     reason = _need_reason(a, optional=isinstance(th, str) and len(th.strip()) >= 10)
     plan, errs, warns, ready = plan_cli.precheck(raw, ctx.now)
@@ -803,6 +833,7 @@ def h_amend(ctx, a):
         patch.pop(k, None)
     if not patch:
         raise ToolError("E_SCHEMA", "патч пуст", "patch")
+    _no_exit_policy_touch(patch)        # R4 (Requirement 11.2): правила xp_*/auto_* принадлежат коду; мозг — только строже
     status = common.plan_status({"spec": spec, "rt": rt})
     pos = status in ("entered", "managing")
     p = rt.get("pos") or {}
@@ -904,6 +935,8 @@ def _reg(t):
 _reg(Tool("get_status", "System status: executor alive/mode/hold, KILL flag, scanner/feed freshness, account (equity and free in USDT, day PnL, drawdown %), "
           "session, risk room (headroom) and event backlog. Read-only, no arguments.", {}, "read", h_status,
           out=("ts", "system", "account", "session", "room", "market", "positions_n", "plans_n", "events", "actor")))
+# белый список get_brief: каждый ключ, который пишет brain.brief.build (Requirement 11.4 — блок `exit`; `deriv`/`crowd`/`trend`/`data` —
+# блоки монеты события по docs/BRAIN.md), иначе фильтр выхода молча снимает блок
 _reg(Tool("get_brief", "Compact decision brief (JSON, token-budgeted). scope=start: full picture; event: after a wake event; plan:PL-id: one plan in depth. "
           "Contains only numbers and whitelisted fields; no third-party text.",
           {"scope": dict(_s("start | event | plan:<PL-id>", 60, pattern=r"^(start|event|plan:PL-\d{4}-[A-Z0-9]{2,20}-\d{2,3})$"), default="start"),
@@ -914,7 +947,7 @@ _reg(Tool("get_brief", "Compact decision brief (JSON, token-budgeted). scope=sta
            "budget_tokens": _i("Approximate token budget 200..6000.", 200, 6000)}, "read", h_brief,
           out=("brief_id", "ts", "scope", "trunc", "cut", "system", "account", "session", "room", "positions", "plans", "pending", "market", "hot",
                "ideas", "levels", "struct", "struct_missing", "day", "limits", "risk_level", "economics", "experiments", "paper_history", "pause", "flash", "flow", "playbook", "rulebook", "cands", "intel", "news_digest", "recent", "since_last", "lessons", "memory", "checklist",
-               "plan", "plans_bad", "missing")))
+               "plan", "plans_bad", "missing", "exit", "deriv", "crowd", "trend", "data")))
 _reg(Tool("get_events", "Read bus events (whitelisted fields, no third-party text) without waiting. By default events after the last acked seq (unacked ones are "
           "re-delivered). Does not acknowledge: call ack_events after handling.",
           {"after": TF_AFTER, "limit": _i("Max events 1..50.", 1, 50, 20), "wake_only": _b("Only wake-priority events.", False)}, "read", h_events,
@@ -941,7 +974,8 @@ _reg(Tool("submit_plan", "Submit a new trading plan (schema tb.plan/1; see the p
           dict({"plan": _obj("The plan object (tb.plan/1)."), "reason": REASON}, **{k: v for k, v in CMD_COMMON.items() if k != "reason"}), "plan.submit", h_submit,
           required=["plan"], out=("cmd_id", "plan_id", "rev", "guard_preview", "executor", "gateway_actor"), write=True))
 _reg(Tool("amend_plan", "Amend a plan with a JSON Merge Patch of the current plan (no revision needed: it is checked against the current plan). Stops can only be "
-          "tightened in a position; risk can only go down. Validated offline and again by the executor.",
+          "tightened in a position; risk can only go down. Validated offline and again by the executor. Rules of the code exit policy (ids xp_*, auto_*) "
+          "belong to code: a patch that touches them is rejected with E_EXIT_POLICY. Tightening the stop and closing the position are still yours.",
           dict({"id": PLAN_ID, "patch": _obj("JSON Merge Patch (RFC 7386) of plan fields.")}, **CMD_COMMON),
           "plan.manage", h_amend, required=["id", "patch", "reason"], out=("cmd_id", "plan_id", "rev", "guard_preview", "executor"), write=True))
 _reg(Tool("stop_plan", "Tighten the stop of a plan to a price (quote currency) or to breakeven ('be'). Only stricter than the current stop is accepted.",

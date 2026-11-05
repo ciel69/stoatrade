@@ -845,8 +845,9 @@ class TestLayers(unittest.TestCase):
         self.assertFalse(scan.module("tb.learnloop.watch")["write_lease"]["ref"])
 
     def test_promotion_mode_writer_only_learn_cli(self):
-        """config/learnloop.json (promotion.mode) пишет только tb.knowledge.learn_cli.set_mode (CLI вне пакета); других писателей config/ в
-        tb.knowledge и tb.learnloop нет."""
+        """config/learnloop.json (promotion.mode) пишет только tb.knowledge.learn_cli.set_mode (CLI вне пакета), config/exits.json
+        (promotion.mode) — только tb.knowledge.exits_cli.set_mode (R4, задача 21; Requirement 18.2; полный список писателей config/
+        расширяет задача 23); других писателей config/ в tb.knowledge и tb.learnloop нет."""
         scan = ConfigWrites(target="learnloop.json")
         found = {}
         for d, _, fs in os.walk(SRC):
@@ -857,9 +858,20 @@ class TestLayers(unittest.TestCase):
                     if w:
                         found[mod] = w
         self.assertEqual(found, {"tb.knowledge.learn_cli": ["set_mode"]})
+        scan_ex = ConfigWrites(target="exits.json")
+        found_ex = {}
+        for d, _, fs in os.walk(SRC):
+            for f in sorted(fs):
+                if f.endswith(".py"):
+                    mod = module_name(os.path.join(d, f))
+                    w = scan_ex.writers(mod)
+                    if w:
+                        found_ex[mod] = w
+        self.assertEqual(found_ex, {"tb.knowledge.exits_cli": ["set_mode"]})
         anyc = ConfigWrites()
         found = dict((m, anyc.writers(m)) for m in [module_name(p) for p in py_files("knowledge")] + [module_name(p) for p in py_files("learnloop")])
-        self.assertEqual(dict((m, w) for m, w in found.items() if w), {"tb.knowledge.learn_cli": ["set_mode"]})
+        self.assertEqual(dict((m, w) for m, w in found.items() if w),
+                         {"tb.knowledge.learn_cli": ["set_mode"], "tb.knowledge.exits_cli": ["set_mode"]})
 
     def test_loop_checkers_catch_violations(self):
         """Проверки слоёв и записей цикла ловят искусственные нарушения (иначе тесты выше ничего не доказывают)."""

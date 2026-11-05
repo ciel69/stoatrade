@@ -25,12 +25,14 @@ from tb.brain import common
 from tb.core import blackout
 from tb.core import bus
 from tb.core import exec_cfg
+from tb.core import exitdoc
 from tb.core import ideas as ideas_core
 from tb.core import portfolio
 from tb.core import plan_schema
 from tb.core import tradectx
 from tb.core.stops import loss_stop
 from tb.logic import costs as costs_mod
+from tb.logic import exitpol
 
 DEFAULT_BUDGET = 2500
 EVENT_BUDGET = 900
@@ -57,6 +59,8 @@ STRUCT_FRESH_S = 300.0
 STRUCT_BUDGET = 600           # токенов на блок struct при scope=start (цель WP «данные мозга»: не больше +600)
 STRUCT_EVENT_BUDGET = 420     # монета события и BTC без подрезки уровней и вторичных чисел: мозгу нужен полный контекст для входа (указание владельца 2026-10-31)
 STRUCT_MAX_SYMS = 8
+EXIT_MAX_TOKENS = 60          # R4 (Requirement 11.4): блок `exit` «что сделает код» для position_manager — не больше 60 токенов
+EXIT_ROWS = 2                 # позиций в блоке (обычно одна: событие position_manager — про один план); остальные отбрасываются бюджетом
 _STRUCT_NUMS = ("a5_pct", "a1h_pct", "r1h", "r4h", "r24h", "vx", "te", "dpos", "dx", "tx", "t24_musd")
 _STRUCT_REG = ("trend_up", "trend_down", "range", "storm", "unknown")
 _STRUCT_TAGS = ("wh", "wl", "pdh", "pdl", "pdc", "dh", "dl", "s1h", "s5m")
@@ -638,6 +642,89 @@ def _b_positions(c):
             "liq": _p(calc.get("liq_est")), "r": _r(calc.get("r_now")), "pnl": _r(calc.get("pnl")), "mae_r": _r(pth.get("mae_r")), "mfe_r": _r(pth.get("mfe_r")),
             "age_min": age, "risk_usdt": _r(t.get("risk_usdt")), "stale": True if pr["stale"] else None}))
     return rows
+
+
+def _exit_state(it):
+    """Состояние позиции для `exitpol.summary`: mfe_r в R от входа и once-правила политики, которые уже сработали (или пропущены)."""
+    pos = it["rt"].get("pos") if isinstance(it["rt"].get("pos"), dict) else {}
+    sign = 1 if it["spec"].get("side") == "long" else -1
+    avg, unit, best = common.num(pos.get("avg")), common.num(pos.get("r_unit")), common.num(pos.get("best_px"))
+    mfe = None if None in (avg, best, unit) or not unit else max(0.0, sign * (best - avg) / unit)
+    done = []
+    rules = it["rt"].get("rules") if isinstance(it["rt"].get("rules"), dict) else {}
+    for rid, st in rules.items():
+        if not (isinstance(rid, str) and rid.startswith(("xp_", "auto_")) and isinstance(st, dict)):
+            continue
+        if st.get("state") in ("done", "skipped") or (common.num(st.get("fired")) or 0) >= 1:
+            done.append(rid)
+    return _drop_none({"mfe_r": None if mfe is None else round(mfe, 6), "done": sorted(done)})
+
+
+def _exit_next(nx):
+    """Компактный `next` из `exitpol.summary`: вид действия, уровень в R и доля/удержание."""
+    if not isinstance(nx, dict) or not isinstance(nx.get("kind"), str):
+        return None
+    out = {"kind": nx["kind"], "at_r": _r(nx.get("at_r"), 3)}
+    for k in ("frac", "keep", "mult"):
+        if not isinstance(nx.get(k), bool) and common.num(nx.get(k)) is not None:
+            out[k] = _r(nx.get(k), 3)
+    return _drop_none(out)
+
+
+def _fit_exit(block):
+    """Укладывает блок `exit` в EXIT_MAX_TOKENS (Requirement 11.4): лишние строки, затем срок, затем параметры доли."""
+    rows = block["rows"]
+    while len(rows) > 1 and tokens(block) > EXIT_MAX_TOKENS:
+        rows.pop()
+    if tokens(block) > EXIT_MAX_TOKENS:
+        for row in rows:
+            row.pop("timeout_min", None)
+    if tokens(block) > EXIT_MAX_TOKENS:
+        for row in rows:
+            if isinstance(row.get("next"), dict):
+                row["next"] = {k: v for k, v in row["next"].items() if k in ("kind", "at_r")}
+    return block
+
+
+def _b_exit(c, positions):
+    """Блок `exit` (R4, Requirement 11.4): что сделает код — версия политики позиции, ближайшее действие и его уровень в R, срок
+    `timeout`. Политика берётся из `rt.pos.exit` (версия, которой ведётся позиция, Requirement 9.3), иначе — действующая из
+    `exitdoc.current`; текст и уровни считает `exitpol.summary`. Не больше EXIT_MAX_TOKENS токенов. Позиций нет — блока нет."""
+    try:
+        floor = exitpol.floor((exec_cfg.load(c.root) or {}).get("auto_protect"))
+    except Exception:                              # noqa: BLE001 — досье не ломается из-за конфига: пол пустой, покажем «только стоп»
+        floor = {"schema": exitpol.SCHEMA}
+    doc, rows = None, []
+    for row in positions:
+        pid = row.get("plan")
+        it = next((x for x in c.plans if pid and x["id"] == pid), None)
+        if it is None:
+            continue
+        try:
+            pos = it["rt"].get("pos") if isinstance(it["rt"].get("pos"), dict) else {}
+            rec = pos.get("exit") if isinstance(pos.get("exit"), dict) else {}
+            pol, ver = rec.get("policy"), rec.get("ver")
+            if not isinstance(pol, dict):
+                if doc is None:
+                    doc = exitdoc.current(c.root, c.now, floor)
+                pol, ver = doc[0], doc[1].get("ver")
+            ctx = _drop_none({"max_hold_min": rec.get("max_hold_min") or row.get("hold_min"), "atr5_pct": rec.get("atr5_pct"),
+                              "sig_type": rec.get("sig_type"), "horizon": rec.get("horizon") or row.get("horizon")})
+            s = exitpol.summary(pol, floor, _exit_state(it), ctx)
+        except (KeyError, TypeError, ValueError, AttributeError):
+            continue
+        nxt = _exit_next(s.get("next"))
+        item = _drop_none({"plan": pid, "next": nxt, "timeout_min": _r(s.get("timeout_min"), 1)})
+        rows.append((ver if isinstance(ver, str) and ver else None, item, nxt))
+    if not rows:
+        return None
+    rows.sort(key=lambda x: (0, x[2]["at_r"]) if isinstance(x[2], dict) and x[2].get("at_r") is not None else (1, 0))   # ближайший уровень первым
+    rows = rows[:EXIT_ROWS]
+    block = _drop_none({"ver": rows[0][0], "rows": [x[1] for x in rows]})
+    if len({x[0] for x in rows}) > 1:              # разные версии у позиций: версия каждой строкой
+        for ver, item, _ in rows:
+            item["ver"] = ver
+    return _fit_exit(block)
 
 
 def _levels_of(when):
@@ -1536,6 +1623,7 @@ def build(scope="start", since=None, budget_tokens=None, root=None, now=None, co
         b["levels"] = _safe("levels", lambda: _b_levels(c, [sym] if sym else []), missing) if sym else None
         b["recent"] = _safe("recent", lambda: [e for e in _b_recent(c, 40) if e.get("plan") == pid][-8:], missing)
     _blackout_mode(b, c)
+    b["exit"] = _safe("exit", lambda: _b_exit(c, b.get("positions") or []), missing)        # R4 (Requirement 11.4): что сделает код с позицией — версия, ближайший уровень, срок
     if c.plans_bad:
         b["plans_bad"] = c.plans_bad
     if missing:

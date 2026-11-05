@@ -101,7 +101,7 @@ USAGE = """использование: ./tb <группа> <команда> [а�
   knowledge <verify [--quick]|backup|restore [--from FILE]|stats|disable-v2|migrate-v2a> [--text]   база знаний v2 (R2): цепочки и целостность, проверенные копии, восстановление по протоколу (docs/RUNBOOK.md)
   rulebook <list|show [R-NNNN|RL0001]|verify|disable RULE|disable-all|apply on|off|unblock BLOCK_H> [--text]   rulebook цикла обучения (R2): версии, правила, режим применения, проверка цепочки; аварийные действия владельца (необязательные)
   learn promotion [auto|off] [--text]   цикл обучения (R2): режим автопродвижения; off — аварийная остановка продвижения
-  exits after [--mode paper|testnet|live] [--days N] [--text]   политика выхода (R4): путь после закрытия — ход после выхода и достижение t1 по причинам (только чтение)
+  exits <status|versions|search [--limit N]|trials [open|closed]|brain|after|gate|apply on|off|rollback|promotion [auto|off]> [--text]   политика выхода (R4): версии, испытания, отчёты и аварийные средства владельца
   day <status|list|report [ID]|checklist|preflight> [--json]   жизненный цикл дня: состояние, итоги, сухой прогон чек-листа закрытия, preflight (WP14; только чтение)
   notify <status|on|off|set КАТЕГОРИЯ on|off|set quiet HH:MM-HH:MM|set quiet off|test>   уведомления ОС: мастер, категории, тихие часы (docs/NOTIFICATIONS.md)
   control <token new|status|gates|audit|cmd|run>   плоскость управления: ключ, токен входа, гейты live, аудит, сервис ctl (WP12)

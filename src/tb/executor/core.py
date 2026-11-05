@@ -66,7 +66,7 @@ def new_runtime(now):
                       "cond_state": {}, "already": {}, "ref_px": None, "fired_px": None},
             "pos": {"qty": 0.0, "avg": None, "entries": [], "initial_stop": None, "cur_stop": None, "r_unit": None, "best_px": None, "worst_px": None,
                     "t_best": None, "t_worst": None, "journal_id": None},
-            "targets": {}, "rules": {}, "adds": {"n": 0, "risk_used": 0.0},
+            "targets": {}, "rules": {}, "policy_orders": {}, "adds": {"n": 0, "risk_used": 0.0},
             "realized": {"pnl": 0.0, "fees": 0.0, "parts": []}, "close": {"reason": None, "px": None, "pnl": None},
             "actions": {"seq": 0, "pending": []}, "counters": {"stop_moves_1h": [], "blocked_attempts": 0}, "paper": False}
 
@@ -641,13 +641,16 @@ class Executor(object):
 
     # ------------------------------------------------------------------ исполнения
     def _owner_plan(self, ev):
-        """Чьё это исполнение. Своя ссылка tbx-N-M -> план N (если он активен); чужая непустая ссылка (старые команды, ручные ордера с ID) -> ничьё;
-        пустая ссылка (стоп/ликвидация/ручное закрытие в приложении) -> план с позицией по символу, но только исполнения после входа плана
-        (старая история биржи не должна попадать в сегодняшний план)."""
+        """Чьё это исполнение. Своя ссылка tbx-N-M -> план N (если он активен); заявка политики `tbx-xp-<N>-...` -> план N; чужая непустая ссылка
+        (старые команды, ручные ордера с ID) -> ничьё; пустая ссылка (стоп/ликвидация/ручное закрытие в приложении) -> план с позицией по символу,
+        но только исполнения после входа плана (старая история биржи не должна попадать в сегодняшний план)."""
         sym = ev.get("sym")
         link = ev.get("link_id") or ""
         if link:
             pn = linkid.parse(link)
+            if pn is None and link.startswith(reconcile.XP_PREFIX):
+                n = reconcile._xp_plan_n(link)
+                return self.plan_by_n(n) if n is not None else None
             return self.plan_by_n(pn[0]) if pn else None
         ts_ms = int(ev.get("ts_ms") or 0)
         for p in self.active_plans(sym):
@@ -715,6 +718,13 @@ class Executor(object):
                 if t["filled_qty"] >= float(t["qty"]) - 1e-9:
                     t["state"] = "filled"
                     self.emit("milestone", {"name": "target_filled", "target": tid, "px": px}, plan=spec["id"], sym=spec["symbol"])
+        for rid, rec in (rt.get("policy_orders") or {}).items():
+            if link and rec.get("link") == link:
+                rec["filled_qty"] = round(float(rec.get("filled_qty") or 0) + q, 12)
+                if rec["filled_qty"] >= float(rec.get("qty") or 0) - 1e-9:
+                    rec["state"] = "filled"
+                    if float(pos.get("qty") or 0) <= 1e-9:
+                        rt.setdefault("close", {})["rule"] = rid
         if pos["qty"] > 1e-9:
             self._journal_part(p, part)
         self.save(p)
@@ -991,6 +1001,7 @@ class Executor(object):
         self._to_status(p, "managing", "PROTECTED")
         self.emit("entry_filled", {"avg": avg_f, "qty": pos["qty"], "partial": bool(info.get("partial")), "sl": pos["cur_stop"],
                                    "risk_usdt": rt["pos"].get("risk0"), "journal_id": pos.get("journal_id")}, plan=spec["id"], sym=sym)
+        self.act.place_policy_limits(p)
         mdsvc.write_all(self, force=True)
 
     def _ensure_stop(self, p, stop0):
@@ -1154,6 +1165,9 @@ class Executor(object):
             return
         if rt["status"] == "entered":
             return        # лесенка ещё ставится (секунды)
+        self.act.poll_policy_orders(p)
+        if rt["status"] not in ACTIVE:
+            return
         self._eval_touch(p, view)
         lim = self.limits_for(p)
         res = rules.evaluate_manage(spec, rt, view, now, lim)
@@ -1353,6 +1367,8 @@ class Executor(object):
         qty, full = close_qty(qty, remaining, step, ins.get("min_qty"), a["type"] == "close" and float(a.get("frac", 1.0)) >= 0.999)
         if qty <= 0 and not full:
             return False
+        if a.get("exec") == "maker" and (not full or a["type"] == "close"):
+            return self._do_close_maker(p, a, qty, remaining)
         if full and self.act.close_inflight(p):      # закрытие уже в пути: без повторов на каждом тике (иначе ордер снимается раньше исполнения и позиция висит)
             return False
         why = self._action_why(a, a.get("why", ""))
@@ -1376,6 +1392,24 @@ class Executor(object):
         if kind == "denied":
             self._gate_denied(p, "close", G.deny(info.get("code", "HOLD")))
         return False
+
+    def _do_close_maker(self, p, a, qty, remaining):
+        """Закрытие доли политики способом maker (`exec="maker"`, Requirement 10.2–10.4): post-only заявка по времени и таймер `wait_s`.
+        Доля меньше лота уже округлена `close_qty` и уходит рынком, если `close_qty` решил закрыть остаток целиком."""
+        spec, rt = p["spec"], p["rt"]
+        rule = a.get("rule")
+        why = self._action_why(a, a.get("why", ""))
+        wait = float(self.act.maker_cfg().get("wait_s") or 0.0)
+        whole = qty >= remaining - 1e-9
+        kind, info = self.act.close_maker(p, qty, rule, why, wait, whole=whole)
+        ok = kind in ("pending", "market")
+        self.decide("rule", a["type"], plan=spec["id"], args={"qty": qty, "exec": "maker", "px": info.get("price")},
+                    why=why, res={"ok": ok, "code": info.get("code") or ("MAKER_WAIT" if kind == "pending" else "OK")})
+        self.emit("rule_fired", {"rule": rule or "x", "action": a["type"], "ok": ok,
+                                 "code": info.get("code") or ("MAKER_WAIT" if kind == "pending" else "OK")}, plan=spec["id"], sym=spec["symbol"])
+        if kind in ("market", "gone"):
+            self.sync_position(p)
+        return ok
 
     def _do_add(self, p, a, view):
         spec = p["spec"]
@@ -1546,6 +1580,8 @@ class Executor(object):
         if last.get("exec_type") in ("BustTrade", "AdlTrade"):
             return "liquidation"
         link = last.get("link") or ""
+        if link and any(r.get("link") == link for r in (rt.get("policy_orders") or {}).values()):
+            return "rule"
         if link and any(t.get("link") == link for t in (rt.get("targets") or {}).values()):
             return "tp"
         stop = float(rt["pos"].get("cur_stop") or rt["pos"].get("initial_stop") or 0)
@@ -1608,6 +1644,7 @@ class Executor(object):
         for tid, t in [("t1", spec["targets"][0])]:
             rt["targets"][tid] = {"state": "touch", "qty": qty, "price": t["price"], "link": None, "filled_qty": 0.0}
         self._to_status(p, "managing", "ADOPT")
+        self.act.place_policy_limits(p, why="ADOPT")
         self.emit("entry_filled", {"avg": avg, "qty": qty, "partial": False, "sl": stop0, "journal_id": rt["pos"].get("journal_id")}, plan=spec["id"], sym=sym)
 
     # ------------------------------------------------------------------ таймер и команды
