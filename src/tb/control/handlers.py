@@ -336,6 +336,17 @@ class Ctl(object):
                 return False
             self.sleep(0.5)
 
+    def _wait_live_gates(self, args, timeout):
+        end = self.now() + min(float(timeout), 20.0)
+        while True:
+            f = gates.collect(self.root, self.now(), self.cfg, args)
+            h = {g["id"]: g for g in (g(f) for g in gates.HARD)}
+            if all(h.get(x, {}).get("ok") for x in ("H2", "H3", "H4")):
+                return f
+            if self.now() >= end:
+                return f
+            self.sleep(0.5)
+
     def _rollback_exec(self, prev):
         if prev[0] and prev != self._exec_profile():
             self.reconf_fn(prev[0], bool(prev[1]), float(self.cfg["start_wait_s"]))
@@ -362,7 +373,7 @@ class Ctl(object):
                     return self._fail_start(cmd, "E_STATE", {"why": "reconf", "detail": why}, prev)
             self.save_platform(step={"name": "recheck", "i": 2, "n": 4})
             if mode == "live":
-                f2 = gates.collect(self.root, self.now(), self.cfg, args)
+                f2 = self._wait_live_gates(args, wait)
                 bad = [g(f2) for g in gates.HARD]
                 bad = [g for g in bad if not g["ok"]]
                 if bad:
