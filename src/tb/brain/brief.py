@@ -1488,7 +1488,9 @@ def _trim_struct(b):
 TRIM_STEPS = (
     ("lessons", _drop("lessons")), ("rulebook", _drop("rulebook")), ("missing", _drop("missing")), ("memory", _drop("memory")), ("playbook", _drop("playbook")), ("deriv", _drop("deriv")), ("flow", _drop("flow")), ("cmkt", _drop("cmkt")), ("since_last", _drop("since_last")), ("paper_history", _drop("paper_history")), ("checklist_text", _checklist_ids), ("recent>5", _trim_recent(5)),
     ("hot>3", _trim_hot(3)), ("ideas>4", _trim_ideas(4)), ("struct>3", _trim_struct), ("levels", _trim_levels), ("recent>3", _trim_recent(3)), ("pending", _drop("pending")),
-    ("hot", _drop("hot")), ("ideas", _drop("ideas")), ("experiments", _drop("experiments")), ("cands", _drop("cands")), ("struct", _drop("struct")), ("news_digest", _drop("news_digest")), ("intel", _drop("intel")), ("recent>1", _trim_recent(1)), ("checklist", _drop("checklist")), ("market", _drop("market")),
+    ("hot", _drop("hot")), ("ideas", _drop("ideas")), ("experiments", _drop("experiments")),
+    ("news_digest", _drop("news_digest")), ("intel", _drop("intel")), ("checklist", _drop("checklist")), ("recent>1", _trim_recent(1)),
+    ("cands", _drop("cands")), ("struct", _drop("struct")), ("market", _drop("market")),
     ("recent", _drop("recent")),
 )
 

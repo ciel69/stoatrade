@@ -412,6 +412,15 @@ class TestBudget(Base):
         self.assertNotIn("checklist", b)
         self.assertNotIn("hot", b)
 
+    def test_event_budget_keeps_candidates_before_context(self):
+        b = {"cands": [{"sym": "BEAM", "why": "x" * 240}],
+             "struct": {"s": {"BEAM": {"px": 1.0, "note": "x" * 900}}},
+             "recent": [{"type": "scanner_signal", "why": "x" * 220} for _ in range(8)],
+             "intel": {"news": "x" * 300}}
+        brief.fit(b, brief.EVENT_BUDGET)
+        self.assertIn("cands", b)
+        self.assertLessEqual(brief.tokens(b), brief.EVENT_BUDGET)
+
     def test_event_scope_focuses_on_plan_of_event(self):
         bus.emit("plan_armed", {"rev": 2}, plan="PL-1028-ETH-02", sym="ETH", root=self.root, now=NOW - 5)
         b = self.build("event", since=0)
