@@ -1027,8 +1027,8 @@ class TestLayers(unittest.TestCase):
         self.assertEqual(EC.load(root)[1], [])
         self.assertEqual(XV.init(conn, EC.current_floor(root), now - 12 * 86400), "X-0001")
         steps = [s for s in CY.default_steps() if s.name.startswith("exits_")]
-        self.assertEqual(sorted(s.name for s in steps), ["exits_after", "exits_eval", "exits_promote", "exits_search",
-                                                         "exits_verdicts", "exits_watch"])
+        self.assertEqual(sorted(s.name for s in steps), ["exits_after", "exits_eval", "exits_promote", "exits_register",
+                                                         "exits_search", "exits_verdicts", "exits_watch"])
         cyc = CY.Cycle(root, lcfg, steps=steps)
         ctx = CY.Ctx(root, conn, lcfg, now, cycle=cyc)
         ran = dict((s.name, getattr(CY, "step_" + s.name)(ctx)) for s in steps)

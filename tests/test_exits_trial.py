@@ -7,6 +7,7 @@ n от 10 до 60; исходы `NO_VERDICT` (`N`, `BRAIN_N`), `COST_CHANGED`, `
 `cut_ts`), `eval_backlog`, чёрный список при `reject` и справочные доли. Всё на временных корнях, сеть не используется.
 """
 import copy
+import json
 import os
 import shutil
 import sqlite3
@@ -323,6 +324,121 @@ class TestRegister(Base):
     def test_register_requires_active_base(self):
         with self.assertRaises(ValueError):
             T.register(self.conn, self.cand(self.small_cfg()), "X-0999", self.small_cfg(), NOW, root=self.root)
+
+
+# ---------------------------------------------------------------- регистрация кандидатов поиска
+
+class TestRegisterCandidates(Base):
+    """Шаг `register_candidates` (Requirement 5.5, 6.1): кандидаты строки `exit_search` -> испытания."""
+
+    def variant(self, vid, mean_d=0.1):
+        v = [x for x in exits_conf.variants(self.cfg, self.floor) if x["id"] == vid][0]
+        return {"id": v["id"], "ver": v["ver"], "family": v["family"], "policy_h": v["policy_h"], "mean_d": float(mean_d)}
+
+    def add_search(self, variants=None, code="OK", ts=NOW, near_tp=None, pairs=None):
+        variants = variants or []
+        res = {"candidates": [[v["id"], v["ver"]] for v in variants] if pairs is None else pairs,
+               "variants": variants, "near_tp": near_tp or {}}
+        rec = {"ts": int(ts), "a": int(ts) - DAY, "b": int(ts), "cut_ts": int(ts) + 900, "sample_h": "s" * 16,
+               "cfg_h": exits_conf.config_hash(self.cfg)[:16], "menu_ver": self.cfg["menu_ver"], "base_ver": "X-0001",
+               "block_h": 24, "code": code, "results": json.dumps(res)}
+        store2.insert_rows(self.conn, "exit_search", [rec])
+        return rec
+
+    def registered(self):
+        return [(t["var_id"], t["var_ver"]) for t in T.trials(self.conn)]
+
+    def test_registers_best_up_to_max_parallel(self):
+        vs = [self.variant("L3", 0.05), self.variant("L1", 0.20), self.variant("L2", 0.10)]
+        self.add_search(vs, pairs=[["L3", 1], ["L1", 1], ["L2", 1]])
+        rep = T.register_candidates(self.conn, self.root, self.cfg, NOW)
+        self.assertEqual(rep["code"], T.REG_OK)
+        self.assertEqual(rep["registered"], ["XT-0001", "XT-0002"])
+        self.assertEqual(rep["open"], 2)                                     # trial.max_parallel = 2
+        self.assertEqual(rep["skipped"], 1)
+        self.assertEqual(self.registered(), [("L1", 1), ("L2", 1)])          # по убыванию среднего d
+
+    def test_max_parallel_counts_already_open(self):
+        self.add_search([self.variant("L1", 0.2)], ts=NOW)
+        self.assertEqual(len(T.register_candidates(self.conn, self.root, self.cfg, NOW)["registered"]), 1)
+        self.add_search([self.variant("L2", 0.2), self.variant("L3", 0.1)], ts=NOW + 3600)
+        rep = T.register_candidates(self.conn, self.root, self.cfg, NOW + 3600)
+        self.assertEqual(rep["registered"], ["XT-0002"])
+        self.assertEqual((rep["open"], rep["skipped"]), (2, 1))
+
+    def test_blacklisted_candidate_skipped(self):
+        store2.insert_rows(self.conn, "exit_blacklist",
+                           [{"var_id": "L1", "var_ver": 1, "until_ts": NOW + DAY, "reason": "TRIAL_REJECT", "ts": NOW}])
+        self.add_search([self.variant("L1", 0.2), self.variant("L2", 0.1)])
+        rep = T.register_candidates(self.conn, self.root, self.cfg, NOW)
+        self.assertEqual(rep["registered"], ["XT-0001"])
+        self.assertEqual(rep["skipped"], 1)
+        self.assertEqual(self.registered(), [("L2", 1)])
+
+    def test_repeat_pass_same_row_does_nothing(self):
+        self.add_search([self.variant("L1", 0.2)])
+        first = T.register_candidates(self.conn, self.root, self.cfg, NOW)
+        again = T.register_candidates(self.conn, self.root, self.cfg, NOW + 3600)
+        self.assertEqual((len(first["registered"]), again["registered"]), (1, []))
+        self.assertEqual(again["code"], T.REG_NO_CANDIDATE)
+        self.assertEqual(again["skipped"], 1)
+        self.assertEqual(len(T.trials(self.conn)), 1)
+
+    def test_variant_that_became_version_is_skipped(self):
+        v = self.variant("L1", 0.2)
+        pol = [x for x in exits_conf.variants(self.cfg, self.floor) if x["id"] == "L1"][0]["policy"]
+        self.add_version("X-0002", pol, parent="X-0001", reason="PROMOTE")
+        self.add_search([v])
+        rep = T.register_candidates(self.conn, self.root, self.cfg, NOW)
+        self.assertEqual(rep["registered"], [])
+        self.assertEqual(self.registered(), [])
+        self.assertEqual(rep["skipped"], 1)
+
+    def test_no_candidates_for_noop_and_low_n(self):
+        self.add_search([], code="NOOP")
+        self.assertEqual(T.register_candidates(self.conn, self.root, self.cfg, NOW)["registered"], [])
+        self.add_search([], code="LOW_N", ts=NOW + 60)
+        rep = T.register_candidates(self.conn, self.root, self.cfg, NOW + 60)
+        self.assertEqual((rep["code"], rep["registered"]), (T.REG_NO_CANDIDATE, []))
+        self.assertEqual(self.registered(), [])
+
+    def test_candidate_carries_near_tp_table(self):
+        table = {"range_5m": {"scalp": 1.2}}
+        raw = [x for x in exits_conf.variants(self.cfg, self.floor) if x["id"] == "N1"][0]
+        pol = exits_eval.apply_near_tp(raw["policy"], table)
+        h = XP.policy_hash(pol)
+        self.add_search([{"id": "N1", "ver": 1, "policy_h": h, "mean_d": 0.1}], near_tp={"N1": table})
+        rep = T.register_candidates(self.conn, self.root, self.cfg, NOW)
+        self.assertEqual(len(rep["registered"]), 1)
+        trial = T.trials(self.conn)[0]
+        self.assertEqual(trial["criterion"]["var"]["policy_h"], h)
+        stored = json.loads(self.conn.execute("SELECT policy FROM exit_variants WHERE id='N1' AND ver=1").fetchone()[0])
+        self.assertEqual(stored["near_tp"]["table"], table)
+
+    def test_base_is_active_version(self):
+        self.add_version("X-0002", {"partial": [{"at_r": 1.0, "frac": 0.3, "exec": "maker"}]}, parent="X-0001", reason="PROMOTE")
+        self.add_search([self.variant("L1", 0.2)])
+        T.register_candidates(self.conn, self.root, self.cfg, NOW)
+        self.assertEqual(T.trials(self.conn)[0]["base_ver"], "X-0002")
+
+    def test_policy_changed_after_search_is_skipped(self):
+        v = self.variant("L1", 0.2)
+        self.add_search([dict(v, policy_h="0" * 16)])                        # меню изменилось: хеш политики поиска другой
+        rep = T.register_candidates(self.conn, self.root, self.cfg, NOW)
+        self.assertEqual((rep["registered"], rep["skipped"]), ([], 1))
+
+    def test_one_bad_candidate_does_not_block_others(self):
+        self.add_search([self.variant("L1", 0.2), self.variant("L2", 0.1)])
+        with mock.patch.object(T, "register", side_effect=[ValueError("E_EXIT_WEAKER:be"), "XT-TEST"]):
+            rep = T.register_candidates(self.conn, self.root, self.cfg, NOW)
+        self.assertEqual((rep["registered"], rep["skipped"]), (["XT-TEST"], 1))
+
+    def test_disabled_config_does_nothing(self):
+        cfg = copy.deepcopy(self.cfg)
+        cfg["enabled"] = False
+        self.add_search([self.variant("L1", 0.2)])
+        self.assertEqual(T.register_candidates(self.conn, self.root, cfg, NOW)["code"], T.REG_DISABLED)
+        self.assertEqual(self.registered(), [])
 
 
 # ---------------------------------------------------------------- шаг вердиктов

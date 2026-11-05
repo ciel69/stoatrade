@@ -212,6 +212,16 @@ def step_exits_search(ctx):
     return {"code": rep["code"], "candidates": len(rep["candidates"])}
 
 
+def step_exits_register(ctx):
+    """Регистрация кандидатов поиска в испытания (Requirement 5.5, 6.1): между поиском и вердиктами, идемпотентно."""
+    cfg, errs = exits_cfg(ctx)
+    if errs:
+        return {"code": "DISABLED"}
+    rep = XT.register_candidates(ctx.conn, ctx.root, cfg, ctx.now)
+    return {"code": rep["code"], "registered": len(rep["registered"]), "skipped": rep["skipped"], "open": rep["open"],
+            "search_id": rep["search_id"]}
+
+
 def step_exits_verdicts(ctx):
     cfg, errs = exits_cfg(ctx)
     if errs:
@@ -268,6 +278,7 @@ def default_steps():
         Step("watch", "hourly", WA.step_watch, interval="watch_s", group="watch"),        # откат, TRADE_STARVATION, аренда runtime/watch_lease.json
         Step("hypref", "hourly", HR.step_hypref, interval="hypref_s"),                   # справка меток по policy_map -> runtime/learn/hyp_ref.json
         Step("exits_search", "hourly", step_exits_search),                               # задача 15: поиск выходов, периодичность search.every_days
+        Step("exits_register", "hourly", step_exits_register),                           # задача 24б: кандидаты поиска -> испытания (trial.max_parallel)
         Step("exits_verdicts", "hourly", step_exits_verdicts),                           # задача 15: вердикты испытаний выходов
         Step("exits_promote", "hourly", step_exits_promote),                             # задача 15: продвижение версий, пауза при EXIT_SIM_GAP
         Step("exits_watch", "hourly", step_exits_watch),                                 # задача 15: сторож, откат, аренда runtime/exit_lease.json

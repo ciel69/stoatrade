@@ -31,6 +31,13 @@
     список `exit_blacklist` на `cooldown_days`). Доля забранного MFE (`Σ r_net / Σ mfe_r`), доля издержек
     (`Σ fees_r / |Σ r_gross|`) и доля пар `cut` пишутся в числа справочно и в критерий не входят (Requirement 6.9).
 
+Шаг `register_candidates` (раз в час, между поиском и вердиктами)
+    Кандидаты последней строки `exit_search` с кодом `OK` (`results.candidates`) -> испытания. Политика варианта
+    восстанавливается из меню и таблицы `near_tp` той же строки — так же, как её считал поиск, с тем же `policy_h`
+    (сверяется с `results.variants`). Регистрируются лучшие по среднему `d`, не больше `trial.max_parallel` открытых
+    испытаний (Requirement 5.5, 6.1). Чёрный список, уже существующее испытание варианта и созданная версия с тем же
+    `policy_h` пропускаются: повторный проход на той же строке ничего не делает (Requirement 5.8).
+
 Шаг `verdicts` (раз в час)
     Ждёт пустой очереди `eval_backlog` (Requirement 4.5). Смена `cost_h`, `sim_ver`, пола защиты или действующей версии
     закрывает открытые испытания `inconclusive` кодами `COST_CHANGED`, `SIM_CHANGED`, `FLOOR_CHANGED`, `BASE_CHANGED` без
@@ -55,6 +62,7 @@ from tb.learnloop import clusters as CL
 from tb.learnloop import conf as LC
 from tb.learnloop import exits_conf as EC
 from tb.learnloop import exits_eval as EE
+from tb.learnloop import exits_search as XSR
 from tb.learnloop import stat as ST
 from tb.logic import exitpol as XP
 from tb.logic import exitsim as XS
@@ -368,7 +376,133 @@ def register(conn, cand, base_ver, cfg, now, root=None, floor_policy=None):
     return tid
 
 
-# ---------------------------------------------------------------- выборка испытания
+# ---------------------------------------------------------------- регистрация кандидатов поиска
+
+REG_OK = "OK"
+REG_NO_CANDIDATE = "NO_CANDIDATE"
+REG_DISABLED = "DISABLED"
+
+
+def last_search(conn):
+    """Последняя строка `exit_search` с исходом `OK` (Requirement 5.6) или None: кандидатов берём только у успешного поиска."""
+    try:
+        r = conn.execute("SELECT id, ts, base_ver, cfg_h, code, results FROM exit_search WHERE code=? ORDER BY ts DESC, id DESC LIMIT 1",
+                         (XSR.CODE_OK,)).fetchone()
+    except Exception:
+        return None
+    if not r:
+        return None
+    return {"id": int(r[0]), "ts": _int(r[1], 0), "base_ver": r[2], "cfg_h": r[3], "code": str(r[4]), "results": _j(r[5]) or {}}
+
+
+def _candidate_pairs(results):
+    """Кандидаты строки поиска (`[[id, ver], ...]`) -> [(id, ver)]; мусор пропускается."""
+    out = []
+    for it in (results or {}).get("candidates") or []:
+        try:
+            out.append((str(it[0]), int(it[1])))
+        except (TypeError, ValueError, IndexError):
+            continue
+    return out
+
+
+def _search_variants(results):
+    """Варианты строки поиска -> {(id, ver): запись}: среднее `d` (порядок регистрации) и `policy_h` (сверка политики)."""
+    out = {}
+    for v in (results or {}).get("variants") or []:
+        if not isinstance(v, dict):
+            continue
+        try:
+            out[(str(v["id"]), int(v["ver"]))] = v
+        except (TypeError, ValueError, KeyError):
+            continue
+    return out
+
+
+def _candidate_policy(cfg, floor, var_id, var_ver, table):
+    """Политика варианта из меню с таблицей `near_tp` строки поиска (Requirement 5.5); нет варианта в меню — None."""
+    for v in EC.variants(cfg, floor):
+        if v["id"] == str(var_id) and int(v["ver"]) == int(var_ver):
+            return EE.with_near_tp(v, table)
+    return None
+
+
+def _tried_ids(conn):
+    """(var_id, ver) всех испытаний в любом состоянии: вариант испытывается один раз (повторный проход — пропуск)."""
+    try:
+        return set((str(r[0]), int(r[1])) for r in conn.execute("SELECT var_id, var_ver FROM exit_trials").fetchall())
+    except Exception:
+        return set()
+
+
+def _version_hashes(conn):
+    """`policy_h` созданных версий: вариант, ставший версией, повторно не регистрируется."""
+    try:
+        return set(str(r[0]) for r in conn.execute("SELECT policy_h FROM exit_versions").fetchall() if r[0] is not None)
+    except Exception:
+        return set()
+
+
+def register_candidates(conn, root, cfg, now):
+    """Шаг `exits_register`: кандидаты последнего успешного поиска -> испытания (Requirement 5.5, 6.1, 6.8).
+
+    Кандидаты — `results["candidates"]` последней строки `exit_search` с кодом `OK`; политика варианта собирается из
+    меню и таблицы `near_tp` той же строки, поэтому в испытание уходит ровно та политика (и тот `policy_h`), что прошла
+    поиск. Порядок — по убыванию среднего `d`; регистрируется не больше `trial.max_parallel` открытых испытаний, база —
+    действующая версия (`exits_versions`, последняя по `seq`). Пропускаются: вариант чёрного списка `exit_blacklist`
+    (`until_ts > now`), вариант с уже существующим испытанием и вариант, чей `policy_h` уже стал версией. Ошибка одного
+    кандидата (политика не проходит схему после правки меню) не мешает остальным.
+
+    -> {"code": "OK" | "NO_CANDIDATE" | "DISABLED", "registered": [trial_id], "skipped": число, "open": открытых
+    испытаний после шага, "search_id": id строки поиска или None}.
+    """
+    now = int(now)
+    out = {"code": REG_DISABLED, "registered": [], "skipped": 0, "open": open_count(conn), "search_id": None}
+    if not EC.is_enabled(cfg):
+        return out
+    out["code"] = REG_NO_CANDIDATE
+    row = last_search(conn)
+    if row is None:
+        return out
+    out["search_id"] = row["id"]
+    pairs = _candidate_pairs(row["results"])
+    if not pairs:
+        return out
+    found = _search_variants(row["results"])
+    mean_by = dict((p, _num((found.get(p) or {}).get("mean_d"))) for p in pairs)
+    pairs.sort(key=lambda p: (-(mean_by.get(p) or 0.0), p[0], p[1]))
+    floor = _floor(root)
+    tables = row["results"].get("near_tp")
+    tables = tables if isinstance(tables, dict) else {}
+    blocked = XSR.blacklist(conn, now)
+    tried, hashes = _tried_ids(conn), _version_hashes(conn)
+    free = int(((cfg or {}).get("trial") or {}).get("max_parallel") or 1) - int(out["open"])
+    for var_id, var_ver in pairs:
+        if (var_id, var_ver) in blocked or (var_id, var_ver) in tried:
+            out["skipped"] += 1
+            continue
+        cand = _candidate_policy(cfg, floor, var_id, var_ver, tables.get(var_id))
+        if cand is None:
+            out["skipped"] += 1
+            continue
+        want = (found.get((var_id, var_ver)) or {}).get("policy_h")
+        if want is not None and str(cand["policy_h"]) != str(want):
+            out["skipped"] += 1          # меню изменилось после поиска: это уже не та политика, что прошла отбор
+            continue
+        if str(cand["policy_h"]) in hashes or free <= 0:
+            out["skipped"] += 1
+            continue
+        try:
+            out["registered"].append(register(conn, cand, None, cfg, now, root=root))
+        except ValueError:
+            out["skipped"] += 1
+            continue
+        free -= 1
+    out["open"] = open_count(conn)
+    if out["registered"]:
+        out["code"] = REG_OK
+    return out
+
 
 def _cut_cfg(crit):
     """Параметры `cut_ts` из критерия в форме конфига `clusters` (после старта конфиг на испытание не влияет)."""

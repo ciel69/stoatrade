@@ -5,7 +5,7 @@ design.md «Сторож и расхождение с фактом», «Реви
 точку, ложные откаты при истинной разности 0 не выше 0.05; откат по путям прогонов и по сделкам мозга (`d_b`) через
 `exits_versions.rollback` — версия с политикой предыдущей, снимок, аренда, чёрный список, событие `exit_policy_rollback`; аренда после
 успешной проверки и её отсутствие при ошибке шага; `EXIT_SIM_GAP` с паузой продвижения; состояние в `meta.exits_watch`; шаги выходов в
-`learnloop.cycle` в порядке eval → search → verdicts → versions → watch, интервал оценок из `config/exits.json`, изоляция ошибки шага
+`learnloop.cycle` в порядке eval → search → register → verdicts → versions → watch, интервал оценок из `config/exits.json`, изоляция ошибки шага
 выходов от шагов R2; идемпотентность. Временные корни, фейковые часы, сети нет."""
 import copy
 import json
@@ -26,6 +26,7 @@ from tb.learnloop import conf as LC
 from tb.learnloop import cycle as CY
 from tb.learnloop import exits_conf as EC
 from tb.learnloop import exits_eval as EE
+from tb.learnloop import exits_trial as XT
 from tb.learnloop import exits_versions as XV
 from tb.learnloop import exits_watch as EW
 from tb.logic import exitpol as XP
@@ -361,13 +362,15 @@ class TestSimGap(Base):
 class TestCycleSteps(Base):
     def test_steps_registered_in_order(self):
         names = [s.name for s in CY.default_steps()]
-        for n in ("exits_eval", "exits_search", "exits_verdicts", "exits_promote", "exits_watch", "exits_after"):
+        for n in ("exits_eval", "exits_search", "exits_register", "exits_verdicts", "exits_promote", "exits_watch", "exits_after"):
             self.assertIn(n, names)
         cyc = CY.Cycle(self.root, copy.deepcopy(self.lcfg), steps=CY.default_steps())
         ordered = [s.name for s in cyc._ordered()]
-        pos = [ordered.index(n) for n in ("exits_eval", "exits_search", "exits_verdicts", "exits_promote", "exits_watch")]
+        pos = [ordered.index(n) for n in ("exits_eval", "exits_search", "exits_register", "exits_verdicts", "exits_promote", "exits_watch")]
         self.assertEqual(pos, sorted(pos))
         self.assertLess(ordered.index("exits_eval"), ordered.index("exits_search"))
+        self.assertLess(ordered.index("exits_search"), ordered.index("exits_register"))
+        self.assertLess(ordered.index("exits_register"), ordered.index("exits_verdicts"))
 
     def test_exits_eval_uses_config_interval(self):
         cyc = CY.Cycle(self.root, copy.deepcopy(self.lcfg), steps=CY.default_steps())
@@ -392,6 +395,22 @@ class TestCycleSteps(Base):
         self.assertEqual(calls, ["r2"])
         self.assertIsNone(self.lease())                                           # при ошибке шага аренда не пишется
 
+    def test_exits_register_error_does_not_stop_r2_steps(self):
+        calls = []
+
+        def r2(ctx):
+            calls.append("r2")
+            return {"code": "OK"}
+
+        steps = [CY.Step("exits_register", "hourly", CY.step_exits_register), CY.Step("r2_after", "hourly", r2, group="verdict")]
+        cyc = CY.Cycle(self.root, copy.deepcopy(self.lcfg), steps=steps)
+        with mock.patch.object(XT, "register_candidates", side_effect=RuntimeError("сбой регистрации")):
+            rep = cyc.run_pass(self.conn, NOW)
+        self.assertEqual(rep["ran"]["r2_after"], "OK")                            # шаг R2 выполнен
+        self.assertEqual(rep["errors"], {"exits_register": CY.STEP_ERROR})
+        self.assertEqual(calls, ["r2"])
+        self.assertFalse(os.path.exists(XD.lease_path(self.root)))                # аренда не пишется
+
     def test_promote_step_paused_by_sim_gap(self):
         self.conn.execute("INSERT OR REPLACE INTO meta(k, v) VALUES(?, ?)",
                           (EW.META, json.dumps({"ts": NOW, "sim_gap": {"active": True}})))
@@ -415,6 +434,7 @@ class TestCycleSteps(Base):
         self.assertEqual(rep["ran"]["exits_eval"], "OK")
         self.assertEqual(rep["ran"]["exits_verdicts"], "OK")
         self.assertIn("exits_search", rep["ran"])
+        self.assertIn("exits_register", rep["ran"])
         self.assertEqual(rep["ran"]["exits_promote"], "OK")                   # версии есть, продвигать нечего
         self.assertEqual(rep["ran"]["exits_watch"], "OK")
         self.assertTrue(os.path.exists(XD.lease_path(self.root)))
