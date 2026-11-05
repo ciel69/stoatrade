@@ -201,7 +201,7 @@ export function cvdKindWord(kind: string): string {
 /** Спред лучших цен: 0.04 %; пересечение (бид выше аска) называется словами; неизвестное — «—». */
 export function spreadText(x: number | null | undefined): string {
   if (!isNum(x)) return DASH
-  return x <= 0 ? 'биржи расходятся' : `${x.toFixed(3)}%`
+  return x <= 0 ? 'пересечение' : `${x.toFixed(3)}%`
 }
 
 /** Источник уровней лестницы: корзины 25 б.п., полосы или крупные уровни. */
