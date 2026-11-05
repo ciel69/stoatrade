@@ -149,6 +149,24 @@ def symbol_whitelist(root, cfg, rcfg=None):
 reader_cfg = dg.reader_cfg
 
 
+def active_role(root):
+    try:
+        with open(paths.state("brain", "active.json", root=root), encoding="utf-8") as f:
+            active = json.load(f)
+        pid = (((active.get("shared_roles") or {}).get(ROLE) or {}).get("primary"))
+        if not isinstance(pid, str) or not pid:
+            return None
+        from tb.core import localcfg
+        cfg = localcfg.load("brain", root)
+        p = (cfg.get("profiles") or {}).get(pid) or {}
+        prov, model = p.get("provider"), p.get("model")
+        if isinstance(prov, str) and isinstance(model, str):
+            return pid, prov, model
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+    return None
+
+
 # ---------------------------------------------------------------- расход
 def spend(root, now):
     """Расход читателя по state/llm_calls.jsonl (role=news_reader): вызовы и $ за час и сутки."""
@@ -169,6 +187,9 @@ class Reader(object):
         self.root = root
         self.cfg = cfg if cfg is not None else store.load_cfg(root)
         self.rc = reader_cfg(self.cfg)
+        role = active_role(root)
+        if role:
+            self.rc["provider"], self.rc["model"] = role[1], role[2]
         self._call = call
         self.clock = clock
         self.log = log or (lambda m: None)

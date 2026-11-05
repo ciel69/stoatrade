@@ -205,6 +205,11 @@ class TestBoard(Fx):
         self.assertIn("прокол", t["text"])
         self.assertEqual(t["met_n"], 1)                            # c1 (объём) защёлкнут исполнителем
 
+    def test_candle_eta_skips_candle_started_before_arm(self):
+        c = {"kind": "candle_close", "tf": "5m", "level": 100.0}
+        self.assertEqual(model2._leaf_state(c, 100.0, NOW + 100, None, (NOW + 50) * 1000)["eta_s"], 500)
+        self.assertEqual(model2._leaf_state(c, 100.0, NOW + 100, None, NOW * 1000)["eta_s"], 200)
+
     def test_candle_condition_with_price_already_beyond_level(self):
         """Цена уже за уровнем (расстояние ~0), но условие свечное: карточка помечает beyond и тип условия, чтобы не выглядело как «сработало, а входа нет»."""
         s = gen.spec("PL-1028-SOL-22", "SOL", "long", NOW, entry={"when": {"kind": "candle_close", "tf": "5m", "dir": "above", "level": 142.0}, "how": {"type": "market"},

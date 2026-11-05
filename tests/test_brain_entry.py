@@ -713,7 +713,7 @@ class RoleFiles(unittest.TestCase):
         self.assertEqual(brain["role_opts"]["entry_scout"]["params"]["thinking"], "low")
         self.assertEqual(brain["runtime"]["guards"]["role_jobs_per_hour"]["entry_scout"], 36)
         ag = jl(os.path.join(ROOT, "config", "agents.json"))["agents"]["api"]
-        self.assertEqual(ag["limits"]["modes"], ["paper"])
+        self.assertEqual(ag["limits"]["modes"], ["paper", "live"])
 
     def test_prompt_mentions_core_rules(self):
         p = roles_runtime.load(ROOT).get("entry_scout").system

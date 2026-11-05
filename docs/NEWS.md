@@ -70,7 +70,7 @@ RSS/объявления --(intel.service, WP13a)--> runtime/intel/items.jsonl (
 ## Включение (выключено по умолчанию)
 1. Ключ DeepSeek лежит у владельца в каталоге ключей (`docs/PERMISSIONS.md`); `./tb llm check --live`.
 2. В личном слое `config/local/intel.json` поставить `reader.enabled: true` (профиль `deepseek.flash`, при желании другой из `providers.json`). Сервис `intel` перезапустить (`./tb up --services ...,intel`).
-3. Смотреть вкладку «Новости»; в `./tb llm usage` роль `news_reader`. Горячая смена профиля читателя через `./tb brain use shared.news_reader <profile>` появится вместе с runtime мозга (WP11-C2): сейчас профиль задаётся в `config/intel.json`.
+3. Смотреть вкладку «Новости»; в `./tb llm usage` роль `news_reader`. Профиль чтения берётся из активной роли `shared.news_reader` (смена через `./tb brain use shared.news_reader <profile>` или настройки дашборда); `config/intel.json -> reader` — резерв, если роль не назначена. После смены профиля перезапустить `intel`.
 
 ## Модель угроз и ограничения
 Защита многоуровневая, ни один уровень не опирается на то, что «модель достаточно умная»:

@@ -201,7 +201,7 @@ def _leaves(c, out=None, depth=0):
     return out
 
 
-def _leaf_state(c, price, now, met_flag):
+def _leaf_state(c, price, now, met_flag, armed_ms=None):
     """Состояние одного листа условия по текущей цене: {met, text, dist_pct, level, eta_s, tf}."""
     k = c.get("kind")
     out = {"text": describe_cond(c), "met": met_flag, "dist_pct": None, "level": None, "eta_s": None, "tf": None, "kind": k, "dir": None, "beyond": None}
@@ -227,7 +227,10 @@ def _leaf_state(c, price, now, met_flag):
         step = _tf_s(c.get("tf"))
         if step:
             out["tf"] = _tf(c.get("tf"))
-            out["eta_s"] = int(step - (now % step))
+            n = max(1, min(5, int(_n(c.get("n")) or 1)))
+            current = int(now // step) * step
+            first = current if armed_ms is None or current * 1000 >= armed_ms else current + step
+            out["eta_s"] = max(0, int(first + n * step - now))
     return out
 
 
@@ -244,6 +247,9 @@ def trigger_info(spec, rt, price, now):
             "missing": [], "met_n": 0, "leaf_n": 0, "price": price, "seq": None, "limit_px": None}
     lim = _n(how.get("price")) if how.get("type") == "limit" else None
     info["limit_px"] = lim
+    ts = _d(rt.get("ts"))
+    armed = _epoch(ts.get("armed")) or _epoch(ts.get("created")) or _n(spec.get("armed_ts")) or _n(spec.get("created_ts"))
+    armed_ms = armed * 1000 if armed else None
     if info["has_when"]:
         leaves = _leaves(when)
         info["leaf_n"] = len(leaves)
@@ -253,7 +259,7 @@ def trigger_info(spec, rt, price, now):
             flag = latched.get("c%d" % i)
             if is_seq:
                 flag = True if i < seq_done else (False if flag is None else flag)
-            sts.append(_leaf_state(lf, price, now, flag if isinstance(flag, bool) else None))
+            sts.append(_leaf_state(lf, price, now, flag if isinstance(flag, bool) else None, armed_ms))
         info["met_n"] = sum(1 for s in sts if s["met"] is True)
         if is_seq:
             info["seq"] = {"done": min(seq_done, len(sts)), "total": len(sts)}

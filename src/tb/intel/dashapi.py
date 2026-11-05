@@ -9,6 +9,7 @@ import time
 
 from tb.intel import digest as dg
 from tb.intel import items as iitems
+from tb.intel import reader as ireader
 from tb.intel import store
 
 MAX_LIMIT = 100
@@ -28,6 +29,9 @@ def news(root, query, now):
         limit = 50
     cfg = store.load_cfg(root)
     rc = dg.reader_cfg(cfg)
+    role = ireader.active_role(root)
+    if role:
+        rc["provider"], rc["model"] = role[1], role[2]
     dig = dg.read_digest(root) or {}
     ents = dig.get("items") if isinstance(dig.get("items"), dict) else {}
     rows = iitems.ItemStore(root).load(limit=limit)

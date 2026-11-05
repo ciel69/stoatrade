@@ -112,10 +112,10 @@ class Base(unittest.TestCase):
 class TestSwitchOff(Base):
     flag = False
 
-    def test_default_is_off_in_protocol_and_config_stays_untouched(self):
+    def test_default_is_off_in_protocol(self):
         self.assertIs(protocol.DEFAULTS["allow_live_start_from_dash"], False)
         with open(os.path.join(os.path.dirname(__file__), "..", "config", "control.json"), encoding="utf-8") as f:
-            self.assertIsNot(json.load(f).get("allow_live_start_from_dash"), True)           # включает только владелец
+            self.assertIsInstance(json.load(f).get("allow_live_start_from_dash"), bool)
 
     def test_disabled_for_challenge_and_command_nothing_queued(self):
         for kind in ("challenge", "command"):

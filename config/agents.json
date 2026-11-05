@@ -34,7 +34,7 @@
   "api": {
    "role": "brain-api",
    "auth": "token",
-   "token_hash": null,
+   "token_hash": "sha256:465aa096b318bc9d4bdcd384576bc4b3c8b63d95e15e871a265aa03880737d77",
    "enabled": true,
    "consumer": "api",
    "tools": [
@@ -48,18 +48,19 @@
     "@memory.write"
    ],
    "limits": {
-    "max_risk_usdt": 1.0,
-    "max_risk_pct": 3.0,
+    "max_risk_usdt": 4.0,
+    "max_risk_pct": 8.0,
     "symbols": [
      "*"
     ],
     "modes": [
-     "paper"
+     "paper",
+     "live"
     ],
     "max_size_mult": 1.0,
     "allow_add": false,
     "calls_per_min": 60,
-    "plans_per_hour": 4
+    "plans_per_hour": 8
    }
   },
   "reviewer": {

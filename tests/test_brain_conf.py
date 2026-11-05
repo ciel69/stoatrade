@@ -50,8 +50,8 @@ class RealConfig(unittest.TestCase):
         self.assertEqual(r.for_event_types(["scanner_signal"], kinds=["idea_near"]), [])         # idea_* роль не будят
         self.assertEqual([x.id for x in r.for_event_types(["scanner_signal"], kinds=["hot_enter"])], ["entry_scout"])
 
-    def test_agents_of_shipped_config_are_paper_only(self):
-        self.assertEqual(conf_mod.read_agents(ROOT)["api"]["limits"]["modes"], ["paper"])
+    def test_agents_of_shipped_config_are_paper_plus_live(self):
+        self.assertEqual(conf_mod.read_agents(ROOT)["api"]["limits"]["modes"], ["paper", "live"])
 
 
 class ConfValidation(BrainBase):

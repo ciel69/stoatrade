@@ -333,6 +333,22 @@ class TestStep(RCase):
         self.assertEqual(self.digest()["items"], {})
 
 
+class TestRoleProfile(RCase):
+    def test_active_news_reader_role_overrides_intel_reader(self):
+        os.makedirs(os.path.join(self.root, "state", "brain"), exist_ok=True)
+        os.makedirs(os.path.join(self.root, "config"), exist_ok=True)
+        with open(os.path.join(self.root, "state", "brain", "active.json"), "w", encoding="utf-8") as f:
+            json.dump({"shared_roles": {"news_reader": {"primary": "ds-flash"}}}, f)
+        with open(os.path.join(self.root, "config", "brain.json"), "w", encoding="utf-8") as f:
+            json.dump({"profiles": {"ds-flash": {"provider": "deepseek", "model": "flash"}}}, f)
+        self.mk(provider="local", model="gpt-oss")
+        self.assertEqual(self.rd.profile(), "deepseek.flash")
+
+    def test_no_active_role_keeps_intel_reader(self):
+        self.mk(provider="local", model="gpt-oss")
+        self.assertEqual(self.rd.profile(), "local.gpt-oss")
+
+
 class TestPolicy(RCase):
     def run_one(self, src="coindesk", seen=None, **over):
         it = add_item(self.root, "Major protocol exploit drains funds across chains today", src=src)

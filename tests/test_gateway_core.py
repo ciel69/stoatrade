@@ -92,7 +92,7 @@ class TestRegistry(_gw.GwBase):
         shutil.copy(os.path.join(_bootstrap.ROOT, "config", "agents.json"), paths.config("agents.json", root=self.root))
         ags = self.gw.agents()
         self.assertTrue(all(a.enabled for a in ags.values()), [a.error for a in ags.values()])
-        self.assertEqual(ags["api"].limits["modes"], ["paper"])
+        self.assertEqual(sorted(ags["api"].limits["modes"]), ["live", "paper"])
         self.assertNotIn("submit_plan", ags["reviewer"].tools)
 
 

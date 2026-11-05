@@ -57,7 +57,7 @@ const pierce = computed(() => {
 /** Единственная строка словами. */
 const line = computed(() => {
   if (w.value.tone !== 'wait') return w.value.headline
-  if (crossed.value) return `цена за уровнем · вход при закрытии свечи${eta.value != null ? ' через ' + countdown(eta.value) : ''}`
+  if (crossed.value) return `цена за уровнем · ждём закрытия свечи${eta.value != null ? ' через ' + countdown(eta.value) : ''}`
   return pierce.value ?? props.plan.missing[0] ?? props.plan.text
 })
 const dir = computed(() => (props.plan.side === 'short' ? -1 : 1))
