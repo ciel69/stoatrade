@@ -98,7 +98,39 @@ export interface SkipsWeek { week: string; partial?: boolean; n: number; correct
 export interface SkipsBlock extends LearningBlock { weeks: SkipsWeek[]; total: Record<string, unknown> | null; signal: string | null }
 
 export interface ExitsWindow { n_path: number; path_share: number | null; mfe: Est | null; capture: Est | null; small?: boolean }
-export interface ExitsBlock extends LearningBlock { windows: Record<string, ExitsWindow>; series: Record<string, Array<{ i: number; ts: number | null; capture: Est | null; mfe: Est | null }>> }
+
+/** R4: версия политики выхода и её сравнение с X-0001 (Requirement 17.1–17.2, 17.6; сервер: src/tb/learnloop/exits_report.py, блок src/tb/learn/exits.py). */
+export interface ExitsVersion { ver: string; parent: string | null; reason_code: string | null; actor: string | null; ts: number | null; policy_h: string | null }
+export interface ExitsDiff { mean: number | null; lo: number | null; hi: number | null }
+export interface ExitsR4D extends ExitsDiff { n_blocks: number; n_paths: number }
+export interface ExitsR4Db extends ExitsDiff { n: number }
+export interface ExitsR4Cap { fact: number | null; x0001: number | null; n: number; mfe_sum: number | null; r_fact_sum: number | null; r_x0001_sum: number | null }
+export interface ExitsR4Costs { cur: number | null; x0001: number | null; n: number }
+export interface ExitsR4Trial { trial_id: string | null; var_id: string | null; var_ver: number | null; base_ver: string | null; state: string | null; verdict: string | null; start_ts: number | null; deadline_ts: number | null; numbers: Record<string, unknown> | null }
+export interface ExitsR4Watch { ts: number | null; ver: string | null; prev: string | null; codes: string[]; points: number; last: Record<string, unknown> | null; sim_gap: Record<string, unknown> | null }
+export type ExitsR4State = 'few_data' | 'no_difference' | 'confirmed'
+export interface ExitsR4 {
+  status: 'ok' | 'few_data' | 'no_data'
+  reason: string | null
+  note: string
+  mode: string | null
+  since: number | null
+  version: ExitsVersion | null
+  d: ExitsR4D | null
+  d_b: ExitsR4Db | null
+  cap: ExitsR4Cap | null
+  costs: ExitsR4Costs | null
+  trials: { open: number; closed: number; rows: ExitsR4Trial[] }
+  watch: ExitsR4Watch | null
+  verdict: { state: ExitsR4State; text: string }
+}
+
+export interface ExitsBlock extends LearningBlock {
+  windows: Record<string, ExitsWindow>
+  series: Record<string, Array<{ i: number; ts: number | null; capture: Est | null; mfe: Est | null }>>
+  all?: ExitsWindow
+  r4?: ExitsR4
+}
 
 export interface EconomicsWeek {
   week: string; partial?: boolean; calls: Est | number | null; tok_in: number | null; tok_out: number | null; llm_usd: number | null

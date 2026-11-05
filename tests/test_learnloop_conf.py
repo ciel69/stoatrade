@@ -71,7 +71,7 @@ class TestShipped(unittest.TestCase):
     def test_alpha_only_in_learnloop_json(self):
         cfg_dir = os.path.dirname(PROJECT_CFG)
         for name in os.listdir(cfg_dir):
-            if name.endswith(".json") and name != "learnloop.json":
+            if name.endswith(".json") and name not in ("learnloop.json", "exits.json"):   # R4: свои пороги цикла выходов (design.md)
                 with open(os.path.join(cfg_dir, name), encoding="utf-8") as f:
                     self.assertNotIn('"alpha"', f.read(), name)
 

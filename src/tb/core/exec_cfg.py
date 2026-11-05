@@ -249,6 +249,28 @@ def warnings(root=None, cfg=None):
     return out
 
 
+def exits_maker(root=None):
+    """`config/exits.json: maker` для исполнителя и paper-порта (R4.4, Requirement 10.6): `through_ticks`, `through_bps`, `wait_s`.
+
+    Модель maker-заполнения одна у симулятора, paper-порта и исполнителя, поэтому значения читаются из того же файла, что у цикла
+    выходов (числовых умолчаний здесь нет). Строгую проверку конфига делает загрузчик `tb.learnloop.exits_conf`; исполнителю нужны
+    только эти три числа. Файла нет / битый / раздела нет -> {} (вызывающий берёт безопасное умолчание)."""
+    try:
+        with open(paths.config("exits.json", root=root), encoding="utf-8") as f:
+            d = json.load(f)
+    except (OSError, ValueError, UnicodeDecodeError):
+        return {}
+    m = d.get("maker") if isinstance(d, dict) else None
+    if not isinstance(m, dict):
+        return {}
+    out = {}
+    for k in ("through_ticks", "through_bps", "wait_s"):
+        v = m.get(k)
+        if _num(v) and v > 0:
+            out[k] = float(v)
+    return out
+
+
 def kill_state(root=None):
     """-> None | {"flatten":bool,"reason":str,"ts":...}; читает state/KILL каждый раз (без кэша).
 

@@ -27,7 +27,8 @@ DEFAULTS = {
     "maker_fee": 0.00036,    # costs.bybit.maker_fee
     "slip_bps": 2.0,         # paper.slip_bps
     "stop_slip_bps": 5.0,    # paper.stop_slip_bps
-    "through_ticks": 1,      # paper.fill_through_ticks
+    "through_ticks": 1,      # paper.fill_through_ticks (config/exits.json: maker.through_ticks у порта paper)
+    "through_bps": 0.0,      # config/exits.json: maker.through_bps; 0 = прежнее правило «проход на тики» без порога в б.п.
     "latency_ms": 300,       # paper.latency_ms
     "tick": 0.01,            # шаг цены по умолчанию (на символ задаётся через PaperState.ticks)
     "maintenance": 0.005,
@@ -58,16 +59,22 @@ def fill_market(side, qty, bid, ask, slip_bps, fee_rate):
     return {"px": px, "fee": abs(px * qty * fee_rate)}
 
 
-def limit_touch(side, price, last, tick, through_ticks):
-    """-> bool: лимит заполнен, только если цена ПРОШЛА сквозь уровень не менее чем на through_ticks.
-    buy: last <= price - through*tick; sell: last >= price + through*tick. Касание ровно по уровню при through >= 1 не заполняет.
+def limit_touch(side, price, last, tick, through_ticks, through_bps=0.0):
+    """-> bool: лимит заполнен, только если цена ПРОШЛА сквозь уровень не менее чем на `through_ticks` тиков И не менее
+    `through_bps` б.п. от уровня (R4.4, Requirement 3.5 и 10.6: модель maker-заполнения одна у симулятора и paper-порта).
+    buy: last <= price - need; sell: last >= price + need, где need = max(through_ticks × tick, through_bps / 1e4 × |price|).
+    Касание ровно по уровню при need > 0 не заполняет.
 
     >>> limit_touch("buy", 100.0, 100.0, 0.01, 1)
     False
     >>> limit_touch("buy", 100.0, 99.99, 0.01, 1)
     True
+    >>> limit_touch("sell", 100.0, 100.02, 0.01, 1, 2)      # 2 б.п. от 100 = 0.02: прохода нет
+    False
+    >>> limit_touch("sell", 100.0, 100.03, 0.01, 1, 2)
+    True
     """
-    need = (through_ticks or 0) * (tick or 0.0)
+    need = max((through_ticks or 0) * (tick or 0.0), (through_bps or 0.0) / 1e4 * abs(price or 0.0))
     eps = 1e-9 * max(1.0, abs(price))
     if _buy(side):
         return last <= price - need + eps if need > 0 else last < price
@@ -402,7 +409,8 @@ class PaperState(object):
                 continue
             if o["type"] == "market" or o["marketable"]:
                 self._execute_taker(o, ts, ev)
-            elif ts > o["ts"] and limit_touch(o["side"], o["price"], last, self.tick_size(sym), self.cfg["through_ticks"]):
+            elif ts > o["ts"] and limit_touch(o["side"], o["price"], last, self.tick_size(sym), self.cfg["through_ticks"],
+                                               self.cfg.get("through_bps") or 0.0):
                 fee = abs(o["price"] * (o["qty"] - o["filled"]) * self.cfg["maker_fee"])
                 self._fill_order(o, o["price"], fee, True, ts, ev)
         return ev

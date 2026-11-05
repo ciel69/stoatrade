@@ -62,8 +62,10 @@ EVENT_TYPES = {
     "news_flash": PRI_WAKE,            # быстрые новости (intel/flash.py): класс, подсказка направления, важность, источник; БЕЗ текста заголовка
     "rulebook_promoted": PRI_INFO,     # R2.7: новая версия rulebook с правилом active (ver, rule, trial); мозг не будит
     "rulebook_rollback": PRI_INFO,     # R2.8: откат правила сторожем (ver, rule, code; n, mean_r, p); мозг не будит
+    "exit_policy_promoted": PRI_INFO,  # R4.7: новая версия политики выхода (ver, trial, var); мозг не будит
+    "exit_policy_rollback": PRI_INFO,  # R4.8: откат политики выхода сторожем (ver, from, code; n, mean_r, p); мозг не будит
 }
-INFO_ONLY_TYPES = ("rulebook_promoted", "rulebook_rollback")     # всегда info: явный pri="wake" источника или правка файла не будят мозг
+INFO_ONLY_TYPES = ("rulebook_promoted", "rulebook_rollback", "exit_policy_promoted", "exit_policy_rollback")     # всегда info: явный pri="wake" источника или правка файла не будят мозг
 WAKE_MILESTONES = ("r_plus_1", "r_minus_05", "near_target", "target_filled", "hold_expiring", "hold_expired")      # hold_expiring/hold_expired: срок удержания подходит/вышел, таймер не закрывает, решает мозг
 SCANNER_KINDS = ("range_5m", "turnover_surge", "hot_enter", "patrol", "idea_near", "idea_level", "idea_invalidated", "idea_tp", "idea_expired", "idea_stale",
                  "oi_spike", "oi_flush", "funding_extreme", "liq_cascade",           # деривативы (hotscan.DerivGate, marketdata/liqwatch.py)
@@ -147,6 +149,8 @@ D_FIELDS = {
     "news_flash": {"cls": ("enum", FLASH_CLASSES), "dir": ("enum", ("up", "down", "none")), "imp": "num", "src": "id", "age_s": "num", "id": "id"},
     "rulebook_promoted": {"ver": "id", "rule": "id", "trial": "id"},
     "rulebook_rollback": {"ver": "id", "rule": "id", "code": "id", "n": "num", "mean_r": "num", "p": "num"},
+    "exit_policy_promoted": {"ver": "id", "trial": "id", "var": "id"},
+    "exit_policy_rollback": {"ver": "id", "from": "id", "code": "id", "n": "num", "mean_r": "num", "p": "num"},
 }
 # защищённые поля `d`: при превышении MAX_EVENT_BYTES `sanitize` выбрасывает их только после всех прочих (R2 Requirement 7.10):
 # kind, dir, признаки правил `memory.features.rule_features` (их потеря молча выключила бы правило) и t0 (R1.7 Requirement 23: по нему

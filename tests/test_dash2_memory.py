@@ -357,7 +357,7 @@ class Actions(Base):
 
     def test_hello(self):
         self.assertEqual(set(self.hello), {"csrf", "actions", "confirm"})
-        self.assertEqual(self.hello["actions"], ["lesson_reject", "rule_disable", "rules_disable_all"])
+        self.assertEqual(self.hello["actions"], ["lesson_reject", "rule_disable", "rules_disable_all", "exits_rollback"])
         self.assertEqual(self.hello["confirm"]["lesson_reject"], [])
         self.assertEqual(sorted(self.hello["confirm"]["rule_disable"]), ["block_forever", "rule_off"])
         self.assertNotIn("confirm", MO.ACTIONS)
@@ -462,7 +462,10 @@ class Layering(unittest.TestCase):
             if not os.path.isfile(p):
                 continue
             imps = TL.imports_of(TL.read(p), mod)
-            hit = [n for n in imps if TL.under(n, ("tb.venues", "tb.executor", "tb.launcher", "tb.lifecycle", "tb.llm", "subprocess", "signal"))]
+            hit = [n for n in imps if TL.under(n, ("tb.venues", "tb.executor", "tb.launcher", "tb.lifecycle", "subprocess", "signal"))]
+            # R4 (задача 22): кнопка «Вернуть границу» зовёт exits_cli -> exits_report, а тот читает журнал вызовов
+            # (tb.llm.usage, тот же источник, что brief.economics). Остальной tb.llm (ключи, провайдеры) по-прежнему запрещён.
+            hit += [n for n in imps if n.startswith("tb.llm") and n not in ("tb.llm", "tb.llm.usage")]
             if hit:
                 bad[mod] = hit
             stack.extend(n for n in imps if n.startswith("tb.") and n not in seen)

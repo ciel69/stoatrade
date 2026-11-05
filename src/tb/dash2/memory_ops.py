@@ -13,11 +13,13 @@ memory_path     путь «кандидат → урок → испытание 
 закрывается; постоянных соединений нет. Нет файла или таблиц цикла -> state="no_data" (причина в reason); маркер восстановления ->
 state="restoring" («база восстанавливается»); ошибка чтения -> state="error". Блоки по случаям и урокам (JSONL) работают и без базы.
 
-Действия (ответ `memory_action_result`; вызывают функции tb.knowledge.rulebook_cli — те же, что `./tb rulebook disable|disable-all` и
-`./tb memory lesson reject`; каждая пишет learn_events с actor=OWNER):
+Действия (ответ `memory_action_result`; вызывают функции tb.knowledge.rulebook_cli и tb.knowledge.exits_cli — те же, что
+`./tb rulebook disable|disable-all`, `./tb memory lesson reject` и `./tb exits rollback`; каждая пишет learn_events с actor=OWNER):
 lesson_reject      урок меток -> rejected (OWNER), без диалога.
 rule_disable       одно правило (OWNER_DISABLE, чёрный список бессрочно) — только с подтверждением рисков.
 rules_disable_all  выключатель apply=false, затем версия OWNER_DISABLE без правил — только с подтверждением рисков.
+exits_rollback     «Выходы: вернуть границу» (R4, Requirement 16.6): версия OWNER_ROLLBACK с политикой пола защиты
+                   (`exits_cli.owner_rollback`: версия, снимок и аренда) — только с подтверждением рисков.
 Подтверждение рисков (единый диалог «принимаю риски», как у ctl в dash2: без токена и фраз): kind="challenge" возвращает список последствий
 `warnings` [{id, text}] без записи; команда (kind="command") исполняется, только если `accepted` — ровно все id предупреждений действия,
 иначе E_CONFIRM с тем же списком. Операций «подтвердить урок» и «продвинуть правило» нет.
@@ -54,9 +56,10 @@ RE_CID = re.compile(r"^[A-Za-z0-9._:-]{1,24}$")
 
 READ_OPS = {"memory_cases": "memory_cases_detail", "memory_lessons": "memory_lessons_detail", "memory_rules": "memory_rules_detail",
             "memory_path": "memory_path_detail"}
-ACTIONS = ("lesson_reject", "rule_disable", "rules_disable_all")
+ACTIONS = ("lesson_reject", "rule_disable", "rules_disable_all", "exits_rollback")
 RESULT_TOPIC = "memory_action_result"
 BLOCK_FOREVER = {"id": "block_forever", "text": "условие правила уходит в чёрный список бессрочно: цикл не вернёт его в испытание; снять — ./tb rulebook unblock"}
+EXITS_FLOOR = {"id": "exits_floor", "text": "политика выхода вернётся к полу защиты: новая версия OWNER_ROLLBACK, снимок и аренда; снять — только новое продвижение циклом"}
 WARNINGS = {
     "lesson_reject": [],
     "rule_disable": [{"id": "rule_off", "text": "правило перестанет применяться: новая версия rulebook без него (правило в испытании — испытание закрывается)"},
@@ -64,6 +67,7 @@ WARNINGS = {
     "rules_disable_all": [{"id": "switch_off", "text": "применение всех правил выключается сразу; включить снова — ./tb rulebook apply on"},
                           {"id": "all_off", "text": "все активные правила выключаются, испытания закрываются, новая версия rulebook без правил"},
                           BLOCK_FOREVER],
+    "exits_rollback": [EXITS_FLOOR, {"id": "exits_open_positions", "text": "открытые позиции продолжают свою версию выхода: откат действует на новые входы"}],
 }
 MSG = {"OK": "готово", "CONFIRM": "нужно подтверждение рисков", "E_CONFIRM": "действие с рисками: нужно подтверждение «принимаю риски»",
        "E_CSRF": "сессия устарела: обновите страницу", "E_RATE": "слишком часто: подождите минуту", "E_ARGS": "неверные аргументы",
@@ -512,7 +516,14 @@ class MemoryActions(object):
     def _run(self, cid, op, arg, now):
         from tb.knowledge import rulebook_cli as RBC
         try:
-            if op == "rule_disable":
+            if op == "exits_rollback":
+                from tb.knowledge import exits_cli as XCLI
+                rep = XCLI.owner_rollback(self.root, now=now)
+                if not rep.get("ok"):
+                    why = XCLI.REASONS_RU.get(str(rep.get("db") or ""))
+                    return self._reply(cid, op, "E_DB" if why else "E_INTERNAL",
+                                       ("%s: %s" % (MSG["E_DB"], why)) if why else None, report=_clean(rep))
+            elif op == "rule_disable":
                 rep = RBC.disable_rule(self.root, arg, now=now)
             elif op == "rules_disable_all":
                 rep = RBC.disable_all(self.root, now=now)
@@ -527,6 +538,6 @@ class MemoryActions(object):
             return self._reply(cid, op, "E_ARGS", str(e)[:200])
         except OSError:
             return self._reply(cid, op, "E_INTERNAL", "выключатель не записан" if op == "rules_disable_all" else None)
-        except Exception:  # noqa: BLE001 - сбой действия не рвёт соединение; подробности — ./tb rulebook
+        except Exception:  # noqa: BLE001 - сбой действия не рвёт соединение; подробности — ./tb rulebook | ./tb exits
             return self._reply(cid, op, "E_INTERNAL")
         return self._reply(cid, op, "OK", report=_clean(rep))

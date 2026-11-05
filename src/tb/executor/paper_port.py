@@ -39,7 +39,9 @@ def _rej(code, msg):
 
 
 def load_costs(root=None, venue=None):
-    """-> dict комиссий и проскальзываний paper из config/risk_profile.json (costs.bybit) и exec_limits (paper.*). Нет файла = умолчания logic.paper."""
+    """-> dict комиссий и проскальзываний paper из config/risk_profile.json (costs.bybit) и exec_limits (paper.*), плюс
+    модель maker-заполнения из config/exits.json: maker (R4.4, Requirement 10.6: `through_ticks`, `through_bps`, `wait_s`;
+    числовых умолчаний в коде нет — нет файла, поведение прежнее). Нет файла = умолчания logic.paper."""
     cfg = {}
     try:
         with open(paths.config("risk_profile.json", root=root), encoding="utf-8") as f:
@@ -59,6 +61,14 @@ def load_costs(root=None, venue=None):
                          ("latency_ms", "latency_ms")):
             if isinstance(pc.get(src), (int, float)):
                 cfg[dst] = pc[src]
+    except Exception:
+        pass
+    try:
+        from tb.core import exec_cfg
+        mk = exec_cfg.exits_maker(root)
+        for src in ("through_ticks", "through_bps", "wait_s"):
+            if mk.get(src) is not None:
+                cfg[src] = mk[src]
     except Exception:
         pass
     return cfg

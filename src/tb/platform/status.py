@@ -35,7 +35,7 @@ def _exec_block(root, now):
     pos = d.get("positions")
     return {"alive": bool(h.get("alive")), "present": bool(h.get("present")), "age_s": h.get("age_s"), "mode": d.get("mode"), "env": d.get("env"),
             "observe": d.get("observe"), "positions": pos if isinstance(pos, int) and not isinstance(pos, bool) else None, "hold": d.get("hold"),
-            "plans": d.get("plans")}
+            "plans": d.get("plans"), "exit_status": d.get("exit_status"), "exit_why": d.get("exit_why")}
 
 
 def _bus_block(root, now):
@@ -356,6 +356,9 @@ def build_status(root=None, now=None):
         else:
             color = worse("yellow")
             reasons.append("исполнитель не отвечает (heartbeat)")
+    if running and exec_expected and ex.get("exit_status"):
+        color = worse("yellow")
+        reasons.append("исполнитель ведёт позиции полом защиты: %s" % ex["exit_status"])
     pos = ex.get("positions") or (fresh.get("positions_seen") or 0)
     if exec_expected and not ex["alive"] and pos:
         color = worse("red")

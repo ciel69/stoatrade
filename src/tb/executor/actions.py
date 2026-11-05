@@ -15,11 +15,15 @@ import time
 from tb.core import linkid
 from tb.executor import gate as G
 from tb.executor.ports import (KIND_NETWORK, KIND_POSITION_GONE, KIND_RATE, KIND_REJECTED, KIND_UNKNOWN, PortError)
+from tb.logic import exitpol
+from tb.logic.qty import close_qty
 
 ORD_TERMINAL = ("Filled", "Cancelled", "Rejected", "Deactivated", "PartiallyFilledCanceled", "Expired")
 ORD_LIVE = ("New", "PartiallyFilled", "Untriggered")
 NOT_SENT_AFTER_S = 15.0       # intent без результата и без ордера на бирже дольше этого = не отправлено (02 п. 2.6)
 EPS = 1e-9
+XP_PREFIX = "tbx-xp-"         # ссылка заявки политики выхода: tbx-xp-<план>-<правило> (Requirement 10.2, reconcile._xp_plan_n)
+MAKER_WAIT_S = 60.0           # maker.wait_s, если config/exits.json недоступен (Requirement 10.3; число задано спекой, не подгонкой)
 
 
 class WalError(Exception):
@@ -77,15 +81,19 @@ class Actions(object):
         self._last_write = 0.0
 
     # ------------------------------------------------------------------ WAL
-    def begin(self, p, what, args, klass, why="", link=True, basis=None):
+    def begin(self, p, what, args, klass, why="", link=True, basis=None, link_id=None):
         """Резервирует action_id/link_id, сохраняет pending (sync) и пишет intent (fsync) ДО отправки. -> A.
-        WalError для RISK_UP/NEUTRAL, если intent не записан; для RISK_DOWN действие всё равно выполняется (защита важнее аудита)."""
+        WalError для RISK_UP/NEUTRAL, если intent не записан; для RISK_DOWN действие всё равно выполняется (защита важнее аудита).
+        `link_id` — готовая ссылка биржи (заявки политики `tbx-xp-<план>-<правило>`, Requirement 10.2): тогда `linkid.make` не зовётся."""
         ex, rt = self.ex, p["rt"]
         act = rt.setdefault("actions", {"seq": 0, "pending": []})
         act["seq"] = int(act.get("seq", 0)) + 1
         n = int(rt.get("plan_n") or 0)
         aid = "a-%d-%03d" % (n, act["seq"])
-        lnk = linkid.make(n, act["seq"], ex.venue_id) if link else None
+        if link_id:
+            lnk = link_id
+        else:
+            lnk = linkid.make(n, act["seq"], ex.venue_id) if link else None
         act.setdefault("pending", []).append(aid)
         info = act.setdefault("info", {})
         info[aid] = {"what": what, "link": lnk, "t": round(ex.clock(), 3), "klass": klass}
@@ -342,7 +350,8 @@ class Actions(object):
             except WalError:
                 continue
             try:
-                self.call("place_reduce_only", G.NEUTRAL, sym, close_side(side), q, A["link"], price=t["price"], post_only=False)
+                self.call("place_reduce_only", G.NEUTRAL, sym, close_side(side), q, A["link"], price=t["price"],
+                          post_only=self._passive(p, t["price"]))
                 tg[tid].update({"state": "resting", "link": A["link"]})
                 self.end(p, A, True)
                 placed += 1
@@ -358,7 +367,7 @@ class Actions(object):
         return placed
 
     def trim_from_exchange(self, p):
-        """Биржа молча обрезает reduce-only до свободного остатка: фактические qty ордеров лесенки берутся из open_orders."""
+        """Биржа молча обрезает reduce-only до свободного остатка: фактические qty ордеров лесенки и заявок политики берутся из open_orders."""
         ex, rt = self.ex, p["rt"]
         try:
             orders = {o["link_id"]: o for o in ex.port.open_orders(p["spec"]["symbol"])}
@@ -369,6 +378,10 @@ class Actions(object):
             o = orders.get(t.get("link"))
             if o and t.get("state") == "resting" and abs(float(o["qty"]) - float(t["qty"])) > 1e-9:
                 t["qty"] = float(o["qty"])
+        for rid, rec in (rt.get("policy_orders") or {}).items():
+            o = orders.get(rec.get("link"))
+            if o and rec.get("state") in ("resting", "maker_wait") and abs(float(o["qty"]) - float(rec.get("qty") or 0)) > 1e-9:
+                rec["qty"] = float(o["qty"])
         ex.save(p)
 
     def resync_ladder(self, p, why="RESIZE"):
@@ -409,6 +422,374 @@ class Actions(object):
                 self.end(p, A, False, str(getattr(e, "code", None) or getattr(e, "kind", "ERR")))
         ex.save(p, sync=True)
         return n
+
+    # ------------------------------------------------------------------ заявки политики выхода (R4.4, задача 17)
+    @staticmethod
+    def _xp_link(rt, rule):
+        """Ссылка заявки политики `tbx-xp-<план>-<правило>` (Requirement 10.2; её распознаёт reconcile._xp_plan_n)."""
+        rid = str(rule or "xp")
+        s = "%s%d-%s" % (XP_PREFIX, int(rt.get("plan_n") or 0), rid)
+        if len(s) > 36:                       # лимит orderLinkId Bybit: длинное правило режем, план остаётся разбираемым
+            s = s[:36]
+        return s
+
+    def maker_cfg(self):
+        """`maker` из `config/exits.json` (`through_ticks`, `through_bps`, `wait_s`); без файла — только `wait_s` спеки."""
+        try:
+            from tb.core import exec_cfg
+            got = dict(exec_cfg.exits_maker(self.ex.root) or {})
+        except Exception:                     # конфиг недоступен: исполнитель обязан работать и без него
+            got = {}
+        if not got.get("wait_s"):
+            got["wait_s"] = MAKER_WAIT_S
+        return got
+
+    @staticmethod
+    def _round_px(x, tick, up):
+        """Цена на сетке тика; `up` — округление вверх (для sell-заявки, чтобы не пересечь книгу)."""
+        if not tick or tick <= 0:
+            return float(x)
+        n = math.ceil(float(x) / tick - 1e-9) if up else math.floor(float(x) / tick + 1e-9)
+        return round(n * tick, 10)
+
+    @staticmethod
+    def _post_rejected(reply):
+        """Порт отклонил/снял post-only заявку (paper: CancelByPostOnly; биржа: исключение PortError)."""
+        r = reply or {}
+        return str(r.get("status") or "") in ("Cancelled", "Rejected", "Deactivated") or "PostOnly" in str(r.get("cancel_type") or "")
+
+    def _policy_ctx(self, p):
+        rec = ((p["rt"].get("pos") or {}).get("exit") or {})
+        return {"max_hold_min": rec.get("max_hold_min"), "atr5_pct": rec.get("atr5_pct"),
+                "sig_type": rec.get("sig_type"), "horizon": rec.get("horizon")}
+
+    def policy_maker_fixations(self, p):
+        """Компоненты политики по цене (`partial`, `near_tp`) со способом исполнения maker -> [(правило, at_r, доля от входа)].
+
+        Правила даёт тот же `exitpol.compile`, что и правила движка (`evaluate_manage`), поэтому заявка стоит ровно на уровне
+        срабатывания компонента (Requirement 10.2). Живая политика берётся из `rt.pos.exit` (версия позиции, Requirement 9.3)."""
+        rec = ((p["rt"].get("pos") or {}).get("exit") or {})
+        pol = rec.get("policy")
+        if not isinstance(pol, dict):
+            return []
+        floor = self.ex._exit_floor()
+        try:
+            rules = exitpol.compile(pol, floor, self._policy_ctx(p))
+        except Exception:                     # битая политика позиции: заявок не ставим (стоп плана на бирже остаётся)
+            return []
+        out = []
+        for r in rules:
+            do = r.get("do") or {}
+            if do.get("action") != "partial_close" or do.get("exec") != "maker":
+                continue
+            at_r, frac = do.get("at_r"), do.get("frac_of_initial")
+            if at_r is None or frac is None:
+                continue
+            out.append((str(r.get("id")), float(at_r), float(frac)))
+        return out
+
+    def place_policy_limits(self, p, why="XP"):
+        """После входа: post-only reduce-only заявки на уровне `at_r` maker-компонентов по цене (Requirement 10.2, 10.4).
+
+        Стоп на бирже не трогается: заявки только reduce-only. Отказ post-only на выставлении — рыночное закрытие этой доли
+        (Requirement 10.3, Error Handling «Post-only отклонён биржей»). Идемпотентна: уже стоящие/исполненные правила пропускаются.
+        -> число выставленных заявок."""
+        ex, rt, spec = self.ex, p["rt"], p["spec"]
+        if rt.get("status") not in ("entered", "managing"):
+            return 0
+        fix = self.policy_maker_fixations(p)
+        if not fix:
+            return 0
+        sym, side = spec["symbol"], spec["side"]
+        ins = ex.instrument(sym) or {}
+        tick, step = float(ins.get("tick") or 0), float(ins.get("qty_step") or 0)
+        pos = rt.get("pos") or {}
+        entries = pos.get("entries") or []
+        q0 = float((entries[0] or {}).get("qty") or 0) if entries else float(pos.get("qty") or 0)
+        avg, ru = float(pos.get("avg") or 0), float(pos.get("r_unit") or 0)
+        if q0 <= 0 or avg <= 0 or ru <= 0:
+            return 0
+        s = 1.0 if side == "long" else -1.0
+        book = rt.setdefault("policy_orders", {})
+        placed = 0
+        for rid, at_r, frac in fix:
+            cur = book.get(rid) or {}
+            if cur.get("state") in ("resting", "maker_wait", "filled", "closing"):
+                continue
+            remaining = float(pos.get("qty") or 0)
+            qty, full = close_qty(q0 * frac, remaining, step, ins.get("min_qty"))
+            if qty <= 0:
+                book[rid] = {"state": "cancelled", "qty": 0.0, "filled_qty": 0.0, "at_r": at_r, "kind": "price", "link": None}
+                continue
+            lot = max(step, float(ins.get("min_qty") or 0))
+            if full and q0 * frac < lot - step / 2.0:
+                rec = {"state": "pending", "qty": float(qty), "price": 0.0, "link": None, "filled_qty": 0.0, "at_r": at_r, "kind": "price"}
+                book[rid] = rec
+                self._policy_maker_reject(p, rid, rec, "LOT")          # доля меньше лота: рынок (Requirement 10, Edge Cases)
+                if rt.get("status") not in ("entered", "managing"):
+                    break
+                continue
+            px = self._round_px(avg + s * at_r * ru, tick, up=(s > 0))
+            link = self._xp_link(rt, rid)
+            rec = {"state": "pending", "qty": float(qty), "price": px, "link": link, "filled_qty": 0.0, "at_r": at_r, "kind": "price"}
+            book[rid] = rec
+            try:
+                A = self.begin(p, "place_policy_limit", {"tid": rid, "qty": qty, "px": px, "sym": sym}, G.RISK_DOWN, why=why,
+                               link=False, link_id=link)
+            except WalError:
+                book.pop(rid, None)
+                continue
+            try:
+                r = self.call("place_reduce_only", G.RISK_DOWN, sym, close_side(side), qty, link, price=px, post_only=True)
+            except Denied as d:
+                self.end(p, A, False, d.code)
+                book.pop(rid, None)
+                continue
+            except PortError as e:
+                self.end(p, A, False, str(e.code or e.kind), res={"kind": e.kind})
+                if e.kind == KIND_POSITION_GONE:
+                    book.pop(rid, None)
+                    break
+                self._policy_maker_reject(p, rid, rec, str(e.code or e.kind))
+                if rt.get("status") not in ("entered", "managing"):
+                    break
+                continue
+            if self._post_rejected(r):
+                self.end(p, A, False, "POST_ONLY")
+                self._policy_maker_reject(p, rid, rec, "POST_ONLY")
+                if rt.get("status") not in ("entered", "managing"):
+                    break
+                continue
+            rec.update({"state": "resting", "qty": float((r or {}).get("qty") or qty)})
+            self.end(p, A, True, "OK", order_id=(r or {}).get("order_id"))
+            placed += 1
+        ex.save(p, sync=True)
+        if placed:
+            self.trim_from_exchange(p)
+        return placed
+
+    def _policy_maker_reject(self, p, rid, rec, code):
+        """Post-only отклонён (или заявка снята без исполнения): рыночное закрытие незаполненной доли (Requirement 10.3)."""
+        ex, rt = self.ex, p["rt"]
+        rec["state"] = "closing"
+        qty = min(float(rec.get("qty") or 0), float((rt.get("pos") or {}).get("qty") or 0))
+        try:
+            ex.decide("event", "policy_maker_reject", plan=p["spec"]["id"], why="XP:MAKER_REJECT",
+                      res={"ok": False, "code": code, "rule": rid})
+        except Exception:
+            pass
+        if qty <= 0:
+            rec["state"] = "cancelled"
+            return False
+        whole = qty >= float((rt.get("pos") or {}).get("qty") or 0) - EPS
+        if whole:
+            rt.setdefault("close", {})["reason"] = "rule"
+            rt["close"]["rule"] = rid
+        kind, info = self.close(p, qty, "rule", why="XP:MAKER_REJECT")
+        if kind in ("ok", "gone"):
+            rec["state"] = "filled"
+            ex.sync_position(p)
+            return True
+        if whole:
+            rt.setdefault("close", {}).pop("reason", None)
+            rt["close"].pop("rule", None)
+        return False
+
+    def resync_policy_limits(self, p):
+        """Размер позиции изменился: сумма остатков заявок политики не больше позиции; лишнее снимается с дальних уровней
+        (`at_r`), ближний уменьшается (как `resync_ladder`; Requirement 10.2). -> число изменённых заявок."""
+        ex, rt, spec = self.ex, p["rt"], p["spec"]
+        book = rt.get("policy_orders") or {}
+        live = [(rid, r) for rid, r in book.items() if r.get("state") == "resting"]
+        if not live:
+            return 0
+        remaining = float((rt.get("pos") or {}).get("qty") or 0)
+        total = sum(float(r.get("qty") or 0) - float(r.get("filled_qty") or 0) for _, r in live)
+        excess = total - remaining
+        if excess <= EPS:
+            return 0
+        ins = ex.instrument(spec["symbol"]) or {}
+        step = float(ins.get("qty_step") or 0)
+        n = 0
+        for rid, rec in sorted(live, key=lambda kv: -float(kv[1].get("at_r") or 0)):
+            if excess <= EPS:
+                break
+            left = float(rec.get("qty") or 0) - float(rec.get("filled_qty") or 0)
+            if left <= EPS:
+                continue
+            try:
+                A = self.begin(p, "cancel_order" if left <= excess + EPS else "amend_order",
+                               {"tid": rid, "qty": left, "sym": spec["symbol"]}, G.RISK_DOWN, why="XP:RESIZE", link=False)
+            except WalError:
+                break
+            try:
+                newq = 0.0 if left <= excess + EPS else G.floor_step(left - excess, step)
+                if newq <= 0:
+                    self.call("cancel_order", G.RISK_DOWN, spec["symbol"], rec["link"])
+                    rec["state"] = "cancelled"
+                    excess -= left
+                else:
+                    self.call("amend_order", G.RISK_DOWN, spec["symbol"], rec["link"], qty=newq)
+                    rec["qty"] = newq + float(rec.get("filled_qty") or 0)
+                    excess = 0.0
+                self.end(p, A, True)
+                n += 1
+            except (PortError, Denied) as e:
+                self.end(p, A, False, str(getattr(e, "code", None) or getattr(e, "kind", "ERR")))
+        ex.save(p, sync=True)
+        return n
+
+    def close_maker(self, p, qty, rule, why="", wait_s=None, whole=False):
+        """Maker-закрытие доли компонента по времени (`decay`, `timeout`; Requirement 10.2–10.4).
+
+        post-only reduce-only по `max(last, ask)` для long и `min(last, bid)` для short; таймер `wait_s`. Отказ post-only —
+        сразу рынок; незаполнение за `wait_s` — снятие и рыночное закрытие остатка доли (частичное заполнение по факту).
+        -> ("pending"|"market"|"gone"|"stale"|"denied"|"error", info). Стоп на бирже не трогается."""
+        ex, rt, spec = self.ex, p["rt"], p["spec"]
+        sym, side = spec["symbol"], spec["side"]
+        view = ex.view(sym)
+        last = view.last
+        if not last or view.price_age() > float(ex.cfg["connectivity"]["public_price_stale_s"]):
+            return "stale", {"code": "NO_DATA"}
+        tick = float((ex.instrument(sym) or {}).get("tick") or 0)
+        if side == "long":
+            px = self._round_px(max(float(last), float(view.ask or last)), tick, up=True)
+        else:
+            px = self._round_px(min(float(last), float(view.bid or last)), tick, up=False)
+        wait = float(wait_s if wait_s is not None else self.maker_cfg().get("wait_s") or MAKER_WAIT_S)
+        link = self._xp_link(rt, rule)
+        book = rt.setdefault("policy_orders", {})
+        rec = {"state": "pending", "qty": float(qty), "price": px, "link": link, "filled_qty": 0.0, "rule": rule,
+               "kind": "time", "why": why, "ts": round(ex.clock(), 3), "until": None}
+        book[rule] = rec
+        try:
+            A = self.begin(p, "close_maker", {"qty": qty, "sym": sym, "px": px}, G.RISK_DOWN, why=why, link=False, link_id=link)
+        except WalError:
+            book.pop(rule, None)
+            return "error", {"code": "WAL"}
+        try:
+            r = self.call("place_reduce_only", G.RISK_DOWN, sym, close_side(side), qty, link, price=px, post_only=True)
+        except Denied as d:
+            self.end(p, A, False, d.code)
+            book.pop(rule, None)
+            return "denied", {"code": d.code}
+        except PortError as e:
+            self.end(p, A, False, str(e.code or e.kind), res={"kind": e.kind})
+            if e.kind == KIND_POSITION_GONE:
+                book.pop(rule, None)
+                return "gone", {}
+            self._policy_maker_reject(p, rule, rec, str(e.code or e.kind))
+            return ("pending" if rec.get("state") == "closing" else "market"), {"code": str(e.code or e.kind)}
+        if self._post_rejected(r):
+            self.end(p, A, False, "POST_ONLY")
+            self._policy_maker_reject(p, rule, rec, "POST_ONLY")
+            return ("pending" if rec.get("state") == "closing" else "market"), {"code": "POST_ONLY"}
+        rec.update({"state": "maker_wait", "qty": float((r or {}).get("qty") or qty), "until": round(ex.clock() + wait, 3),
+                    "order_id": (r or {}).get("order_id")})
+        self.end(p, A, True, "OK", order_id=(r or {}).get("order_id"))
+        if whole:
+            rt.setdefault("close", {})["rule"] = rule           # maker-заявка на весь остаток: случай получит exit_rule
+        ex.save(p, sync=True)
+        return "pending", {"link": link, "price": px, "until": rec["until"]}
+
+    def _maker_to_market(self, p, rid, rec, code):
+        """Снятие maker-заявки и рыночное закрытие остатка доли (таймер `wait_s` вышел, заявка снята биржей)."""
+        ex, rt = self.ex, p["rt"]
+        rec["state"] = "closing"
+        residual = float(rec.get("qty") or 0)
+        if residual <= EPS:
+            rec["state"] = "filled"
+            self._maker_done(p, rid, rec, code)
+            return True
+        try:
+            ex.decide("event", "policy_maker_timeout", plan=p["spec"]["id"], why="XP:MAKER_TAKER",
+                      res={"ok": True, "code": code, "rule": rid, "qty": residual})
+        except Exception:
+            pass
+        whole = residual >= float((rt.get("pos") or {}).get("qty") or 0) - EPS
+        if whole:
+            rt.setdefault("close", {})["reason"] = "rule"
+            rt["close"]["rule"] = rid
+        kind, info = self.close(p, residual, "rule", why="XP:MAKER_TAKER")
+        if kind in ("ok", "gone"):
+            rec["state"] = "filled"
+            self._maker_done(p, rid, rec, "TAKER")
+            ex.sync_position(p)
+            return True
+        if whole:
+            rt.setdefault("close", {}).pop("reason", None)
+            rt["close"].pop("rule", None)
+        return False
+
+    def _maker_done(self, p, rid, rec, code):
+        rt = p["rt"]
+        if rec.get("rule") or rid:
+            rt.setdefault("close", {})["rule"] = rid
+        try:
+            self.ex.emit("rule_fired", {"rule": rid, "action": "close", "ok": True, "code": code},
+                         plan=p["spec"]["id"], sym=p["spec"]["symbol"])
+        except Exception:
+            pass
+
+    def _tick_maker_wait(self, p, rid, rec, now):
+        """Проверка maker-заявки по времени: заполнение по факту, таймер `wait_s`, снятие и рынок (Requirement 10.3, свойство 24)."""
+        ex, rt = self.ex, p["rt"]
+        sym = p["spec"]["symbol"]
+        link = rec.get("link")
+        qty, got = float(rec.get("qty") or 0), float(rec.get("filled_qty") or 0)
+        try:
+            o = ex.port.order_by_link(sym, link)
+            ex.rest_event(None)
+        except PortError as e:
+            ex.rest_event(e)
+            return False                          # REST недоступен: таймер проверим следующим тиком
+        if o:
+            got = max(got, float(o.get("filled") or 0))
+        rec["filled_qty"] = round(got, 12)
+        status = (o or {}).get("status") or ""
+        if status == "Filled" or (qty > 0 and got >= qty - EPS):
+            rec["state"] = "filled"
+            self._maker_done(p, rid, rec, "FILLED")
+            return True
+        if status in ORD_TERMINAL:
+            rec["qty"] = max(0.0, qty - got)      # заявку сняли (биржа/владелец): рыночно закрывается только остаток доли
+            return self._maker_to_market(p, rid, rec, status or "CANCELLED")
+        if now >= float(rec.get("until") or 0):
+            if o and status in ORD_LIVE:
+                try:
+                    self.call("cancel_order", G.RISK_DOWN, sym, link)
+                except (PortError, Denied):
+                    pass
+            rec["qty"] = max(0.0, qty - got)      # рыночно закрывается только незаполненный остаток доли
+            return self._maker_to_market(p, rid, rec, "WAIT")
+        return False
+
+    def poll_policy_orders(self, p):
+        """Тик по заявкам политики: maker-таймеры, остатки долей, пересчёт количества при изменении размера. -> были изменения."""
+        ex, rt = self.ex, p["rt"]
+        book = rt.get("policy_orders") or {}
+        if not book or rt.get("status") not in ("entered", "managing"):
+            return False
+        now = ex.clock()
+        changed = False
+        for rid, rec in sorted(book.items()):
+            st = rec.get("state")
+            if st == "maker_wait":
+                changed = self._tick_maker_wait(p, rid, rec, now) or changed
+            elif st == "closing":
+                changed = self._maker_to_market(p, rid, rec, "RETRY") or changed
+        if self.resync_policy_limits(p):
+            changed = True
+        if changed:
+            ex.save(p)
+        return changed
+
+    def _passive(self, p, price):
+        """post-only тейка плана можно ставить, только если цена не пересекает книгу при выставлении (Requirement 10.5)."""
+        view = self.ex.view(p["spec"]["symbol"])
+        if p["spec"]["side"] == "long":
+            return bool(view.bid) and float(price) > float(view.bid)
+        return bool(view.ask) and float(price) < float(view.ask)
 
     def move_target(self, p, tid, price, why=""):
         """Придвинуть/отодвинуть цель (правило move_target): amend цены reduce-only лимита. -> bool."""

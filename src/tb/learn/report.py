@@ -219,7 +219,7 @@ def build(root=None, mode=DEFAULT_MODE, now=None, clock=time.perf_counter):
     skip = _load("skips", lambda: load.skip_cases(root, mode), ([], "no_whatif"), warns)
     wr = stats.week_range(now_i, cfg["weeks"])
     usage, umeta = _load("usage", lambda: load.usage_rows(root, wr[0]["start"] if wr else None), ([], {}), warns)
-    ctx = Ctx(root=root, mode=mode, now=now_i, cfg=cfg, trades=trades, cases=cases, skips=skip, usage=usage, usage_meta=umeta)
+    ctx = Ctx(root=root, mode=mode, now=now_i, cfg=cfg, trades=trades, cases=cases, skips=skip, usage=usage, usage_meta=umeta, exits_loop=True)
     v = _fix_verdict(verdict.decide(trades, cases, cfg, now_i), len(trades))
     if v["state"] != "few_data" and v["reason"] != "no_baseline" and _mixed_rules(trades):
         warns.append("mixed_rules")

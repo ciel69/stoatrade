@@ -122,7 +122,7 @@ class TestPoll(Base):
         r = self.poll()
         self.assertEqual((r["new"], r["bad_lines"]), (2, 0))
         s = self.row(capture.sig_key(T0, "DOGE", "range_5m"))
-        self.assertEqual((s["status"], s["side"], s["captured_ts"], s["schema_ver"], s["attempts"]), ("pending", "long", T0 + 10, 1, 0))
+        self.assertEqual((s["status"], s["side"], s["captured_ts"], s["schema_ver"], s["attempts"]), ("pending", "long", T0 + 10, capture.schema.SCHEMA_VER, 0))
         self.assertEqual(s["mature_ts"], T0 + (270 + 10) * 60)
         self.assertEqual(s["next_try_ts"], s["mature_ts"])
         self.assertEqual(json.loads(s["ev"])["range_5m_pct"], 1.2)

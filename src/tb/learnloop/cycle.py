@@ -32,6 +32,13 @@ from tb.knowledge import store2
 from tb.labels import store as LST
 from tb.learnloop import candidates as CA
 from tb.learnloop import clusters as CL
+from tb.learnloop import exits_conf as XC
+from tb.learnloop import exits_eval as XE
+from tb.learnloop import exits_report as XR
+from tb.learnloop import exits_search as XS
+from tb.learnloop import exits_trial as XT
+from tb.learnloop import exits_versions as XV
+from tb.learnloop import exits_watch as XW
 from tb.learnloop import hypref as HR
 from tb.learnloop import promote as PR
 from tb.learnloop import reconcile as RC
@@ -162,11 +169,97 @@ def step_bounds(ctx):
     return {"code": "OK" if rep is None else "BOUNDS_BLOCKED", "ver": (rep or {}).get("ver")}
 
 
+# ---------------------------------------------------------------- шаги выходов R4 (задача 15)
+
+def exits_cfg(ctx):
+    """Конфиг `config/exits.json` один раз на проход -> (cfg, ошибки). Выключенный/битый — шаги выходов не работают."""
+    got = getattr(ctx, "_exits_cfg", None)
+    if got is None:
+        got = XC.load(ctx.root)
+        ctx._exits_cfg = got
+    return got
+
+
+def _exits_due(ctx, key, every_s):
+    """Срок шага выходов по его собственному интервалу: метка в памяти цикла (`cycle.last`), как у hourly-шагов.
+    После рестарта шаг выполняется сразу (идемпотентность — забота шага)."""
+    cyc = getattr(ctx, "cycle", None)
+    last = None if cyc is None else cyc.last.get(key)
+    if last is not None and ctx.now - int(last) < int(every_s):
+        return False
+    if cyc is not None:
+        cyc.last[key] = ctx.now
+    return True
+
+
+def step_exits_eval(ctx):
+    """Оценки выходов: `eval.every_s` из config/exits.json (шаг периода pass, иначе шаг R2 задавил бы интервал)."""
+    cfg, errs = exits_cfg(ctx)
+    if errs:
+        return {"code": "DISABLED"}
+    if not _exits_due(ctx, "exits_eval", cfg["eval"]["every_s"]):
+        return {"code": "NOT_DUE"}
+    rep = XE.eval_pass(ctx.conn, ctx.root, cfg, ctx.now)
+    return {"code": "OK", "n": rep["n"], "backlog": rep["backlog"]}
+
+
+def step_exits_search(ctx):
+    """Поиск: периодичность `search.every_days` проверяет сам модуль (`exits_search.due`), пустая очередь — тоже."""
+    cfg, errs = exits_cfg(ctx)
+    if errs:
+        return {"code": "DISABLED"}
+    rep = XS.run(ctx.conn, ctx.root, cfg, ctx.now)
+    return {"code": rep["code"], "candidates": len(rep["candidates"])}
+
+
+def step_exits_register(ctx):
+    """Регистрация кандидатов поиска в испытания (Requirement 5.5, 6.1): между поиском и вердиктами, идемпотентно."""
+    cfg, errs = exits_cfg(ctx)
+    if errs:
+        return {"code": "DISABLED"}
+    rep = XT.register_candidates(ctx.conn, ctx.root, cfg, ctx.now)
+    return {"code": rep["code"], "registered": len(rep["registered"]), "skipped": rep["skipped"], "open": rep["open"],
+            "search_id": rep["search_id"]}
+
+
+def step_exits_verdicts(ctx):
+    cfg, errs = exits_cfg(ctx)
+    if errs:
+        return {"code": "DISABLED"}
+    return {"code": "OK", "closed": len(XT.verdicts(ctx.conn, cfg, ctx.now, root=ctx.root))}
+
+
+def step_exits_promote(ctx):
+    """Продвижение версии; `EXIT_SIM_GAP` останавливает продвижение до снятия статуса (Requirement 8.7)."""
+    cfg, errs = exits_cfg(ctx)
+    if errs:
+        return {"code": "DISABLED"}
+    if XW.promotion_paused(ctx.conn):
+        return {"code": XW.SIM_GAP, "promoted": 0}
+    rep = XV.run(ctx.conn, ctx.root, cfg, ctx.now)
+    return {"code": rep["code"], "promoted": len(rep["promoted"]), "waiting": len(rep["waiting"]),
+            "rejected": len(rep["rejected"]), "floor_changed": rep["floor_changed"]}
+
+
+def step_exits_watch(ctx):
+    return XW.step_watch(ctx)
+
+
+def step_exits_after(ctx):
+    """Поля «после закрытия» (R4.2, Requirement 13.4): пишет `exits_report.write_after` (только существующие случаи)."""
+    cfg, errs = exits_cfg(ctx)
+    if errs:
+        return {"code": "DISABLED"}
+    rep = XR.write_after(root=ctx.root, now=ctx.now)
+    return {"code": "OK" if rep.get("ok") else rep.get("db"), "updated": rep.get("updated")}
+
+
 def default_steps():
     """Реестр шагов в порядке выполнения внутри периода (шаги задач 14–16 и 36 настоящие)."""
     return [
         Step("rule_eval_import", "pass", step_rule_eval_import),
         Step("llm_collect", "pass", CA.step_llm_collect),             # задача 27: ответы порта learnloop -> кандидаты llm; просрочка -> LLM_FALSE
+        Step("exits_eval", "pass", step_exits_eval),                  # задача 15: оценки выходов R4, интервал eval.every_s
         Step("close_clusters", "observe", step_close_clusters, group="observe"),
         Step("integrity", "daily", step_integrity),
         Step("backup", "daily", step_backup),
@@ -177,12 +270,18 @@ def default_steps():
         Step("day_review", "daily", CA.step_day_review),             # задача 27: роль day_reviewer через порт; без демона/роли LLM_FALSE (llm=false)
         Step("brain_ref", "daily", BR.step_brain_ref),                # задача 31: справочные уроки мозга (lessons.propose с порогами brain_ref, evidence.ref=true)
         Step("retro", "daily", RT.step_retro),                       # задача 28: раз в неделю UTC роль retro через порт или LLM_FALSE; иначе NOT_DUE
+        Step("exits_after", "daily", step_exits_after),              # задача 15: поля «после закрытия» R4.2 в случаях-сделках
         Step("verdicts", "hourly", TR.step_verdicts, interval="verdict_s", group="verdict"),
         Step("promote", "hourly", PR.step_promote, interval="verdict_s", group="verdict"),        # пересечения, LOSS_CAP, лимит, promotion_ready
         Step("bounds", "hourly", step_bounds, interval="verdict_s"),
         Step("reconcile", "hourly", RC.step_reconcile, interval="reconcile_s"),                   # уроки меток по rule_rows/trials
         Step("watch", "hourly", WA.step_watch, interval="watch_s", group="watch"),        # откат, TRADE_STARVATION, аренда runtime/watch_lease.json
         Step("hypref", "hourly", HR.step_hypref, interval="hypref_s"),                   # справка меток по policy_map -> runtime/learn/hyp_ref.json
+        Step("exits_search", "hourly", step_exits_search),                               # задача 15: поиск выходов, периодичность search.every_days
+        Step("exits_register", "hourly", step_exits_register),                           # задача 24б: кандидаты поиска -> испытания (trial.max_parallel)
+        Step("exits_verdicts", "hourly", step_exits_verdicts),                           # задача 15: вердикты испытаний выходов
+        Step("exits_promote", "hourly", step_exits_promote),                             # задача 15: продвижение версий, пауза при EXIT_SIM_GAP
+        Step("exits_watch", "hourly", step_exits_watch),                                 # задача 15: сторож, откат, аренда runtime/exit_lease.json
     ]
 
 

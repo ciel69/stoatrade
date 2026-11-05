@@ -16,11 +16,20 @@
    ключей и чтения config/local/; tb.logic.cmkt чист; tb.core.cmktdoc не импортирует tb.cmkt и открывает ряды только на чтение;
    шлюз, мозг, метки, цикл обучения, исполнитель и дашборд читают сводный рынок только через tb.core.cmktdoc; в tb.gateway нет
    названий бирж (список берётся из config/cmkt.json и tb.logic.cmkt.MARKETS).
+8. R4 (задача 14, свойство 19, Requirement 18.3): tb.core.exitdoc не импортирует tb.learnloop, tb.knowledge, tb.labels, tb.venues,
+   tb.executor (прямо и транзитивно по внутренним импортам tb) и ничего не пишет — только читает файлы runtime/ и config/exits.json.
+9. R4 (задача 23, свойство 23, Requirement 18.1–18.5): tb.logic.exitpol/exitsim/qty чисты по п. 2 и импортируют из tb только tb.logic;
+   tb.core.exitdoc не пишет в config/; модули tb.learnloop.exits_* проходят loop_hit и ConfigWrites; единственные писатели config/
+   в tb.knowledge — learn_cli.set_mode (learnloop.json) и exits_cli.set_mode (exits.json); проход цикла выходов на фикстурной базе
+   во временном корне не меняет хеши config/risk_profile.json, risk_levels.json, exec_limits.json.
 """
 import ast
+import hashlib
 import json
 import os
 import re
+import shutil
+import tempfile
 import unittest
 
 import _bootstrap  # noqa: F401
@@ -195,6 +204,16 @@ WRITE_OS = ("replace", "rename", "remove", "unlink", "makedirs", "mkdir", "rmdir
 CONFIG_WRITE_FUNCS = ("update_local",)            # tb.core.localcfg: запись config/local/*
 CONFIG_FILES = ("risk_profile.json", "risk_levels.json", "exec_limits.json")
 
+# R4 (задача 23, свойство 23, Requirement 18): логика выходов, читатель политики и цикл выходов.
+EXITS_LOGIC = ("exitpol", "exitsim", "qty")      # tb.logic.*: чистота п. 2 и из tb только tb.logic.*
+EXITDOC_BANNED = ("tb.learnloop", "tb.knowledge", "tb.labels", "tb.venues", "tb.executor")      # tb.core.exitdoc (18.3)
+EXITS_LOOP_MODULES = ("tb.learnloop.exits_conf", "tb.learnloop.exits_eval", "tb.learnloop.exits_report",
+                      "tb.learnloop.exits_search", "tb.learnloop.exits_trial", "tb.learnloop.exits_versions",
+                      "tb.learnloop.exits_watch")                                            # модули цикла выходов (18.2)
+PROTECTED_CONFIG_FILES = CONFIG_FILES                                                        # хеши до/после прохода (18.5)
+# единственные писатели config/ в tb.knowledge (18.2): CLI владельца, у каждого один файл
+CONFIG_WRITER_FILES = {"tb.knowledge.learn_cli": "learnloop.json", "tb.knowledge.exits_cli": "exits.json"}
+
 
 def _fname(f):
     if isinstance(f, ast.Attribute):
@@ -353,6 +372,23 @@ class ConfigWrites(object):
 
     def writers(self, module, source=None):
         return sorted(k for k, v in self.module(module, source).items() if v["ref"] and v["write"])
+
+
+def config_writers(mods, target=None):
+    """Писатели config/ (Requirement 8.4): модуль -> функции. target — имя файла (None — любой путь в config/)."""
+    scan = ConfigWrites(target=target)
+    return dict((m, scan.writers(m)) for m in mods if scan.writers(m))
+
+
+def exit_logic_hit(source, module="tb.logic.x"):
+    """Чистота логики выходов (Requirement 18.1): запреты tb.logic и из tb только tb.logic.* (для замыкания по импортам)."""
+    return logic_violations(source) + ["tb:" + n for n in imports_of(source, module)
+                                       if n.startswith("tb.") and not under(n, ("tb.logic",))]
+
+
+def exitdoc_hit(source, module="tb.core.exitdoc"):
+    """Слои tb.core.exitdoc (Requirement 18.3): запрещённые пакеты прямо; транзитивно — через closure_hits."""
+    return sorted(n for n in imports_of(source, module) if under(n, EXITDOC_BANNED))
 
 
 def logic_violations(source):
@@ -943,39 +979,35 @@ class TestLayers(unittest.TestCase):
 
     def test_learnloop_does_not_write_config(self):
         """Запись в config/ из пакета tb.learnloop невозможна (Requirement 8.4): ни одна функция не строит путь в config/ и не пишет файл;
-        paths.config есть только в загрузчике conf (только чтение)."""
+        paths.config есть только в загрузчиках conf и exits_conf (R4, config/exits.json; только чтение)."""
         scan = ConfigWrites()
         bad = {}
+        loaders = ("tb.learnloop.conf", "tb.learnloop.exits_conf")
         for path in py_files("learnloop"):
             mod = module_name(path)
             w = scan.writers(mod)
             if w:
                 bad[mod] = w
-            if mod != "tb.learnloop.conf" and "paths.config" in read(path):
+            if mod not in loaders and "paths.config" in read(path):
                 bad.setdefault(mod, []).append("paths.config")
         self.assertEqual(bad, {})
-        conf = scan.module("tb.learnloop.conf")
-        self.assertTrue(conf["load"]["ref"])                     # анализатор видит путь загрузчика
-        self.assertFalse(any(v["write"] for v in conf.values()))
+        for mod in loaders:
+            conf = scan.module(mod)
+            self.assertTrue(conf["load"]["ref"], mod)                # анализатор видит путь загрузчика
+            self.assertFalse(any(v["write"] for v in conf.values()), mod)
         self.assertTrue(scan.module("tb.learnloop.watch")["write_lease"]["write"])      # и видит запись аренды (в runtime/, не в config/)
         self.assertFalse(scan.module("tb.learnloop.watch")["write_lease"]["ref"])
+        self.assertEqual(config_writers([module_name(p) for p in py_files("learnloop")], target="exits.json"), {})
 
     def test_promotion_mode_writer_only_learn_cli(self):
-        """config/learnloop.json (promotion.mode) пишет только tb.knowledge.learn_cli.set_mode (CLI вне пакета); других писателей config/ в
-        tb.knowledge и tb.learnloop нет."""
-        scan = ConfigWrites(target="learnloop.json")
-        found = {}
-        for d, _, fs in os.walk(SRC):
-            for f in sorted(fs):
-                if f.endswith(".py"):
-                    mod = module_name(os.path.join(d, f))
-                    w = scan.writers(mod)
-                    if w:
-                        found[mod] = w
-        self.assertEqual(found, {"tb.knowledge.learn_cli": ["set_mode"]})
-        anyc = ConfigWrites()
-        found = dict((m, anyc.writers(m)) for m in [module_name(p) for p in py_files("knowledge")] + [module_name(p) for p in py_files("learnloop")])
-        self.assertEqual(dict((m, w) for m, w in found.items() if w), {"tb.knowledge.learn_cli": ["set_mode"]})
+        """Requirement 18.2, свойство 23: config/learnloop.json (promotion.mode) пишет только tb.knowledge.learn_cli.set_mode,
+        config/exits.json (promotion.mode) — только tb.knowledge.exits_cli.set_mode (R4, задачи 21 и 23); других писателей
+        config/ в tb.knowledge и tb.learnloop нет. Единственный источник ожиданий — CONFIG_WRITER_FILES."""
+        all_mods = [module_name(os.path.join(d, f)) for d, _, fs in os.walk(SRC) for f in sorted(fs) if f.endswith(".py")]
+        for mod, fname in sorted(CONFIG_WRITER_FILES.items()):
+            self.assertEqual(config_writers(all_mods, target=fname), {mod: ["set_mode"]}, fname)
+        gate_mods = [module_name(p) for p in py_files("knowledge")] + [module_name(p) for p in py_files("learnloop")]
+        self.assertEqual(config_writers(gate_mods), dict((m, ["set_mode"]) for m in CONFIG_WRITER_FILES))
 
     def test_loop_checkers_catch_violations(self):
         """Проверки слоёв и записей цикла ловят искусственные нарушения (иначе тесты выше ничего не доказывают)."""
@@ -1098,6 +1130,123 @@ class TestLayers(unittest.TestCase):
             if found:
                 bad[module_name(path)] = found
         self.assertEqual(bad, {})
+
+    # ---------------------------------------------------------------- R4: читатель политики выхода (задача 14, свойство 19)
+    def test_exitdoc_layers(self):
+        """Requirement 18.3: tb.core.exitdoc не импортирует tb.learnloop, tb.knowledge, tb.labels, tb.venues, tb.executor — прямо и
+        транзитивно по внутренним импортам tb; модуль только читает runtime/ и config/exits.json (ни записи файла, ни функции-писателя)."""
+        mod = "tb.core.exitdoc"
+
+        src = read(os.path.join(SRC, "core", "exitdoc.py"))
+        self.assertFalse(exitdoc_hit(src, mod))
+        self.assertEqual(closure_hits([mod], exitdoc_hit, disk_source), {})
+        self.assertEqual(learn_write_violations(src), [])
+        self.assertEqual(config_writers([mod]), {})
+        mods = {"tb.core.exitdoc": "import tb.knowledge"}
+        self.assertEqual(closure_hits(["tb.core.exitdoc"], exitdoc_hit, mods.get), {"tb.core.exitdoc": ["tb.knowledge"]})
+
+    def test_exits_logic_modules_are_pure(self):
+        """Requirement 18.1, свойство 23: tb.logic.exitpol/exitsim/qty подчиняются чистоте tb.logic (без os, сети, часов, open) и
+        импортируют из tb только tb.logic.* прямо и транзитивно по tb.logic."""
+        for name in EXITS_LOGIC:
+            path = os.path.join(SRC, "logic", name + ".py")
+            self.assertTrue(os.path.isfile(path), name)
+            self.assertEqual(logic_violations(read(path)), [], name)
+        self.assertEqual(closure_hits(["tb.logic." + n for n in EXITS_LOGIC], exit_logic_hit, disk_source), {})
+        for src in ("import os", "import time\nt = time.time()", "x = open('f')", "from tb import paths",
+                    "from tb.core import journal", "def f():\n    from tb.venues import bybit"):
+            self.assertTrue(exit_logic_hit(src, "tb.logic.exitsim"), src)
+        self.assertFalse(exit_logic_hit("import math\nfrom tb.logic import exitpol\nfrom tb.logic import qty as Q", "tb.logic.exitsim"))
+        mods = {"tb.logic.exitpol": "from tb.core import journal"}
+        self.assertIn("tb:tb.core", closure_hits(["tb.logic.exitpol"], exit_logic_hit, mods.get).get("tb.logic.exitpol", []))
+
+    def test_learnloop_exits_modules_pass_loop_rules(self):
+        """Requirement 18.2, свойство 23: модули tb.learnloop.exits_* входят в loop_hit (мозг, шлюз, MCP, биржа, исполнитель,
+        управление, launcher, ключи; tb.llm кроме usage) и в ConfigWrites (цикл не пишет в config/), прямо и транзитивно."""
+        mods = sorted(module_name(p) for p in py_files("learnloop") if os.path.basename(p).startswith("exits_"))
+        for known in EXITS_LOOP_MODULES:
+            self.assertIn(known, mods)
+        bad = {}
+        for mod in mods:
+            src = disk_source(mod)
+            issues = loop_hit(src, mod) + ["lit:" + x[:30] for x in key_literals(src)]
+            if issues:
+                bad[mod] = issues
+        self.assertEqual(bad, {})
+        self.assertEqual(config_writers(mods), {})
+        self.assertEqual(config_writers(mods, target="exits.json"), {})
+        trans = closure_hits(mods, lambda s, m: [n for n in loop_hit(s, m) if not under(n, LOOP_CLI)], disk_source)
+        self.assertEqual(trans, {})
+        for src in ("import tb.brain.runner", "from tb.gateway import core", "from tb import venues", "from tb.executor import ports",
+                    "from tb.control import client", "from tb import launcher", "import tb.mcp.server", "from tb.core import secretfile",
+                    "def f():\n    from tb.brain.validate import v"):
+            self.assertTrue(loop_hit(src, "tb.learnloop.exits_watch"), src)
+            self.assertTrue(loop_hit(src, "tb.learnloop.exits_eval"), src)
+        self.assertFalse(loop_hit("from tb.knowledge import store2\nfrom tb.labels import store\nfrom tb.logic import exitpol\n"
+                                  "from tb.core import exec_cfg\nfrom tb.llm import usage", "tb.learnloop.exits_eval"))
+
+    def test_exits_cycle_keeps_protected_config_hashes(self):
+        """Requirement 18.5, свойство 23: полный проход шагов цикла выходов на фикстурной базе во временном корне не меняет
+        config/risk_profile.json, config/risk_levels.json, config/exec_limits.json — хеши до и после совпадают."""
+        from tb.knowledge import store2
+        from tb.labels import store as LST
+        from tb.learnloop import conf as LC
+        from tb.learnloop import cycle as CY
+        from tb.learnloop import exits_conf as EC
+        from tb.learnloop import exits_versions as XV
+
+        root = tempfile.mkdtemp(prefix="tblay_exits_")
+        self.addCleanup(shutil.rmtree, root, True)
+        os.makedirs(os.path.join(root, "config"))
+        os.makedirs(os.path.join(root, "runtime"))
+        cfg_dir = os.path.join(_bootstrap.ROOT, "config")
+        for name in sorted(os.listdir(cfg_dir)):
+            if name.endswith(".json") and os.path.isfile(os.path.join(cfg_dir, name)):
+                shutil.copy(os.path.join(cfg_dir, name), os.path.join(root, "config", name))
+
+        def hashes():
+            out = {}
+            for name in PROTECTED_CONFIG_FILES:
+                with open(os.path.join(root, "config", name), "rb") as f:
+                    out[name] = hashlib.sha256(f.read()).hexdigest()
+            return out
+
+        before = hashes()
+        now = 1793750400                                             # 2026-11-04T00:00:00Z
+        lcfg, lerrs = LC.load(root)
+        self.assertEqual(lerrs, [])
+        conn = LST.open_rw(root)
+        self.addCleanup(conn.close)
+        store2.migrate_x1(conn, root, backup=False, now=now)
+        store2.migrate_v2a(conn, root, enabled=True, backup=False, now=now)
+        self.assertEqual(EC.load(root)[1], [])
+        self.assertEqual(XV.init(conn, EC.current_floor(root), now - 12 * 86400), "X-0001")
+        steps = [s for s in CY.default_steps() if s.name.startswith("exits_")]
+        self.assertEqual(sorted(s.name for s in steps), ["exits_after", "exits_eval", "exits_promote", "exits_register",
+                                                         "exits_search", "exits_verdicts", "exits_watch"])
+        cyc = CY.Cycle(root, lcfg, steps=steps)
+        ctx = CY.Ctx(root, conn, lcfg, now, cycle=cyc)
+        ran = dict((s.name, getattr(CY, "step_" + s.name)(ctx)) for s in steps)
+        self.assertEqual(sorted(ran), sorted(s.name for s in steps))
+        self.assertEqual([n for n, rep in ran.items() if "code" not in rep], [])
+        self.assertEqual(hashes(), before)
+
+    def test_exits_checkers_catch_violations(self):
+        """Проверяльщики циклов выходов ловят искусственные нарушения (иначе тесты свойства 23 ничего не доказывают)."""
+        for src in ("from tb import learnloop", "from tb.knowledge import store2", "from tb.labels import paths",
+                    "from tb import venues", "from tb.executor import ports", "def f():\n    from tb.labels import store"):
+            self.assertTrue(exitdoc_hit(src, "tb.core.exitdoc"), src)
+        self.assertFalse(exitdoc_hit("from tb import paths\nfrom tb.logic import exitpol", "tb.core.exitdoc"))
+        for src in ("import tb.brain.runner", "from tb import gateway", "from tb.core import secretfile"):
+            self.assertTrue(exit_logic_hit(src, "tb.logic.exitpol"), src)
+        self.assertFalse(exit_logic_hit("import math\nfrom tb.logic import exitpol", "tb.logic.exitpol"))
+        for src in ("import tb.venues.bybit", "from tb.executor import ports", "from tb import launcher", "from tb.llm import keys"):
+            self.assertTrue(loop_hit(src, "tb.learnloop.exits_search"), src)
+        self.assertFalse(loop_hit("from tb.logic import exitsim\nfrom tb.labels import store", "tb.learnloop.exits_search"))
+        head = "from tb import paths\nimport os\n"
+        body = "def w(r):\n    p = paths.config('exits.json', root=r)\n    open(p, 'w').close()\n"
+        self.assertEqual(ConfigWrites(target="exits.json").writers("tb.learnloop.t_w", head + body), ["w"])
+        self.assertEqual(config_writers(["tb.learnloop.exits_search"], target="exits.json"), {})
 
     def test_layer_dirs_exist(self):
         for layer in ("brain", "logic", "core", "dash", "executor", "venues", "gateway", "mcp", "llm", "control", "labels", "learn",

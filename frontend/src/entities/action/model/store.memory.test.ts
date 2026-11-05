@@ -18,7 +18,10 @@ import { useActionStore } from './store'
 import { MEMORY_UNAVAILABLE_TEXT, MEMORY_WARN_TEXT, memoryChallenge, memoryFailure } from '../lib/memory'
 
 const msg = (data: unknown): LiveMessage => ({ topic: 't', seq: 0, ts: 0, data })
-const MEMORY = { csrf: 'mcsrf', actions: ['lesson_reject', 'rule_disable', 'rules_disable_all'], confirm: { lesson_reject: [], rule_disable: ['rule_off', 'block_forever'], rules_disable_all: ['switch_off', 'all_off', 'block_forever'] } }
+const MEMORY = {
+  csrf: 'mcsrf', actions: ['lesson_reject', 'rule_disable', 'rules_disable_all', 'exits_rollback'],
+  confirm: { lesson_reject: [], rule_disable: ['rule_off', 'block_forever'], rules_disable_all: ['switch_off', 'all_off', 'block_forever'], exits_rollback: ['exits_floor', 'exits_open_positions'] },
+}
 const WARN = [{ id: 'rule_off', text: 'правило перестанет применяться: новая версия rulebook без него' }, { id: 'block_forever', text: 'условие уходит в чёрный список; снять — ./tb rulebook unblock' }]
 
 function setup(memory: unknown = MEMORY) {
@@ -86,6 +89,22 @@ describe('аварийные действия «Памяти» через общ
     expect(s.phase).toBe('failed')
     expect(s.error).toMatch(/выключатель записан/)
     expect(s.errorDetails).toMatch(/E_RETRY/)
+  })
+
+  it('вернуть границу выходов: challenge, окно «Принимаю риски», команда с accepted', () => {
+    const s = setup()
+    expect(s.canMemory('exits_rollback')).toBe(true)
+    expect(s.run({ channel: 'memory', action: 'exits_rollback', args: {}, title: 'Выходы: вернуть границу' })).toBe(true)
+    expect(last()).toMatchObject({ op: 'exits_rollback', kind: 'challenge', csrf: 'mcsrf' })
+    reply({ ok: true, code: 'CONFIRM', warnings: [{ id: 'exits_floor', text: 'x' }, { id: 'exits_open_positions', text: 'y' }], needs_confirm: true })
+    expect(s.phase).toBe('confirm')
+    expect(s.risks.map((r) => r.text)).toEqual([MEMORY_WARN_TEXT.exits_floor, MEMORY_WARN_TEXT.exits_open_positions])
+    s.accept()
+    expect(last()).toMatchObject({ op: 'exits_rollback', kind: 'command', accepted: ['exits_floor', 'exits_open_positions'] })
+    reply({ ok: true, code: 'OK' })
+    expect(s.phase).toBe('done')
+    expect(s.resultText).toBe('Выходы вернулись к границе защиты. Открытые позиции не изменились.')
+    expect(s.toasts).toEqual([])
   })
 
   it('отмена в окне: команда не уходит; поздний ответ не меняет состояние', () => {

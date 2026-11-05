@@ -40,7 +40,9 @@ def health(ex, final=False):
             "loop_lag_ms": 0, "plans": plans, "positions": len(ex.exch_pos), "kill": exec_cfg.kill_state(ex.root) is not None,
             "hold": holds[0] if holds else None, "hold_reasons": holds, "last_reconcile_ts": ex.last_reconcile_ts,
             "reconcile_age_s": (round(now - ex.last_reconcile_ts, 1) if ex.last_reconcile_ts else None), "diffs": len(ex.diffs),
-            "last_event_seq": ex.last_event_seq, "profile_hash": ex.profile_hash, "bad_ticks": ex.bad_ticks}
+            "last_event_seq": ex.last_event_seq, "profile_hash": ex.profile_hash, "bad_ticks": ex.bad_ticks,
+            "exit_status": (ex.exit_status or {}).get("code"), "exit_why": (ex.exit_status or {}).get("why"),
+            "exit_plan": (ex.exit_status or {}).get("plan")}
 
 
 def snapshot(ex):
