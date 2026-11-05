@@ -30,5 +30,10 @@ onMounted(() => trading.start())
 @media (max-width: 720px) {
   .bar { padding-left: 58px; }        /* место под кнопку боковой колонки */
 }
+/* На узком экране шапка липкая: убираем переключатель темы и текст статуса, чтобы режим и индикатор встали в одну строку. */
+@media (max-width: 520px) {
+  .bar :deep(.theme) { display: none; }
+  .bar :deep(.ps .txt) { display: none; }
+}
 .grow { flex: 1 1 0; }
 </style>
