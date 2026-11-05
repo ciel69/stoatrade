@@ -52,6 +52,12 @@ class HomeEventsTopics(Fx):
         w(self.root, "state/control/platform.json", json.dumps({"state": "stopped", "mode": "live"}))
         self.assertEqual(topics.default_mode(self.root), "paper")                                       # остановленная платформа: безопасный режим по умолчанию
 
+    def test_position_margin_prefers_journal_and_falls_back_to_notional_over_leverage(self):
+        p = topics._position({"qty": 2.0, "avg": 10.0, "lev": 5.0, "targets": []}, {})
+        self.assertEqual(p["margin"], 4.0)
+        p = topics._position({"qty": 2.0, "avg": 10.0, "lev": 5.0, "targets": []}, {"margin": 3.5})
+        self.assertEqual(p["margin"], 3.5)
+
     def test_home_pnl_today_counts_all_trades_even_flagged_artifacts(self):
         today = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         rows = []

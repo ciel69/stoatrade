@@ -113,6 +113,7 @@ ES_REVISE_ONLY_NOTE = ("\n\nTOOL MODE (this run). The signal is idea_stale: ther
                        "Do not write prices or JSON. If a call is rejected with codes, fix it with another call; after one action succeeded stop.")
 ES_TOOL_NOTE = ("\n\nTOOL MODE (this run). Act by calling exactly ONE tool: es_take (enter: the n of a brief.cands row with ok=true), es_skip (no entry, with a code) or "
                 "es_watch (wait for the level of candidate n). Do not compute or write numbers and do not write the entry/1 JSON: the platform takes them from the candidate. "
+                "At risk 4-5 a row with confirm=none and tag no-confirm is an early zone entry without the 5m candle, at a smaller size: take it only if that extra risk is intended. "
                 "No ok candidate fits: es_skip or es_watch. If a call is rejected with codes, fix it with another call; after one action succeeded stop.")
 
 PM_TOOL_NOTE = ("\n\nTOOL MODE (this run). Act by calling exactly ONE tool: pm_hold, pm_move_stop, pm_partial_close, pm_close, pm_cancel, pm_amend, pm_extend_hold, pm_hold_plan, pm_release_plan or pm_escalate "
@@ -485,7 +486,8 @@ class Runner(object):
                 return out
             if self._plans_exhausted(agent_id):             # лимит планов в час шлюза уже исчерпан: план всё равно не пройдёт, модель не зовём
                 out.update(outcome="no_action", code="RATE_PLANS")
-                self._journal(job, role, agent_id, None, "skip", "RATE_PLANS", "лимит планов в час исчерпан (plans_per_hour в agents.json), вызов модели пропущен", meta, None, meter, assign)
+                from tb.gateway import audit
+                self._journal(job, role, agent_id, None, "skip", "RATE_PLANS", "лимит планов: %s за последние 60 минут; следующий слот через %s" % (((self.agents.get(agent_id) or {}).get("limits") or {}).get("plans_per_hour"), audit.wait_text(self._plans_next_slot(agent_id))), meta, None, meter, assign)
                 return out
         try:
             text, ctx = self._input(role, job, agent_id, meta)
@@ -1092,6 +1094,17 @@ class Runner(object):
             return audit.count_recent(agent_id, "submit_plan", 3600.0, root=self.root, now=self.clock()) >= lim
         except Exception:
             return False
+
+    def _plans_next_slot(self, agent_id):
+        """Секунд до следующего слота в скользящем окне plans_per_hour; 0, если слот есть."""
+        try:
+            from tb.gateway import audit
+            lim = (((self.agents.get(agent_id) or {}).get("limits") or {}).get("plans_per_hour"))
+            if not isinstance(lim, int) or isinstance(lim, bool):
+                return 0.0
+            return audit.next_slot(agent_id, "submit_plan", lim, 3600.0, root=self.root, now=self.clock())
+        except Exception:
+            return 0.0
 
     WATCH_TTL_H = 4.0
     WATCH_MAX_ACTIVE = 10

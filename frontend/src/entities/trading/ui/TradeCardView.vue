@@ -11,7 +11,7 @@ const emit = defineEmits<{ select: [] }>()
 const win = computed(() => (props.trade.pnl ?? 0) > 0)
 const tone = (x: number | null) => ((x ?? 0) > 0 ? 'up' : (x ?? 0) < 0 ? 'down' : '')
 const held = computed(() => (props.trade.ts_open != null && props.trade.ts_close != null ? props.trade.ts_close - props.trade.ts_open : null))
-const EXIT: Record<string, string> = { sl: 'стоп', tp: 'тейк', manual: 'вручную', time: 'по времени' }
+const EXIT: Record<string, string> = { sl: 'стоп', tp: 'тейк', manual: 'вручную', time: 'по времени', partial: 'частичное' }
 const GOOD = new Set(['good', 'good-process-bad-luck'])
 
 const dateFmt = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false })

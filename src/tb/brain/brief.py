@@ -1616,7 +1616,7 @@ def build(scope="start", since=None, budget_tokens=None, root=None, now=None, co
         b["market"] = mk or None
         b["playbook"] = _safe("playbook", lambda: _b_playbook(c, b, job_sym), missing) if (job_sym and not involved) else None      # только поиск входа: у событий планов карточки не нужны
         b["rulebook"] = _safe("rulebook", lambda: _b_rulebook(c), missing) if (job_sym and not involved) else None      # R2: действующие правила (применяет код)
-        b["cands"] = _safe("cands", lambda: cands_mod.candidates(b, job_sym, root=root, event_seq=event_seq, now=now, view=_rule_view(c)), missing) \
+        b["cands"] = _safe("cands", lambda: cands_mod.candidates(b, job_sym, root=root, event_seq=event_seq, now=now, view=_rule_view(c), high_risk=True), missing) \
             if (job_sym and not involved) else None      # предрасчёт входов (уровень, стоп, цели, RR, горизонт): модель выбирает, а не считает; правила rulebook размечают RULE_<id>
         if job_sym:
             b["deriv"] = _safe("deriv", lambda: _b_deriv(root, now, job_sym), missing)          # деривативы монеты события: funding, OI за сутки, лонг/шорт, базис к другим биржам
@@ -1645,7 +1645,21 @@ def build(scope="start", since=None, budget_tokens=None, root=None, now=None, co
         budget_tokens += tokens(b["memory"])          # блок памяти имеет собственный лимит (<= 450) и не вытесняет остальное досье из бюджета по умолчанию
     if own_budget and b.get("struct"):
         budget_tokens += tokens(b["struct"])          # struct (структура рынка) тоже со своим лимитом (STRUCT_BUDGET / STRUCT_EVENT_BUDGET): не вытесняет остальное досье
+    cands_full = b.get("cands")                       # до обрезки: high-risk варианты нельзя терять вместе с блоком
     b = fit(b, budget_tokens)
+    if cands_full and "cands" in (b.get("cut") or []):
+        hr = [dict(r) for r in cands_full if isinstance(r, dict) and r.get("high_risk") and r.get("ok")]
+        if hr:
+            rest = [dict(r) for r in cands_full if isinstance(r, dict) and r.get("ok") and not r.get("high_risk")]
+            pick = (hr[:1] + rest[:1]) or hr[:1]
+            for i, r in enumerate(pick, 1):
+                r["n"] = i
+            b["cands"] = pick
+            b["cut"] = [x for x in (b.get("cut") or []) if x != "cands"]
+            if not b["cut"]:
+                b.pop("cut", None)
+            if isinstance(b.get("data"), dict):
+                b["data"]["cands"] = len(pick)
     if isinstance(b.get("data"), dict) and any(x in (b.get("cut") or []) for x in ("struct", "cands")):
         b["data"] = dict(b["data"], ready=False, missing=sorted(set(b["data"].get("missing") or []) | {"struct_cut"}))      # бюджет срезал структуру/кандидатов: модель данных не видит, входа нет
     return b

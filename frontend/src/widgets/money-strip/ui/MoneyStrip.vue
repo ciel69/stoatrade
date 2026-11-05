@@ -13,11 +13,11 @@ const pnlTone = computed(() => ((m.value?.pnl_today ?? 0) > 0 ? 'up' : (m.value?
 
 <template>
   <section class="money" aria-label="Деньги" :aria-busy="!m">
-    <div class="fig">
+    <div class="fig" title="Суммарный риск до стопов по открытым позициям; это не занятая маржа.">
       <div class="v">{{ fixed(m?.under_risk) }}<small> USDT</small></div>
       <div class="c">под риском</div>
     </div>
-    <div class="fig">
+    <div class="fig" title="Остаток дневного лимита убытка; отрицательное значение означает превышение.">
       <div class="v">{{ m?.day_room != null ? fixed(Math.min(m.day_room, m.day_limit ?? m.day_room)) : '–' }}<small> из {{ fixed(m?.day_limit) }}</small></div>
       <UiMeter v-if="m" :fill="dayFill" :level="dayLevel" label="запас до дневного лимита" />
       <div class="c">запас до лимита дня</div>

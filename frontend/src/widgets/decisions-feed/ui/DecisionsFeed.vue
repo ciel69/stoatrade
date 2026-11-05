@@ -30,9 +30,9 @@ const timeFmt = new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-d
 const at = (d: DecisionItem, f: Intl.DateTimeFormat) => (d.t != null ? f.format(new Date(d.t * 1000)) : d.ts.slice(11, 19))
 
 function result(d: DecisionItem): { text: string; tone: 'ok' | 'bad' | 'warn' | 'neutral' } {
-  if (d.denied) return { text: d.code ? `отказ: ${decisionReason(d.code)}` : 'отказ', tone: 'bad' }
+  if (d.denied) return { text: d.code ? `отказ: ${decisionReason(d.code, d.why)}` : 'отказ', tone: 'bad' }
   if (d.idle) return { text: 'ждёт', tone: 'neutral' }
-  if (d.noop) return { text: d.code ? `пропуск: ${decisionReason(d.code)}` : 'пропуск', tone: 'warn' }
+  if (d.noop) return { text: d.code ? `пропуск: ${decisionReason(d.code, d.why)}` : 'пропуск', tone: 'warn' }
   if (d.ok === true) return { text: 'выполнено', tone: 'ok' }
   return { text: KIND_RU[d.kind] ?? d.kind, tone: 'neutral' }
 }

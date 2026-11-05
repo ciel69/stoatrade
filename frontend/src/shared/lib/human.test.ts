@@ -67,7 +67,9 @@ describe('словарь знает всё, что показывает инте
   it('причины отказов решений: известные по-русски, неизвестная не светит кодом', () => {
     for (const c of DECISION_CODES) expect(decisionReason(c)).not.toMatch(/[A-Z_]{3,}/)
     expect(decisionReason('NO_SLOTS')).toBe('нет свободных мест под позиции')
+    expect(decisionReason('NO_DATA')).toBe('нет полных данных досье')
     expect(decisionReason('NEW_CODE_X')).toBe('причина не расшифрована')
+    expect(decisionReason('NEW_CODE_X', 'SOL | цена ушла от уровня')).toBe('цена ушла от уровня')
     expect(decisionReason(null)).toBe('')
   })
 })

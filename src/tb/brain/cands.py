@@ -230,7 +230,7 @@ def apply_rules(out, sym, root=None, event_seq=None, now=None, view=None):
     return out
 
 
-def candidates(brief, sym, ctx=None, root=None, event_seq=None, now=None, view=None):
+def candidates(brief, sym, ctx=None, root=None, event_seq=None, now=None, view=None, high_risk=False):
     """-> [кандидат] (ok сначала, по убыванию rr_net) или None. ctx: validate.entry_context(brief, {"sym": sym}) (считается сам, если не передан).
     root — корень платформы (конфиг геометрии, rulebook, шина); event_seq — событие задания раннера entry_scout (для chat None); view —
     готовый rulebook_view.active(root). Отсечённые правилом кандидаты остаются на своём месте с ok=false и fail=RULE_<id>."""
@@ -238,7 +238,7 @@ def candidates(brief, sym, ctx=None, root=None, event_seq=None, now=None, view=N
         return None
     ctx = ctx or V.entry_context(brief, {"sym": sym})
     cfg, ver = load_config(root)
-    out = G.candidates(V.level_pool(brief, sym), ctx, cfg)
+    out = G.candidates(V.level_pool(brief, sym), ctx, cfg, high_risk=high_risk)
     for r in out or []:
         r["geometry_ver"] = ver
     return apply_rules(out, sym, root, event_seq, now, view)

@@ -6,7 +6,7 @@ import { signed } from '@/shared/lib'
 /** Как закрываются сделки и в чём ошибки: длина полосы это число сделок (цвет нейтральный), результат группы подписан числом. */
 const trading = useTradingStore()
 const t = computed(() => trading.trades)
-const REASON: Record<string, string> = { sl: 'стоп', tp: 'тейк', manual: 'вручную', time: 'по времени' }
+const REASON: Record<string, string> = { sl: 'стоп', tp: 'тейк', manual: 'вручную', time: 'по времени', partial: 'частичное' }
 const max = (g: TradeGroup[]) => Math.max(1, ...g.map((x) => x.n))
 </script>
 

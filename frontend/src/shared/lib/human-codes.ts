@@ -133,11 +133,68 @@ const DECISIONS: Record<string, string> = {
   MIN_SIZE_SYM: 'размер меньше минимально допустимого',
   WIDE_RANGE: 'слишком широкий диапазон цены',
   DAY_NO_PLANS: 'в плане дня новых сделок нет',
+  NO_DATA: 'нет полных данных досье',
+  NO_CANDIDATES: 'нет подходящих кандидатов',
+  NO_PLAN: 'у события нет плана',
+  RATE_PLANS: 'лимит планов за последние 60 минут',
+  CHASE: 'цена ушла от уровня дальше допуска',
+  GUARD: 'не прошло проверку риска',
+  HOLD: 'пауза плана',
+  HOLD_IN_POSITION: 'пауза плана в позиции снята',
+  SKIP: 'пропуск по условиям',
+  STOP_RATE: 'слишком частые подтяжки стопа',
+  STOP_STEP: 'шаг стопа меньше минимального',
+  STOP_INTERVAL: 'подтяжка стопа слишком часто',
+  STOP_TOO_CLOSE: 'стоп слишком близко к цене',
+  STOP_NOT_TIGHTER: 'стоп не строже текущего',
+  WRONG_SIDE: 'стоп или тейк не с той стороны',
+  TOO_CLOSE: 'слишком близко к цене',
+  MIN_SIZE: 'размер меньше минимума',
+  SNAPSHOT: 'политика выхода недоступна, работает защитный floor',
+  EXIT_POLICY_FALLBACK: 'политика выхода недоступна, работает защитный floor',
+  NO_SESSION: 'нет торговой сессии',
+  NOT_SENT: 'команда не отправлена',
+  QUEUED: 'команда в очереди',
+  ESCALATE: 'эскалация: данных не хватает',
+  E_STATUS_FORBIDS: 'статус плана не допускает действие',
+  E_REV_STALE: 'устаревшая ревизия плана',
+  E_REVIEW: 'ревьюер забраковал решение',
+  E_TARGET_SIDE: 'тейк не с той стороны',
+  E_STOP_SIDE: 'стоп не с той стороны',
+  E_LEVEL_DISTANCE: 'цена слишком далеко от уровня',
+  E_ID: 'некорректный идентификатор',
+  E_STOP_PCT: 'стоп шире допустимого',
+  NO_WHY: 'модель не дала объяснение',
+  E_SYMBOL_FORBIDDEN: 'символ запрещён для агента',
+  E_MODE_FORBIDDEN: 'режим запрещён для агента',
+  E_SIZE_MULT: 'множитель размера вне допуска',
+  E_RISK_LIMIT: 'превышен лимит риска',
+  E_RISK_PCT: 'превышен процент риска',
+  E_RISK_UNKNOWN: 'риск не рассчитан',
+  E_ADD_FORBIDDEN: 'добор запрещён',
+  E_STOP_WIDEN: 'нельзя расширять стоп',
+  E_NO_CONFIRM: 'вход без подтверждения запрещён',
+  E_HOLD_EXTEND: 'продление удержания запрещено',
+  E_TTL: 'срок плана истёк',
+  E_RR: 'соотношение риск/прибыль ниже нормы',
+  E_NOT_READY: 'план ещё не готов',
+  E_SCHEMA: 'команда не соответствует схеме',
+  E_TOO_LARGE: 'команда слишком большая',
+  E_RATE_PLANS: 'лимит планов за последние 60 минут',
 }
 
 /** Причина отказа или пропуска в решении: простая фраза; неизвестный код не показывается. */
-export function decisionReason(code: string | null | undefined): string {
+export function decisionReason(code: string | null | undefined, why?: string | null): string {
   if (!code) return ''
-  return DECISIONS[code.toUpperCase()] ?? 'причина не расшифрована'
+  const key = code.toUpperCase()
+  const base = key.split(':')[0]
+  const hit = DECISIONS[key] ?? DECISIONS[base]
+  if (hit) return hit
+  const own = typeof why === 'string' ? why.trim() : ''
+  if (own) {
+    const tail = own.includes('|') ? own.split('|').slice(1).join('|').trim() : own
+    return tail.replace(/^[A-Z_]+:\s*/, '').slice(0, 90)
+  }
+  return 'причина не расшифрована'
 }
 export const DECISION_CODES = Object.keys(DECISIONS)
