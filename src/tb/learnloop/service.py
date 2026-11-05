@@ -5,7 +5,7 @@ runtime/platform/learnloop.hb.json (каждые 5 с и между шагами
 Окружение чистится как у сервиса labels (platform.services.labels_secret): ключей нет, сети нет; в шину пишутся только события rulebook_promoted/rulebook_rollback (всегда info, мозг не будят).
 
 learnloop.enabled=false (или битый config/learnloop.json): сервис живёт и пишет heartbeat «выключен», базу не открывает, ничего не мигрирует
-и не пишет. enabled=true: open_rw, migrate_v2a (с копией premigrate) и init_rulebook (оба идемпотентны), регистрация писателем
+и не пишет. enabled=true: open_rw, migrate_v2a (с копией premigrate), migrate_x1 (таблицы выходов R4) и init_rulebook (все идемпотентны), регистрация писателем
 runtime/knowledge.writers/<pid>.
 
 Повреждение (Requirement 2.11) — единственный исполнитель восстановления: DbCorruptError при открытии, повреждение в шаге цикла
@@ -174,7 +174,10 @@ class Service(object):
                 self.state, self.last_error = "db_error", type(e).__name__
             return False
         try:
+            v2_before = store2.version(conn)
             store2.migrate_v2a(conn, self.root, enabled=True, now=now, sleep=self.sleep)
+            v2_migrated_now = store2.version(conn) != v2_before
+            store2.migrate_x1(conn, self.root, backup=not v2_migrated_now, now=now, sleep=self.sleep)
             V.init_rulebook(conn, now)
         except store2.KnowledgeMigrationError as e:
             conn.close()
