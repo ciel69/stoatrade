@@ -1,7 +1,8 @@
 export { useLearningStore } from './model/store'
 export { BLOCK_STATUSES, LEARNING_MODES, isLearningMode } from './model/types'
 export type {
-  BlockStatus, DisciplineBlock, DisciplineWeek, EconomicsBlock, EconomicsWeek, Est, ExitsBlock, ExitsWindow, LearningBlock, LearningDetail, LearningMeta, LearningMode, LearningVerdict,
+  BlockStatus, DisciplineBlock, DisciplineWeek, EconomicsBlock, EconomicsWeek, Est, ExitsBlock, ExitsDiff, ExitsR4, ExitsR4Cap, ExitsR4Costs, ExitsR4D, ExitsR4Db, ExitsR4State,
+  ExitsR4Trial, ExitsR4Watch, ExitsVersion, ExitsWindow, LearningBlock, LearningDetail, LearningMeta, LearningMode, LearningVerdict,
   MemoryBlock, PolicyRow, ResultBlock, SeriesPoint, SkipsBlock, SkipsWeek, Trend, VerdictGuards, VerdictState, VsPolicyBlock, WindowStat,
   BestLesson, HypFamily, HypRef, HypStatus, HypsBlock, LessonsBlock, LessonsByStatus, LessonsFunnel, LessonsWeek, RulebookPair, SwapPair, VersionPairBase, VersionSide,
   VersionVerdict, VersionsBlock,

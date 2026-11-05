@@ -49,7 +49,14 @@ function reject(l: LessonRow): void {
   if (!l.lesson_id) return
   action.run({ channel: 'memory', action: 'lesson_reject', args: { lesson_id: l.lesson_id }, title: `Отклонить урок ${l.lesson_id}`, onDone: refresh })
 }
+function rollbackExits(): void {
+  action.run({
+    channel: 'memory', action: 'exits_rollback', args: {}, title: 'Выходы: вернуть границу',
+    what: 'Политика выхода вернётся к полу защиты: новые входы получат версию OWNER_ROLLBACK. Открытые позиции не меняются.',
+  })
+}
 const canAll = computed(() => action.canMemory('rules_disable_all'))
+const canRollback = computed(() => action.canMemory('exits_rollback'))
 </script>
 
 <template>
@@ -61,10 +68,13 @@ const canAll = computed(() => action.canMemory('rules_disable_all'))
       </div>
       <div class="sos" role="group" aria-labelledby="sos-h">
         <p id="sos-h" class="sos-text">{{ EMERGENCY_TEXT }}</p>
-        <button type="button" class="kill" :disabled="busy || !canAll" @click="disableAll">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 3v9m5.7-6.7a8 8 0 1 1-11.4 0" /></svg>
-          {{ DISABLE_ALL_TITLE }}
-        </button>
+        <div class="sos-acts">
+          <button type="button" class="rollback" :disabled="busy || !canRollback" @click="rollbackExits">Выходы: вернуть границу</button>
+          <button type="button" class="kill" :disabled="busy || !canAll" @click="disableAll">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 3v9m5.7-6.7a8 8 0 1 1-11.4 0" /></svg>
+            {{ DISABLE_ALL_TITLE }}
+          </button>
+        </div>
       </div>
     </header>
 
@@ -96,13 +106,17 @@ const canAll = computed(() => action.canMemory('rules_disable_all'))
 .title { margin: 0; font-size: 24px; font-weight: 700; line-height: 1.1; letter-spacing: -0.02em; }
 .sum { margin: 0; font-size: 13px; color: var(--muted); }
 
-.sos { display: flex; align-items: center; gap: var(--space-3); max-width: 560px; }
-.sos-text { margin: 0; font-size: 12px; line-height: 1.45; color: var(--muted); text-wrap: pretty; }
-.kill { flex: none; display: inline-flex; align-items: center; gap: var(--space-2); min-height: 40px; padding: 0 var(--space-4); border: 0; border-radius: 10px; background: var(--neg); color: var(--bg); font-size: 13px; font-weight: 650; cursor: pointer; transition: filter var(--dur-fast) ease, opacity var(--dur-fast) ease, transform 120ms var(--ease-out); }
-.kill:disabled { opacity: 0.5; cursor: not-allowed; }
-.kill:active:not(:disabled) { transform: scale(0.98); }
+.sos { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--space-3); max-width: 820px; }
+.sos-text { flex: 1 1 260px; margin: 0; font-size: 12px; line-height: 1.45; color: var(--muted); text-wrap: pretty; }
+.sos-acts { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-2); }
+.kill, .rollback { flex: none; display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2); height: 40px; min-height: 40px; padding: 0 var(--space-4); border-radius: 10px; font-size: 13px; white-space: nowrap; cursor: pointer; transition: filter var(--dur-fast) ease, opacity var(--dur-fast) ease, transform 120ms var(--ease-out), background-color var(--dur-fast) ease, border-color var(--dur-fast) ease; }
+.kill { border: 0; background: var(--neg); color: var(--bg); font-weight: 650; }
+.rollback { border: 1px solid var(--line2); background: transparent; color: var(--text); font-weight: 600; }
+.kill:disabled, .rollback:disabled { opacity: 0.5; cursor: not-allowed; }
+.kill:active:not(:disabled), .rollback:active:not(:disabled) { transform: scale(0.98); }
 @media (hover: hover) and (pointer: fine) {
   .kill:not(:disabled):hover { filter: brightness(1.08); }
+  .rollback:not(:disabled):hover { background: var(--panel2); border-color: var(--muted); }
 }
 
 .grid { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr); gap: var(--space-4); align-items: start; }
@@ -119,6 +133,8 @@ const canAll = computed(() => action.canMemory('rules_disable_all'))
 }
 @media (max-width: 640px) {
   .sos { flex-direction: column; align-items: stretch; }
-  .kill { justify-content: center; }
+  .sos-text { flex: none; }
+  .sos-acts { flex-direction: column; }
+  .kill, .rollback { justify-content: center; width: 100%; }
 }
 </style>

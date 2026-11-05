@@ -17,6 +17,7 @@ move_target: {"target","price"}; add: {"risk_frac"}; notify: {"code"}; transitio
 import math
 
 from tb.logic import conds as C
+from tb.logic import exitpol
 from tb.logic.candles import tf_min
 
 ACTION_TYPES = ("fire_entry", "cancel_entry", "transition", "move_stop", "partial_close", "close", "move_target", "add", "notify")
@@ -327,11 +328,12 @@ PROFIT_MIN_R = 0.2           # стоп, перенесённый в прибы�
 STOP_SLIP_BPS = 5.0          # проскальзывание рыночного исполнения стопа (auto_protect.stop_slip_bps)
 
 
-def profit_floor(rt, limits, s):
+def profit_floor(rt, limits, s, min_profit_r=None):
     """Пол переноса стопа в прибыль: вход + издержки круга + проскальзывание стопа + min_profit_r R. -> цена или None.
     Указание владельца 2026-11-01: безубыток только в плюс (выше безубытка), иначе ждать с исходным стопом
     (EVAA, LIT, BTC закрылись по «безубытку» в минус: комиссии и проскальзывание больше зафиксированного хода).
-    Без секции auto_protect в limits (тесты, старые конфиги) пола нет."""
+    Без секции auto_protect в limits (тесты, старые конфиги) пола нет. `min_profit_r` (R4): пол прибыли композиции «политика ∘ пол»
+    из `do.min_profit_r` правила вместо auto_protect.min_profit_r."""
     ap = (limits or {}).get("auto_protect")
     pos = _pos(rt) or {}
     avg = _f(pos.get("avg"))
@@ -339,7 +341,7 @@ def profit_floor(rt, limits, s):
         return None
     ru = _f(pos.get("r_unit")) or abs(avg - (_f(pos.get("initial_stop")) or avg))
     slip = _f(ap.get("stop_slip_bps"))
-    mr = _f(ap.get("min_profit_r"))
+    mr = _f(min_profit_r) if _f(min_profit_r) is not None else _f(ap.get("min_profit_r"))
     bps = (_be_offset_bps(rt, limits) - BE_EXTRA_BPS) + (STOP_SLIP_BPS if slip is None else slip)
     return avg * (1 + s * bps / 1e4) + s * (PROFIT_MIN_R if mr is None else mr) * (ru or 0.0)
 
@@ -350,6 +352,8 @@ def trail_candidate(rule, plan, rt, view):
     `rule` = правило manage или его `do`. Режимы: candle_extreme (tf, n: за экстремумом n последних закрытых свечей tf, начавшихся
     после входа), atr (tf, n, mult: от лучшей цены на mult x ATR), percent (pct от лучшей цены), step_r (step_r: лесенка, при
     достижении k*step_r стоп на (k-1)*step_r R от входа). Везде `buffer_bps` отодвигает стоп от экстремума. Нет данных = None.
+    Режимы политики выхода R4 (правила xp_*): mfe_tiers (tiers [[at_r, keep], ...]: стоп = вход + keep x MFE по наибольшей достигнутой
+    ступени), atr_entry (mult, atr_pct: от лучшей цены на mult x ATR 5м на входе), pnl_keep (keep: стоп удерживает долю текущей прибыли).
 
     >>> from tb.logic.candles import MarketView
     >>> v = MarketView("SOL", 110.0, 110, 110, 110, 1.0, None, 1.0)
@@ -414,6 +418,35 @@ def trail_candidate(rule, plan, rt, view):
             return None
         lvl = avg + s * (k - 1) * step * ru
         return lvl * (1 - buf) if s == 1 else lvl * (1 + buf)
+    # ---- режимы политики выхода R4 (Requirement 9.7; только правила xp_* из exitpol.compile, в словаре плана их нет)
+    if mode == "mfe_tiers":     # ступени удержания: доля keep наибольшей ступени с at_r <= MFE, стоп = вход + keep x MFE
+        ru = _f(pos.get("r_unit")) or abs(avg - (_f(pos.get("initial_stop")) or avg))
+        tiers = do.get("tiers")
+        if not ru or ru <= 0 or not isinstance(tiers, (list, tuple)):
+            return None
+        mfe = s * (best - avg) / ru
+        k = None
+        for t in tiers:
+            a, kp = (_f(t[0]), _f(t[1])) if isinstance(t, (list, tuple)) and len(t) == 2 else (None, None)
+            if a is None or kp is None or not 0 < kp < 1:
+                return None
+            if a <= mfe + _EPS:
+                k = kp if k is None else max(k, kp)
+        if k is None:
+            return None
+        return avg + s * ru * mfe * k
+    if mode == "atr_entry":     # от лучшей цены на mult x ATR 5м на входе (atr_pct — ATR в % цены входа; живой ATR не используется)
+        mult, ap = _f(do.get("mult")), _f(do.get("atr_pct"))
+        if mult is None or mult <= 0 or ap is None or ap <= 0:
+            return None
+        a = ap / 100.0 * avg
+        return (best - mult * a) * (1 - buf) if s == 1 else (best + mult * a) * (1 + buf)
+    if mode == "pnl_keep":      # стоп удерживает keep текущей прибыли (stall: нет нового пика)
+        keep = _f(do.get("keep"))
+        pnl = s * (last - avg)
+        if keep is None or not 0 < keep < 1 or pnl <= 0:
+            return None
+        return avg + s * keep * pnl
     return None
 
 
@@ -457,6 +490,23 @@ def _auto_rules(limits):
     if act is not None and act > 0 and frac is not None and 0 < frac < 1:
         out.append({"id": "auto_lock", "when": {"kind": "pnl_r", "gte": act}, "do": {"action": "trail", "mode": "mfe_lock", "activate_r": act, "lock_frac": frac}})
     return out
+
+
+def _code_rules(limits):
+    """Правила кода раньше plan.manage. R4 (Requirement 9.2): в копии limits есть `exit_policy` (политика позиции) -> композиция
+    exitpol.compile(normalize(policy, F), F, exit_ctx) с полом F = exitpol.floor(auto_protect); сроки stall/decay/timeout — от
+    exit_ctx.max_hold_min (на входе), а не от lifecycle.max_hold_min. Нет `exit_policy` -> прежний _auto_rules (политика, равная полу,
+    даёт тот же состав)."""
+    ep = (limits or {}).get("exit_policy")
+    if not isinstance(ep, dict):
+        return _auto_rules(limits)
+    fl = exitpol.floor((limits or {}).get("auto_protect"))
+    ctx = (limits or {}).get("exit_ctx")
+    return exitpol.compile(exitpol.normalize(ep, fl), fl, ctx if isinstance(ctx, dict) else {})
+
+
+def _is_policy_rule(rid):
+    return isinstance(rid, str) and rid.startswith("xp_")
 
 
 def evaluate_manage(plan, rt, view, now, limits):
@@ -510,7 +560,7 @@ def evaluate_manage(plan, rt, view, now, limits):
         if once_state and rule is not None and rule.get("once"):
             mark(rid, 0, state="skipped")
 
-    for idx, rule in enumerate(_auto_rules(limits) + list(plan.get("manage") or [])):
+    for idx, rule in enumerate(_code_rules(limits) + list(plan.get("manage") or [])):
         if not isinstance(rule, dict) or not isinstance(rule.get("do") or {}, dict):
             continue
         rid, do = rule.get("id"), rule.get("do") or {}
@@ -555,8 +605,9 @@ def evaluate_manage(plan, rt, view, now, limits):
             if to is None or to <= 0:
                 skip(rid, "NO_DATA")
                 continue
-            if (act == "move_stop" and do.get("to") == "breakeven") or (act == "trail" and do.get("mode") == "mfe_lock"):
-                fl = profit_floor(rt, limits, s)
+            if ((act == "move_stop" and do.get("to") == "breakeven") or (act == "trail" and do.get("mode") == "mfe_lock")
+                    or (act == "trail" and _is_policy_rule(rid) and "min_profit_r" in do)):
+                fl = profit_floor(rt, limits, s, do.get("min_profit_r"))
                 if fl is not None:
                     if act == "move_stop":
                         to = max(to, fl) if s == 1 else min(to, fl)             # безубыток не ниже пола прибыли
@@ -580,6 +631,9 @@ def evaluate_manage(plan, rt, view, now, limits):
             continue
 
         a = None
+        if act in ("partial_close", "close") and _is_policy_rule(rid) and (not fresh or last is None):
+            skip(rid, "NO_DATA")             # R4 (Requirement 9.10): при устаревшей цене политика не закрывает; биржевой стоп на месте
+            continue
         if act == "partial_close":
             fr, fi = _f(do.get("frac_of_remaining")), _f(do.get("frac_of_initial"))
             if fr is not None and 0 < fr <= 1:
@@ -591,6 +645,11 @@ def evaluate_manage(plan, rt, view, now, limits):
             fr = 1.0 if fr is None else fr
             if 0 < fr <= 1:
                 a = _act("close", "RULE:%s" % rid, rule=rid, frac=fr, reason=do.get("reason", "rule"))
+        if a is not None and act in ("partial_close", "close"):
+            if do.get("exec") in ("maker", "taker"):     # R4: способ исполнения доли политики (maker-заявка или рынок, задача 17)
+                a["exec"] = do["exec"]
+            if _f(do.get("at_r")) is not None:          # уровень срабатывания компонента по цене (maker-заявка на уровне at_r)
+                a["at_r"] = _f(do["at_r"])
         elif act == "move_target":
             a = _move_target(rid, do, plan, rt, s, pos, cur_stop, out)
             if a is None:

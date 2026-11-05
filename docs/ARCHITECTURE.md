@@ -284,6 +284,79 @@ logic/learn_rules.py    + size_cap, require_confirm за флагом allow_size
 
 **Слои.** `tb.learnloop` по-прежнему не импортирует `tb.brain`, `tb.gateway`, `tb.llm` (кроме `usage`); `brain/learnjobs.py` не импортирует `tb.learnloop` (константы протокола совпадают, проверяет тест).
 
+## Политика выхода и сопровождение (R4, `.opencode/specs/R4-exits/`)
+Задача: проверить на будущих данных и применить выход лучше текущего `auto_protect`, не давая коду ослабить границу владельца. Пол защиты (`exitpol.floor` из `exec_limits.auto_protect`) — нижняя граница; действующая версия `X-NNNN` (политика `tb.exit_policy/1`) оценивается на путях, проходит испытание и продвигается или откатывается автоматически либо возвращается владельцем. Цикл выходов живёт в сервисе `learnloop`, в торговлю не вмешивается: исполнитель читает только снимок и аренду (`tb.core.exitdoc`), мозг — только досье; в `config/` ни один путь не пишет (единственное исключение — `promotion.mode` через `./tb exits promotion`).
+
+**Пакеты.**
+```
+logic/exitpol.py            чистая: схема tb.exit_policy/1 (компоненты be, lock, partial, trail_atr, stall, decay, timeout, near_tp,
+                            min_profit_r, scope), floor/normalize/validate/weaker_than/policy_hash, compile (политика ∘ пол ->
+                            правила auto_be/auto_lock/xp_*), keep_at, apply_state, summary для досье
+logic/exitsim.py            чистая: контрфактический симулятор run/pair/replay_brain/path_mfe; правила считает rules.evaluate_manage,
+                            доли — qty.close_qty; порядки S и T, признак amb и d_lo, издержки taker/maker/стоп с гэпом, taker_only
+                            (ROBUST_COST), cut, конец пути; SIM_VER = "xs1"
+logic/qty.py                чистая: floor_step, close_qty (перенесена из executor/core.py): одна доля закрытия у исполнителя,
+                            симулятора и сравнения с фактом
+labels/paths.py             run_paths/trade_paths: encode/decode (OHLC разностями в тиках, zigzag-varint, zlib), run_path_row в
+                            транзакции label_one, extend_step (догрузка окна, state=complete), backfill, trade_paths_step (курсор
+                            position_closed, окно после закрытия, qty/qty_step/min_qty, части закрытия, хронология вмешательств,
+                            adopted, trade_retry_h), rotate (paths.keep_days), load_cfg/enabled
+core/exitdoc.py             читатель для исполнителя: снимок runtime/exit_policy.json, аренда runtime/exit_lease.json, выключатель
+                            runtime/exits_switch.json, срок lease.lease_h; причины LEASE/SNAPSHOT/HASH/SWITCH, при любой ошибке —
+                            пол; кеш по подписи файла, выключатель читается каждый раз
+learnloop/exits_conf.py     строгая загрузка config/exits.json (схема tb.exits_cfg/1): меню (23 варианта: normalize/validate/
+                            weaker_than при загрузке), согласованность (paths.hold_mult >= max timeout.hold_frac, search.min_clusters
+                            = ceil(0.75 × trial.n_target), brain.min_n <= brain.n), config_hash; битый файл -> DISABLED
+learnloop/exits_eval.py     шаг eval_pass (eval.every_s): пути run/trade -> оценки вариантов в exit_evals (ord S/T, px_mode
+                            fee/taker, block по unit.block_h и стороне, path_mfe_r), таблица near_tp, очередь eval_backlog,
+                            ротация меню keep_days_menu, справочный срез pass_active
+learnloop/exits_search.py   поиск раз в search.every_days: окно window_days, матрица блоков × меню, max-T (Westfall–Young,
+                            B = search.perm_b, зерно — хеш выборки), отбор по alpha/min_effect_r/min_clusters, ROBUST_COST, хвост;
+                            exit_search, near_tp по путям раньше окна, чёрный список, NOOP
+learnloop/exits_trial.py    критерий (неизменяемый, criterion_h, триггер tr_exit_trials_crit), register, шаг register_candidates
+                            (кандидаты exit_search -> испытания, trial.max_parallel), чистый verdict (MEAN,
+                            ROBUST_COST, TAIL, ROBUST, BRAIN), шаг verdicts, закрытие COST_CHANGED/SIM_CHANGED/FLOOR_CHANGED/
+                            BASE_CHANGED, чёрный список на cooldown_days, exit_trials
+learnloop/exits_versions.py версии X-NNNN (INIT, PROMOTE, ROLLBACK, FLOOR_CHANGED, OWNER_ROLLBACK), готовность promotion_ready
+                            (свежий сторож, проверенная копия не старше 24 ч), promote, публикация снимка и аренды одной
+                            операцией, floor_changed, rollback, события exit_policy_promoted/exit_policy_rollback
+learnloop/exits_watch.py    сторож: точки watch.looks (2/4/8 блоков) и недельная, откат по путям (d_w) и по сделкам мозга (d_b
+                            через replay_brain), EXIT_SIM_GAP и пауза продвижения, аренда by="watch", meta.exits_watch
+learnloop/exits_report.py   R4.2 after и write_after (необязательные поля случая result.after_mfe_r, result.after_t1), R4.3 brain
+                            (d_b, разрезы по вмешательствам и кодам пробуждения, стоимость токенов), gate, page_block/run_block
+knowledge/exits_cli.py      ./tb exits: status|versions|search|trials|brain|after|gate|apply|rollback|promotion — чтение и
+                            аварийные средства владельца
+learn/exits.py              блок «Выходы» страницы «Учится ли мозг»: R0.2 (MFE, доля забранного) и раздел r4
+```
+Конфиг `config/exits.json`: `paths` (пути и окна), `unit.block_h` = 24 (сутки UTC и сторона), `eval` (раз в час, до 20 000 оценок за проход, меню живёт 28 суток), `maker` (1 тик, 2 б.п., `wait_s` 60), `search` (раз в 7 суток, окно 14, `max_k` 24, B = 2000, alpha 0.05, эффект 0.03R, минимум 23 блока), `trial` (30 блоков, 2 параллельно, 21 сутки), `tail` (MFE 1.5R, keep 0.8, n 30), `robust.tol_r` 0.02, `brain` (60 сделок, минимум 10, допуск 0.08R), `promotion` (`auto`, ожидание 7 суток, свежесть сторожа 3 ч), `watch` (точки 2/4/8, недельное окно 8, откат от −0.02R, сделки мозга от 50 при −0.05R, `EXIT_SIM_GAP` 0.1R), `lease.lease_h` 6, `cooldown_days` 14, `menu_ver` 1 и меню 23 вариантов. Числовых умолчаний в коде нет.
+
+**Таблицы x1** (`knowledge/schema2.py`, миграция `store2.migrate_x1`, ключ версии `meta.knowledge_x1_ver`, копия `premigrate`; база v2a без них остаётся зелёной): `exit_variants` (вариант меню, нормализованная политика, `policy_h`), `exit_evals` (оценка пути на варианте: `src` `run|trade`, ключ пути, `var_id/var_ver`, `ord` `S|T`, `px_mode` `fee|taker`, `block`, `r_net`, `r_gross`, `fees_r`, `mfe_r`, `path_mfe_r`, `cost_h`, `sim_ver`, `policy_h`, `labeled_ts`), `exit_versions` (append-only, хеш-цепочка `prev_h`/`row_h`), `exit_search`, `exit_trials` (триггер неизменности критерия), `exit_blacklist`. Оценки читают поиск, испытание и сторож; версии — исполнитель через снимок и отчёты.
+
+**Потоки данных.**
+```
+labels: run_paths (partial) --extend_step--> complete; trade_paths (position_closed, окно close_ts + post_close_min)
+exits_eval: complete-пути × варианты (действующая, предыдущая, испытания; меню — только в окне поиска) -> exit_evals, eval_backlog -> 0
+exits_search: блоки × меню, max-T -> кандидаты в exit_search.results и learn_events
+exits_register (раз в час): кандидаты последней строки exit_search с кодом OK (политика с таблицей near_tp) -> не больше
+                             trial.max_parallel испытаний по убыванию среднего d -> exit_variants и exit_trials (open)
+exits_verdicts (раз в час): n_target блоков, brain.n сделок, tail.min_n путей хвоста -> verdict, закрытие испытания
+exits_promote (раз в час): promote -> X-NNNN -> runtime/exit_policy.json + runtime/exit_lease.json, событие exit_policy_promoted
+exits_watch (раз в час): точки d_w и d_b -> ROLLBACK; EXIT_SIM_GAP (пауза продвижения); аренда by="watch"
+exits_after (раз в сутки): поля «после закрытия» в случаях-сделках
+исполнитель: exitdoc.current -> rt.pos.exit на входе -> limits_for(exit_policy, exit_ctx) -> evaluate_manage каждый тик -> rt.close.rule,
+             поле случая exit_rule, журнал XP:*
+мозг: brief.exit (exitpol.summary) -> position_manager; amend с правилом xp_*/auto_* -> E_EXIT_POLICY
+страница: tb.learn.exits -> exits_report.run_block; кнопка «Выходы: вернуть границу» -> dash2.memory_ops.exit_rollback
+владелец: ./tb exits ... (база только на чтение; apply пишет выключатель без базы)
+```
+Кандидатов последнего успешного поиска (строка `exit_search` с кодом `OK`, поле `results`) регистрирует шаг `exits_register` между поиском и вердиктами: политика варианта собирается из меню и таблицы `near_tp` той же строки, поэтому в испытание уходит ровно та политика (и тот `policy_h`), что прошла поиск. Порядок — по убыванию среднего `d`, не больше `trial.max_parallel` открытых испытаний; чёрный список, вариант с уже существующим испытанием и вариант, чей `policy_h` уже стал версией, пропускаются — повторный проход на той же строке ничего не создаёт.
+
+**Шаги цикла.** `exits_eval` — период `pass` с собственным интервалом `eval.every_s`; `exits_search`, `exits_register`, `exits_verdicts`, `exits_promote`, `exits_watch` — часовые (периодичность поиска проверяет сам модуль, `exits_search.due`, регистрация идемпотентна); `exits_after` — суточный. Ошибка шага выходов пишется `STEP_ERROR` и не останавливает шаги R2; `EXIT_SIM_GAP` останавливает только продвижение. Файлы состояния: `runtime/exit_policy.json`, `runtime/exit_lease.json`, `runtime/exits_switch.json`, `meta.exits_watch`, `meta.eval_backlog`; аренда сторожа R2 — отдельный `runtime/watch_lease.json`, версии и `ctx_ver` R2 не меняются.
+
+**Исполнитель.** `_exit_doc` пишет `rt.pos.exit` в `_finalize_entry` и `adopt_position`; `limits_for` передаёт `exit_policy` и `exit_ctx` (продление `lifecycle.max_hold_min` их не меняет); причина закрытия правилом — `rt.close.rule = xp_*`, компонент — в поле случая `exit_rule`; сверка лесенки распознаёт заявки `tbx-xp-<план>-<правило>` и снимает осиротевшие; стоп на бирже заявки политики не трогают. Статус отката к полу виден в `runtime/exec_health.json` и `./tb status`. Мозг и шлюз: `brief.exit` (≤ 60 токенов) и `E_EXIT_POLICY` для `amend_plan` по правилам кода. CLI владельца: `docs/RUNBOOK.md`, «Политика выхода: команды `./tb exits`».
+
+**Слои** (`tests/test_layering.py`). `tb.logic.exitpol|exitsim|qty` импортируют из `tb` только `tb.logic`; `tb.core.exitdoc` — только `tb.paths` и `tb.logic.exitpol` (без `learnloop`, `knowledge`, `labels`, `venues`, `executor`); `tb.learnloop.exits_*` не импортируют мозг, шлюз, MCP, биржу, исполнитель, управление и CLI и не пишут в `config/`; писатель `config/exits.json` ровно один — `tb.knowledge.exits_cli.set_mode`. `tb.learn` читает базу выходов только через `exits_report` (`open_ro`).
+
 ## Фигуры и уровни (опционально)
 `marketdata/patterns.py` (чистые функции) -> `patterns_scan.py` (`./tb patterns scan --sym ETH [--tf 1h|4h|1d]`, только чтение `data/` и `runtime/market.json`).
 События для наблюдателя: `config/watch_config.json` ключ `"patterns_events": true` (по умолчанию false, ключа в файле нет; пороги `config/patterns_config.json`). События `pattern` помечены `unvalidated`: фигуры не прошли проверку (`RESEARCH.md`).

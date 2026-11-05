@@ -158,7 +158,7 @@ class TestOpenV2(Base):
         self.make_v2()
         from tb.labels import schema
         orig = schema.MIGRATIONS
-        schema.MIGRATIONS = orig + [(2, ["CREATE TABLE broken("])]
+        schema.MIGRATIONS = orig + [(schema.SCHEMA_VER + 1, ["CREATE TABLE broken("])]
         try:
             with self.assertRaises(store.SchemaMigrationError):
                 store.open_rw(self.root)

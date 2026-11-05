@@ -233,7 +233,7 @@ class DaemonTests(unittest.TestCase):
             loop.run_until_complete(d.run())
         finally:
             loop.close()
-        self.assertLess(time.time() - t0, 5.0)
+        self.assertLess(time.time() - t0, 5.0 * float(os.environ.get("TB_PERF_FACTOR") or 1.0))      # в одиночку ~1 с; под полной нагрузкой шире
         self.assertTrue(self.e.ex.stopped)
 
     def test_shutdown_feed_stop_has_limit(self):

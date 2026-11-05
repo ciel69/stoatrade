@@ -316,7 +316,7 @@ class TestPrompts(unittest.TestCase):
         from tb.brain import roles_runtime
         reg = roles_runtime.load(_bootstrap.ROOT)
         ma, pm = reg.get("morning_analyst"), reg.get("position_manager")
-        self.assertEqual((ma.version, pm.version), (3, 3))      # morning_analyst v3: новости 3-4 на paper предупреждение и шорт-уклон;      # position_manager v3: реакции на STALLED / FLOW_TURN сторожа
+        self.assertEqual((ma.version, pm.version), (3, 4))      # morning_analyst v3: новости 3-4 на paper предупреждение и шорт-уклон;      # position_manager v4 (R4): сопровождение ведёт код, мозг только строже
         for r in (ma, pm):
             self.assertIn("blackout.mode=warn", r.system)
             self.assertIn("only paper", r.system)

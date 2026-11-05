@@ -14,6 +14,9 @@ disable_v2       выход из режима v2 (копия, затем уда�
 migrate_v2b / apply_v2b, verify_line_chain  (R2.9b) таблицы case_rows/lesson_rows (ключ meta.knowledge_v2b_ver) и их цепочки; verify и check_copy
                  проверяют их (CHAIN_BROKEN - красный), непустая очередь state/knowledge.spool.jsonl - жёлтый SPOOL_PENDING
 migrate_re_why   колонки rule_evals.event_why / event_kind (ключ meta.knowledge_re_why_ver, ALTER TABLE ADD COLUMN, идемпотентно; зовёт rule_eval_import)
+migrate_x1       (R4) таблицы цикла выходов exit_* (ключ meta.knowledge_x1_ver), копия premigrate перед изменением; append_row ведёт цепочку
+                 exit_versions по колонкам prev_h/row_h, update_row - изменяемые колонки exit_trials (критерий защищён триггером); verify и
+                 check_copy проверяют цепочку exit_versions и индексы/триггеры x1
 
 Соединение то же, что у сервиса меток (labels.store.open_rw: WAL, busy_timeout). Автовосстановление как сервис - задача 10, она вызывает restore(auto=True).
 """
@@ -150,7 +153,7 @@ def _dec(v):
 
 
 def _prepare(conn, table, row):
-    if table not in S2.TABLES:
+    if table not in S2.TABLES and table not in S2.X1_TABLES:
         raise RowRejected("BAD_TABLE", table)
     cols = _columns(conn, table)
     bad = [k for k in row if k not in cols]
@@ -164,16 +167,21 @@ def _prepare(conn, table, row):
 
 def _check_row(table, vals):
     """privacy_scan (Requirement 16.1) и лимит размера строки (правило <= 2 КБ, версия <= 4 КБ; Requirement 2.8)."""
-    issues = privacy_scan(dict((k, _dec(v)) for k, v in vals.items() if k not in S2.HASH_FIELDS))
+    skip = S2.HASH_FIELDS | S2.X1_HASH_FIELDS if table in S2.X1_TABLES else S2.HASH_FIELDS
+    issues = privacy_scan(dict((k, _dec(v)) for k, v in vals.items() if k not in skip))
     if issues:
         raise RowRejected("PRIVACY", "; ".join(issues[:3]))
     size = len(CH.canon(vals).encode("utf-8"))
-    lim = S2.ROW_MAX.get(table, S2.ROW_MAX_DEFAULT)
+    lim = S2.ROW_MAX.get(table) or S2.X1_ROW_MAX.get(table) or S2.ROW_MAX_DEFAULT
     if size > lim:
         raise RowRejected("ROW_TOO_BIG", "%s: %d байт > %d" % (table, size, lim))
 
 
-def _require_ready(conn):
+def _require_ready(conn, table=None):
+    if table in S2.X1_TABLES:
+        if not ready_x1(conn):
+            raise NotReady(S2.NOT_READY, "таблиц цикла выходов нет (миграция x1: knowledge.store2.migrate_x1)")
+        return
     if not ready(conn):
         raise NotReady(S2.NOT_READY, "таблиц цикла нет (./tb knowledge migrate-v2a или learnloop.enabled=true)")
 
@@ -293,6 +301,51 @@ def migrate_re_why(conn):
     return S2.RE_WHY_VER
 
 
+def version_x1(conn):
+    try:
+        return int(_meta_get(conn, S2.META_X1_KEY) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def ready_x1(conn):
+    """Таблицы цикла выходов R4 (миграция x1) на месте."""
+    return version_x1(conn) >= S2.X1_VER and all(_has_table(conn, t) for t in S2.X1_TABLES)
+
+
+def migrate_x1(conn, root=None, backup=True, now=None, sleep=time.sleep):
+    """R4 (задача 7): таблицы цикла выходов exit_variants, exit_evals, exit_versions, exit_search, exit_trials, exit_blacklist с индексом и
+    триггерами (ключ meta.knowledge_x1_ver) одной транзакцией. Перед изменением — проверенная копия premigrate (make_backup: integrity_check и
+    цепочки); копия не сделана -> KnowledgeMigrationError, база не меняется. Сбой DDL -> ROLLBACK и KnowledgeMigrationError. Повтор ничего не
+    меняет (идемпотентна). Строки прежних таблиц не трогает. -> версия x1."""
+    if ready_x1(conn):
+        return version_x1(conn)
+    if backup and os.path.exists(db_path(root)):
+        try:
+            make_backup(root, "premigrate", now=now, sleep=sleep)
+        except (KnowledgeError, OSError, sqlite3.Error) as e:
+            raise KnowledgeMigrationError(S2.KNOWLEDGE_MIGRATION, "копия перед миграцией x1 не сделана: %s" % e) from e
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+    except sqlite3.Error as e:
+        raise KnowledgeMigrationError(S2.KNOWLEDGE_MIGRATION, "не удалось начать миграцию x1: %s" % e) from e
+    try:
+        if not ready_x1(conn):                                 # повторная проверка под блокировкой (второй процесс мог успеть)
+            if not _has_table(conn, "meta"):
+                conn.execute("CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT)")
+            for s in S2.X1:
+                conn.execute(s)
+            _meta_set(conn, S2.META_X1_KEY, str(S2.X1_VER))
+        conn.execute("COMMIT")
+    except Exception as e:
+        try:
+            conn.execute("ROLLBACK")
+        except sqlite3.Error:
+            pass
+        raise KnowledgeMigrationError(S2.KNOWLEDGE_MIGRATION, "миграция x1 не применена: %s: %s" % (e.__class__.__name__, e)) from e
+    return S2.X1_VER
+
+
 # ---------------------------------------------------------------- цепочки case_rows / lesson_rows (строки JSONL)
 
 def line_of(row):
@@ -357,24 +410,26 @@ def _chain_rows(conn, table):
     return [dict(zip(cols, r)) for r in cur.fetchall()]
 
 
-def _row_hash(rec):
-    return CH.make_hash(rec.get("prev") or GENESIS, rec)
+def _row_hash(rec, pc="prev", hc="h"):
+    """h строки цепочки: sha256(prev + канон. JSON строки без колонки h)[:16]; колонки prev/h по S2.CHAIN_COLS (exit_versions: prev_h/row_h)."""
+    return CH.make_hash(rec.get(pc) or GENESIS, dict((k, v) for k, v in rec.items() if k != hc))
 
 
-def verify_chain_rows(rows):
+def verify_chain_rows(rows, pc="prev", hc="h"):
     """-> {"ok", "n", "bad_seq"}: prev каждой строки = h предыдущей (первой - GENESIS), h = sha256(prev + канон. JSON строки без h)."""
     prev = GENESIS
     for i, r in enumerate(rows):
-        if r.get("prev") != prev or r.get("h") != _row_hash(r):
+        if r.get(pc) != prev or r.get(hc) != _row_hash(r, pc, hc):
             return {"ok": False, "n": i, "bad_seq": r.get("seq")}
-        prev = r["h"]
+        prev = r[hc]
     return {"ok": True, "n": len(rows), "bad_seq": None}
 
 
 def verify_chain(conn, table="rulebook_versions"):
     if not _has_table(conn, table):
         return {"ok": True, "n": 0, "bad_seq": None}
-    return verify_chain_rows(_chain_rows(conn, table))
+    pc, hc = S2.CHAIN_COLS[table]
+    return verify_chain_rows(_chain_rows(conn, table), pc, hc)
 
 
 # ---------------------------------------------------------------- запись
@@ -382,24 +437,25 @@ def verify_chain(conn, table="rulebook_versions"):
 def append_row(conn, table, row):
     """Одна строка в таблицу цикла (в своей транзакции или внутри открытой вызывающим). Для rulebook_versions: seq, prev, h вычисляются здесь, вся
     цепочка проверяется в той же транзакции; разрыв или prev вызывающего != h последней строки -> ChainBroken (CHAIN_BROKEN), запись не делается.
-    -> записанная строка (с seq)."""
-    _require_ready(conn)
+    -> записанная строка (с seq). R4: exit_versions — та же цепочка по колонкам prev_h / row_h (S2.CHAIN_COLS)."""
+    _require_ready(conn, table)
     vals = _prepare(conn, table, row)
     with _maybe_tx(conn):
-        if table in S2.CHAIN_TABLES:
+        if table in S2.CHAIN_COLS:
+            pc, hc = S2.CHAIN_COLS[table]
             rows = _chain_rows(conn, table)
-            chk = verify_chain_rows(rows)
+            chk = verify_chain_rows(rows, pc, hc)
             if not chk["ok"]:
                 raise ChainBroken(S2.CHAIN_BROKEN, "%s: цепочка разорвана на seq=%s" % (table, chk["bad_seq"]))
-            last_h = rows[-1]["h"] if rows else GENESIS
-            if "prev" in row and row["prev"] != last_h:
+            last_h = rows[-1][hc] if rows else GENESIS
+            if pc in row and row[pc] != last_h:
                 raise ChainBroken(S2.CHAIN_BROKEN, "%s: prev записи не равен h последней строки" % table)
-            vals.pop("h", None)
+            vals.pop(hc, None)
             vals["seq"] = (rows[-1]["seq"] if rows else 0) + 1
-            vals["prev"] = last_h
-            full = dict((c, vals.get(c)) for c in _columns(conn, table) if c != "h")
+            vals[pc] = last_h
+            full = dict((c, vals.get(c)) for c in _columns(conn, table) if c != hc)
             vals = dict(full)
-            vals["h"] = _row_hash(full)
+            vals[hc] = _row_hash(full, pc, hc)
         _check_row(table, vals)
         ks = sorted(vals)
         cur = conn.execute("INSERT INTO %s(%s) VALUES(%s)" % (table, ", ".join(ks), ", ".join("?" * len(ks))), [vals[k] for k in ks])
@@ -411,9 +467,9 @@ def append_row(conn, table, row):
 def insert_rows(conn, table, rows, ignore_dup=False):
     """Пачка строк (cluster_runs, rule_evals, lesson_candidates, trials) одной транзакцией; ignore_dup - INSERT OR IGNORE (идемпотентный повтор шага).
     Таблицы с цепочкой сюда не идут. -> число вставленных."""
-    if table in S2.CHAIN_TABLES:
+    if table in S2.CHAIN_COLS:
         raise RowRejected("BAD_TABLE", "%s пишется только append_row" % table)
-    _require_ready(conn)
+    _require_ready(conn, table)
     rows = list(rows)
     if not rows:
         return 0
@@ -434,11 +490,13 @@ def insert_rows(conn, table, rows, ignore_dup=False):
 
 
 def update_row(conn, table, key, fields):
-    """Изменяемые колонки trials (state, verdict, numbers, cut_ts, closed_ts) и lesson_candidates (status, code, ...). -> число изменённых строк."""
-    if table not in S2.MUTABLE:
+    """Изменяемые колонки trials (state, verdict, numbers, cut_ts, closed_ts), lesson_candidates (status, code, ...) и exit_trials (R4: state,
+    verdict, numbers, cut_ts, closed_ts; критерий неизменен). -> число изменённых строк."""
+    mutable = S2.MUTABLE.get(table) or S2.X1_MUTABLE.get(table)
+    if mutable is None:
         raise RowRejected("IMMUTABLE", table)
-    _require_ready(conn)
-    kcol, allowed = S2.MUTABLE[table]
+    _require_ready(conn, table)
+    kcol, allowed = mutable
     bad = [k for k in fields if k not in allowed]
     if bad or not fields:
         raise RowRejected("IMMUTABLE", "%s: %s" % (table, ",".join(sorted(bad)) or "нет полей"))
@@ -655,8 +713,18 @@ def verify(root=None, quick=False, counts=True, now=None):
                 miss = [x for x in S2.V2B_INDEXES + S2.V2B_TRIGGERS if x not in names]
                 if miss:
                     add(S2.SCHEMA_MISMATCH, "база знаний: нет индексов/триггеров v2b: %s" % ",".join(miss))
+            rep["x1"] = ready_x1(conn)
+            if rep["x1"]:                               # R4: цепочка версий политики выхода, индексы и триггеры x1
+                rep["chains"]["exit_versions"] = ch = verify_chain(conn, "exit_versions")
+                if not ch["ok"]:
+                    add(S2.CHAIN_BROKEN, "база знаний: цепочка exit_versions разорвана на seq=%s (CHAIN_BROKEN): запись версий выходов отказывается"
+                        % ch["bad_seq"])
+                names = set(r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type IN ('index', 'trigger')"))
+                miss = [x for x in S2.X1_INDEXES + S2.X1_TRIGGERS if x not in names]
+                if miss:
+                    add(S2.SCHEMA_MISMATCH, "база знаний: нет индексов/триггеров x1: %s" % ",".join(miss))
             if counts:
-                for t in ("signals", "outcomes", "policy_runs") + S2.TABLES + S2.MEM_TABLES:
+                for t in ("signals", "outcomes", "policy_runs", "run_paths", "trade_paths") + S2.TABLES + S2.MEM_TABLES + S2.X1_TABLES:
                     if _has_table(conn, t):
                         rep["tables"][t] = conn.execute("SELECT COUNT(*) FROM %s" % t).fetchone()[0]
             rs = {k: _meta_get(conn, k) for k in (S2.META_COPY_TS, S2.META_RESTORE_TS, S2.META_RESTORE_MODE, S2.META_RESTORE_SRC)}
@@ -770,14 +838,15 @@ def check_copy(path):
         res = _integrity(c)
         if res != ["ok"]:
             return False, S2.DB_CORRUPT, res[:5]
-        ch = verify_chain(c)
-        if not ch["ok"]:
-            return False, S2.CHAIN_BROKEN, ch
+        for t in S2.CHAIN_COLS:                           # rulebook_versions и (R4) exit_versions
+            ch = verify_chain(c, t)
+            if not ch["ok"]:
+                return False, S2.CHAIN_BROKEN, ch if t == "rulebook_versions" else dict(ch, table=t)
         for t in S2.MEM_TABLES:
             ch = verify_line_chain(c, t)
             if not ch["ok"]:
                 return False, S2.CHAIN_BROKEN, dict(ch, table=t)
-        return True, None, {"ver": version(c), "labels_ver": _meta_get(c, "labels_schema_ver"), "v2b": version_v2b(c)}
+        return True, None, {"ver": version(c), "labels_ver": _meta_get(c, "labels_schema_ver"), "v2b": version_v2b(c), "x1": version_x1(c)}
     except sqlite3.DatabaseError as e:
         return False, S2.DB_CORRUPT, "%s: %s" % (type(e).__name__, e)
     finally:

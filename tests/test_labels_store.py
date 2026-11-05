@@ -44,7 +44,7 @@ class TestOpen(Base):
             self.assertIn(t, names)
         for ix in ("ix_sig_t0", "ix_sig_sym", "ix_sig_type", "ix_sig_due", "ix_pr_pol", "ix_pr_type"):
             self.assertIn(ix, names)
-        self.assertEqual(c.execute("SELECT v FROM meta WHERE k=?", (schema.META_VER_KEY,)).fetchone()[0], "1")
+        self.assertEqual(c.execute("SELECT v FROM meta WHERE k=?", (schema.META_VER_KEY,)).fetchone()[0], str(schema.SCHEMA_VER))
 
     def test_reopen_idempotent(self):
         self.rw().close()
@@ -81,23 +81,25 @@ class TestMigration(Base):
         os.makedirs(os.path.dirname(path))
         c = sqlite3.connect(path, isolation_level=None)
         self.conns.append(c)
-        store.migrate(c)                                                       # v1
-        bad = list(schema.MIGRATIONS) + [(2, ["CREATE TABLE t2(a)", "INSERT INTO meta(k, v) VALUES('labels_schema_ver', 'x')", "CREATE TABLE nope(", "CREATE TABLE t3(a)"])]
+        store.migrate(c)                                                       # текущая версия (R4: 2)
+        nxt = schema.SCHEMA_VER + 1                                             # следующая версия (R4: 2 занята путями выходов)
+        bad = list(schema.MIGRATIONS) + [(nxt, ["CREATE TABLE t2(a)", "INSERT INTO meta(k, v) VALUES('labels_schema_ver', 'x')", "CREATE TABLE nope(", "CREATE TABLE t3(a)"])]
         with self.assertRaises(store.SchemaMigrationError) as cm:
             store.migrate(c, bad)
         self.assertEqual(cm.exception.code, "SCHEMA_MIGRATION")
         names = {r[0] for r in c.execute("SELECT name FROM sqlite_master")}
         self.assertNotIn("t2", names)
         self.assertNotIn("t3", names)
-        self.assertEqual(c.execute("SELECT v FROM meta WHERE k=?", (schema.META_VER_KEY,)).fetchone()[0], "1")
+        self.assertEqual(c.execute("SELECT v FROM meta WHERE k=?", (schema.META_VER_KEY,)).fetchone()[0], str(schema.SCHEMA_VER))
         self.assertFalse(c.in_transaction)
 
     def test_good_migration_step(self):
         c = self.rw()
-        ok = list(schema.MIGRATIONS) + [(2, ["CREATE TABLE t2(a)"])]
-        self.assertEqual(store.migrate(c, ok), 2)
-        self.assertEqual(c.execute("SELECT v FROM meta WHERE k=?", (schema.META_VER_KEY,)).fetchone()[0], "2")
-        self.assertEqual(store.migrate(c, ok), 2)                              # повтор ничего не делает
+        nxt = schema.SCHEMA_VER + 1
+        ok = list(schema.MIGRATIONS) + [(nxt, ["CREATE TABLE t2(a)"])]
+        self.assertEqual(store.migrate(c, ok), nxt)
+        self.assertEqual(c.execute("SELECT v FROM meta WHERE k=?", (schema.META_VER_KEY,)).fetchone()[0], str(nxt))
+        self.assertEqual(store.migrate(c, ok), nxt)                            # повтор ничего не делает
 
     def test_open_rw_failed_migration_keeps_file(self):
         orig = schema.MIGRATIONS
@@ -110,7 +112,7 @@ class TestMigration(Base):
         self.assertTrue(os.path.exists(store.db_path(self.root)))              # файл не считается повреждённым
         self.assertEqual([f for f in os.listdir(os.path.dirname(store.db_path(self.root))) if "corrupt" in f], [])
         c = self.rw()                                                          # нормальная миграция после сбоя проходит
-        self.assertEqual(c.execute("SELECT v FROM meta WHERE k=?", (schema.META_VER_KEY,)).fetchone()[0], "1")
+        self.assertEqual(c.execute("SELECT v FROM meta WHERE k=?", (schema.META_VER_KEY,)).fetchone()[0], str(schema.SCHEMA_VER))
 
 
 class TestConcurrency(Base):
@@ -204,7 +206,7 @@ class TestCorrupt(Base):
         self.assertEqual(store.LAST_ERROR, "DB_CORRUPT")
         sib = [f for f in os.listdir(os.path.dirname(path)) if f.startswith("knowledge.corrupt-") and f.endswith(".sqlite")]
         self.assertEqual(len(sib), 1)
-        self.assertEqual(c.execute("SELECT v FROM meta WHERE k=?", (schema.META_VER_KEY,)).fetchone()[0], "1")
+        self.assertEqual(c.execute("SELECT v FROM meta WHERE k=?", (schema.META_VER_KEY,)).fetchone()[0], str(schema.SCHEMA_VER))
 
 
 class TestSyncDir(unittest.TestCase):

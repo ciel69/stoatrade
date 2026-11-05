@@ -18,39 +18,18 @@ import os
 import time
 
 from tb import paths
-from tb.core import bus, decisions, exec_cfg, ideas, journal, linkid, plan_schema, portfolio, session, tradepath
+from tb.core import bus, decisions, exec_cfg, exitdoc, ideas, journal, linkid, plan_schema, portfolio, session, tradepath
 from tb.core.plan_store import PlanStore
 from tb.executor import actions as A
 from tb.executor import commands, gate as G, mdsvc, protect, reconcile
 from tb.executor.ports import KIND_UNKNOWN, PortError
-from tb.logic import rules, watch
+from tb.logic import exitpol, rules, watch
 from tb.logic.candles import CandleBook, MarketView, tf_min
+from tb.logic.qty import close_qty  # noqa: F401  (R4: округление долей единое с симулятором выходов; core.close_qty остаётся именем модуля)
 
 VERSION = "v2.0-wp5"
 ACTIVE = ("armed", "entered", "managing")
 IN_POS = ("entered", "managing")
-
-
-def close_qty(want, remaining, step, min_qty=None, full_req=False):
-    """Объём закрытия по шагу и минимальному лоту биржи -> (qty, full).
-
-    Доля округляется вниз к шагу. Доля меньше минимального лота (lot = max(шаг, min_qty)) раньше давала 0 и отказ E_STATUS_FORBIDS
-    (инцидент ETH 2026-11-03: остаток 0.01 при шаге 0.01, frac 0.5): теперь неделимый остаток (меньше двух лотов) закрывается целиком,
-    делимый закрывается одним минимальным лотом. Это только снижение риска, больше остатка не закрывается.
-
-    >>> close_qty(0.005, 0.01, 0.01), close_qty(0.003, 0.05, 0.01), close_qty(0.07, 0.14, 0.01)
-    ((0.01, True), (0.01, False), (0.07, False))
-    """
-    step = float(step or 0) or 1e-12
-    remaining = float(remaining)
-    qty = min(remaining, G.floor_step(want, step))
-    full = bool(full_req) or qty >= remaining - step / 2.0
-    lot = max(step, float(min_qty or 0))
-    if not full and remaining > 0 and qty < lot - step / 2.0:
-        if remaining < 2.0 * lot - step / 2.0:
-            return remaining, True
-        qty = lot
-    return (remaining if full else qty), full
 EPS = 1e-9
 SEEN_MAX = 5000
 KLINE_TFS = (1, 5, 15, 60)
@@ -58,6 +37,10 @@ EVAL_MIN_GAP_S = 0.1
 ENTRY_POLL_S = 0.5
 LIMIT_POLL_S = 2.0
 WHY_BUS = {"GUARD": "GUARD", "CHASE": "CHASE", "COOLDOWN": "COOLDOWN", "STALE": "STALE", "SPREAD": "SPREAD", "MIN_SIZE": "MIN_SIZE"}
+# R4 (Requirement 9.8): правило политики -> компонент словаря `tb.exit_policy/1` (поле случая `exit_rule`).
+XP_COMPONENTS = {"auto_be": "be", "auto_lock": "lock", "xp_lock": "lock", "xp_near": "near_tp", "xp_trail": "trail_atr",
+                 "xp_stall": "stall", "xp_decay": "decay", "xp_timeout": "timeout"}
+EXIT_FALLBACK = "EXIT_POLICY_FALLBACK"
 
 
 def _load_json(path):
@@ -83,7 +66,7 @@ def new_runtime(now):
                       "cond_state": {}, "already": {}, "ref_px": None, "fired_px": None},
             "pos": {"qty": 0.0, "avg": None, "entries": [], "initial_stop": None, "cur_stop": None, "r_unit": None, "best_px": None, "worst_px": None,
                     "t_best": None, "t_worst": None, "journal_id": None},
-            "targets": {}, "rules": {}, "adds": {"n": 0, "risk_used": 0.0},
+            "targets": {}, "rules": {}, "policy_orders": {}, "adds": {"n": 0, "risk_used": 0.0},
             "realized": {"pnl": 0.0, "fees": 0.0, "parts": []}, "close": {"reason": None, "px": None, "pnl": None},
             "actions": {"seq": 0, "pending": []}, "counters": {"stop_moves_1h": [], "blocked_attempts": 0}, "paper": False}
 
@@ -133,6 +116,8 @@ class Executor(object):
         self.started = clock()
         self.acct = None
         self._state_dirty = False
+        self.exit_fallback = {}          # pid -> причина отката к полу (R4, EXIT_POLICY_FALLBACK); пусто = политика читается
+        self.exit_status = None
         self._load_state()
         self.stopped = False
         self.gate = G.Gate(self)
@@ -237,8 +222,98 @@ class Executor(object):
         t = self.px.get(sym) or {}
         return MarketView(sym, t.get("last"), t.get("bid"), t.get("ask"), t.get("mark"), t.get("ts"), self.books.get(sym), self.clock())
 
+    def _exit_floor(self, lim=None):
+        ap = (lim if isinstance(lim, dict) else (self.cfg or {})).get("auto_protect")
+        try:
+            return exitpol.floor(ap)
+        except Exception:
+            return {"schema": exitpol.SCHEMA}
+
+    @staticmethod
+    def _xp_component(rule):
+        """`xp_partial_0` -> `partial`, `xp_near` -> `near_tp`; прочие xp_* и auto_* — по карте компонентов."""
+        if isinstance(rule, str) and rule.startswith("xp_partial_"):
+            return "partial"
+        return XP_COMPONENTS.get(rule) or (rule[3:] if isinstance(rule, str) and rule.startswith("xp_") else None)
+
+    def _action_why(self, a, why):
+        rid = a.get("rule")
+        if isinstance(rid, str) and rid.startswith("xp_"):
+            comp = self._xp_component(rid)
+            if comp:
+                return "XP:%s" % comp
+        return why
+
+    def _exit_case_rule(self, p):
+        """Компонент политики, закрывший позицию (поле случая `exit_rule`, Requirement 9.8); None для стопа/тейка/мозга."""
+        close = p["rt"].get("close") or {}
+        if close.get("reason") != "rule":
+            return None
+        return self._xp_component(close.get("rule"))
+
+    @staticmethod
+    def _exit_status_from(fallback):
+        if not fallback:
+            return None
+        pid = sorted(fallback)[0]
+        why = fallback[pid]
+        return {"code": "%s:%s" % (EXIT_FALLBACK, why), "why": why, "plan": pid}
+
+    def _note_exit(self, p, why):
+        """Статус применения политики выхода (Requirement 8.6): причина отката к полу или снятие статуса при `OK`."""
+        pid = p["spec"]["id"]
+        why = why if isinstance(why, str) and why else "SNAPSHOT"
+        if why == "OK":
+            if self.exit_fallback.pop(pid, None) is not None:
+                self.exit_status = self._exit_status_from(self.exit_fallback)
+            return
+        if self.exit_fallback.get(pid) == why:
+            return
+        self.exit_fallback[pid] = why
+        self.exit_status = self._exit_status_from(self.exit_fallback)
+        self.exit_status["ts"] = round(self.clock(), 3)
+        try:
+            self.decide("event", "exit_policy_fallback", plan=pid, why="%s:%s" % (EXIT_FALLBACK, why), res={"ok": False, "code": why})
+        except Exception:
+            pass
+
+    def _exit_doc(self, p, avg):
+        """`rt.pos.exit` на вход: версия и политика позиции, ATR 5м на входе и `max_hold_min` плана (Requirement 9.3).
+        Политику отдаёт только `exitdoc.current`; при любой его ошибке — пол защиты (`EXIT_POLICY_FALLBACK:<причина>`, Requirement 8.6)."""
+        spec = p["spec"]
+        floor = self._exit_floor()
+        info = {"ver": exitdoc.FLOOR_VER, "policy_h": None, "why": "SNAPSHOT"}
+        pol = floor
+        try:
+            policy, info = exitdoc.current(self.root, self.clock(), floor)
+            pol = exitpol.normalize(policy if info.get("why") == "OK" else floor, floor)
+        except Exception:
+            info = {"ver": exitdoc.FLOOR_VER, "policy_h": None, "why": "SNAPSHOT"}
+            pol = floor
+        self._note_exit(p, info.get("why"))
+        atr5 = None
+        try:
+            book = self.books.get(spec["symbol"])
+            a = book.atr(5) if book is not None else None
+            if a and avg:
+                atr5 = round(float(a) / float(avg) * 100.0, 6)
+        except Exception:
+            atr5 = None
+        try:
+            floor_h = exitpol.policy_hash(floor)
+            policy_h = exitpol.policy_hash(pol)
+        except Exception:
+            floor_h, policy_h = None, info.get("policy_h")
+        lc = spec.get("lifecycle") if isinstance(spec.get("lifecycle"), dict) else {}
+        src = spec.get("source") if isinstance(spec.get("source"), dict) else {}
+        return {"ver": info.get("ver") or exitdoc.FLOOR_VER, "policy_h": policy_h, "floor_h": floor_h,
+                "atr5_pct": atr5, "horizon": spec.get("session_type"), "max_hold_min": lc.get("max_hold_min"),
+                "sig_type": src.get("kind") if isinstance(src.get("kind"), str) else None,
+                "scope": pol.get("scope") or "all", "why": info.get("why") or "SNAPSHOT", "policy": pol}
+
     def limits_for(self, p):
-        """Копия exec_limits с подложенными данными символа (tick, qty_step, min_qty, session_end_ts, kill) для logic.rules/pyramid."""
+        """Копия exec_limits с подложенными данными символа (tick, qty_step, min_qty, session_end_ts, kill) для logic.rules/pyramid.
+        Позиция ведётся политикой из `rt.pos.exit` (Requirement 9.3); пол берётся из текущего `auto_protect` (Requirement 2.7)."""
         lim = json.loads(json.dumps(self.cfg))
         ins = self.instrument(p["spec"]["symbol"]) or {}
         for k_src, k_dst in (("tick", "tick"), ("qty_step", "qty_step"), ("min_qty", "min_qty"), ("min_notional", "min_notional")):
@@ -246,6 +321,29 @@ class Executor(object):
                 lim[k_dst] = float(ins[k_src])
         if exec_cfg.kill_state(self.root) is not None:
             lim["kill"] = True
+        rt = p["rt"]
+        if rt.get("status") in IN_POS:
+            rec = (rt.get("pos") or {}).get("exit")
+            if not isinstance(rec, dict):
+                rec = {}
+                self._note_exit(p, "POS")
+            pol = rec.get("policy")
+            if isinstance(pol, dict):
+                h = rec.get("policy_h")
+                try:
+                    if not isinstance(h, str) or exitpol.policy_hash(pol) != h:
+                        pol = None
+                except Exception:
+                    pol = None
+            if not isinstance(pol, dict):
+                pol = self._exit_floor(lim)
+                self._note_exit(p, "POS")
+            else:
+                self._note_exit(p, rec.get("why") or "OK")
+            lc = p["spec"].get("lifecycle") if isinstance(p["spec"].get("lifecycle"), dict) else {}
+            lim["exit_policy"] = pol
+            lim["exit_ctx"] = {"max_hold_min": rec.get("max_hold_min", lc.get("max_hold_min")), "atr5_pct": rec.get("atr5_pct"),
+                               "sig_type": rec.get("sig_type"), "horizon": rec.get("horizon")}
         return lim
 
     def symbol_busy(self, sym, p):
@@ -543,13 +641,16 @@ class Executor(object):
 
     # ------------------------------------------------------------------ исполнения
     def _owner_plan(self, ev):
-        """Чьё это исполнение. Своя ссылка tbx-N-M -> план N (если он активен); чужая непустая ссылка (старые команды, ручные ордера с ID) -> ничьё;
-        пустая ссылка (стоп/ликвидация/ручное закрытие в приложении) -> план с позицией по символу, но только исполнения после входа плана
-        (старая история биржи не должна попадать в сегодняшний план)."""
+        """Чьё это исполнение. Своя ссылка tbx-N-M -> план N (если он активен); заявка политики `tbx-xp-<N>-...` -> план N; чужая непустая ссылка
+        (старые команды, ручные ордера с ID) -> ничьё; пустая ссылка (стоп/ликвидация/ручное закрытие в приложении) -> план с позицией по символу,
+        но только исполнения после входа плана (старая история биржи не должна попадать в сегодняшний план)."""
         sym = ev.get("sym")
         link = ev.get("link_id") or ""
         if link:
             pn = linkid.parse(link)
+            if pn is None and link.startswith(reconcile.XP_PREFIX):
+                n = reconcile._xp_plan_n(link)
+                return self.plan_by_n(n) if n is not None else None
             return self.plan_by_n(pn[0]) if pn else None
         ts_ms = int(ev.get("ts_ms") or 0)
         for p in self.active_plans(sym):
@@ -617,6 +718,13 @@ class Executor(object):
                 if t["filled_qty"] >= float(t["qty"]) - 1e-9:
                     t["state"] = "filled"
                     self.emit("milestone", {"name": "target_filled", "target": tid, "px": px}, plan=spec["id"], sym=spec["symbol"])
+        for rid, rec in (rt.get("policy_orders") or {}).items():
+            if link and rec.get("link") == link:
+                rec["filled_qty"] = round(float(rec.get("filled_qty") or 0) + q, 12)
+                if rec["filled_qty"] >= float(rec.get("qty") or 0) - 1e-9:
+                    rec["state"] = "filled"
+                    if float(pos.get("qty") or 0) <= 1e-9:
+                        rt.setdefault("close", {})["rule"] = rid
         if pos["qty"] > 1e-9:
             self._journal_part(p, part)
         self.save(p)
@@ -859,8 +967,9 @@ class Executor(object):
         ent["partial"] = bool(info.get("partial"))
         pos.update({"qty": round(qty_f, 12), "avg": avg_f, "initial_stop": stop0, "cur_stop": stop0, "r_unit": abs(avg_f - stop0), "best_px": avg_f,
                     "worst_px": avg_f, "t_best": round(now, 3), "t_worst": round(now, 3), "lev": ent.get("lev"), "path_n": 0, "path_cov": 0.0,
-                    "entries": [{"ts": round(now, 3), "px": avg_f, "qty": qty_f, "fee": fees, "link": ent.get("link_id"), "exec_id": fills[0]["exec_id"], "kind": "entry"}],
+                     "entries": [{"ts": round(now, 3), "px": avg_f, "qty": qty_f, "fee": fees, "link": ent.get("link_id"), "exec_id": fills[0]["exec_id"], "kind": "entry"}],
                     "risk0": float(ent.get("risk_usdt") or 0.0) * (qty_f / float(ent.get("qty") or qty_f))})
+        pos["exit"] = self._exit_doc(p, avg_f)
         rt["realized"]["fees"] = round(rt["realized"]["fees"] + fees, 8)
         for f in fills:
             self.seen_exec.setdefault(f["exec_id"], 1)
@@ -892,6 +1001,7 @@ class Executor(object):
         self._to_status(p, "managing", "PROTECTED")
         self.emit("entry_filled", {"avg": avg_f, "qty": pos["qty"], "partial": bool(info.get("partial")), "sl": pos["cur_stop"],
                                    "risk_usdt": rt["pos"].get("risk0"), "journal_id": pos.get("journal_id")}, plan=spec["id"], sym=sym)
+        self.act.place_policy_limits(p)
         mdsvc.write_all(self, force=True)
 
     def _ensure_stop(self, p, stop0):
@@ -978,6 +1088,8 @@ class Executor(object):
             self.error("save_rt", "TRANSITION")
         self.decide("transition", new, plan=p["spec"]["id"], why="%s %s->%s" % (why, old, new))
         if new in plan_schema.TERMINAL:
+            if self.exit_fallback.pop(p["spec"]["id"], None) is not None:
+                self.exit_status = self._exit_status_from(self.exit_fallback)
             self.plans.pop(p["spec"]["id"], None)
         return True
 
@@ -1053,6 +1165,9 @@ class Executor(object):
             return
         if rt["status"] == "entered":
             return        # лесенка ещё ставится (секунды)
+        self.act.poll_policy_orders(p)
+        if rt["status"] not in ACTIVE:
+            return
         self._eval_touch(p, view)
         lim = self.limits_for(p)
         res = rules.evaluate_manage(spec, rt, view, now, lim)
@@ -1196,7 +1311,7 @@ class Executor(object):
         """Одно действие движка правил -> исполнение через Gate/Actions. -> True выполнено / False отказ / None нейтрально."""
         typ = a.get("type")
         spec, rt = p["spec"], p["rt"]
-        why = a.get("why") or ""
+        why = self._action_why(a, a.get("why") or "")
         pid = spec["id"]
         if typ == "cancel_entry":
             return self.act.cancel_entry_order(p, why=why) in ("cancelled", "gone")
@@ -1252,14 +1367,20 @@ class Executor(object):
         qty, full = close_qty(qty, remaining, step, ins.get("min_qty"), a["type"] == "close" and float(a.get("frac", 1.0)) >= 0.999)
         if qty <= 0 and not full:
             return False
+        if a.get("exec") == "maker" and (not full or a["type"] == "close"):
+            return self._do_close_maker(p, a, qty, remaining)
         if full and self.act.close_inflight(p):      # закрытие уже в пути: без повторов на каждом тике (иначе ордер снимается раньше исполнения и позиция висит)
             return False
-        kind, info = self.act.close(p, None if full else qty, reason, why=a.get("why", ""), full=full)
-        self.decide("rule", a["type"], plan=p["spec"]["id"], args={"qty": remaining if full else qty}, why=a.get("why", ""),
+        why = self._action_why(a, a.get("why", ""))
+        rule = a.get("rule")
+        kind, info = self.act.close(p, None if full else qty, reason, why=why, full=full)
+        self.decide("rule", a["type"], plan=p["spec"]["id"], args={"qty": remaining if full else qty}, why=why,
                     res={"ok": kind == "ok", "code": info.get("code", "OK")})
         if kind == "ok":
             if full:
                 rt["close"]["reason"] = reason
+                if isinstance(rule, str) and rule.startswith("xp_"):
+                    rt["close"]["rule"] = rule
             self.sync_position(p)
             self.emit("rule_fired", {"rule": a.get("rule") or "x", "action": a["type"], "ok": True, "code": "OK"}, plan=p["spec"]["id"], sym=p["spec"]["symbol"])
             if not full and rt["status"] in IN_POS:
@@ -1271,6 +1392,24 @@ class Executor(object):
         if kind == "denied":
             self._gate_denied(p, "close", G.deny(info.get("code", "HOLD")))
         return False
+
+    def _do_close_maker(self, p, a, qty, remaining):
+        """Закрытие доли политики способом maker (`exec="maker"`, Requirement 10.2–10.4): post-only заявка по времени и таймер `wait_s`.
+        Доля меньше лота уже округлена `close_qty` и уходит рынком, если `close_qty` решил закрыть остаток целиком."""
+        spec, rt = p["spec"], p["rt"]
+        rule = a.get("rule")
+        why = self._action_why(a, a.get("why", ""))
+        wait = float(self.act.maker_cfg().get("wait_s") or 0.0)
+        whole = qty >= remaining - 1e-9
+        kind, info = self.act.close_maker(p, qty, rule, why, wait, whole=whole)
+        ok = kind in ("pending", "market")
+        self.decide("rule", a["type"], plan=spec["id"], args={"qty": qty, "exec": "maker", "px": info.get("price")},
+                    why=why, res={"ok": ok, "code": info.get("code") or ("MAKER_WAIT" if kind == "pending" else "OK")})
+        self.emit("rule_fired", {"rule": rule or "x", "action": a["type"], "ok": ok,
+                                 "code": info.get("code") or ("MAKER_WAIT" if kind == "pending" else "OK")}, plan=spec["id"], sym=spec["symbol"])
+        if kind in ("market", "gone"):
+            self.sync_position(p)
+        return ok
 
     def _do_add(self, p, a, view):
         spec = p["spec"]
@@ -1356,7 +1495,10 @@ class Executor(object):
             exit_px = (self.px.get(sym) or {}).get("last") or pos.get("avg") or 0.0
         pnl = round(real["pnl"] - real["fees"], 6)
         reason = self._close_reason(p, parts, exit_px)
+        pre_rule = (rt.get("close") or {}).get("rule")
         rt["close"] = {"reason": reason, "px": exit_px, "pnl": pnl}
+        if pre_rule:
+            rt["close"]["rule"] = pre_rule
         now = self.clock()
         if not self.observe:
             try:
@@ -1376,7 +1518,8 @@ class Executor(object):
                 tr = None
             if tr is not None and not tr.get("ts_close"):
                 self._journal_call("cmd_close", id=jid, exit=exit_px, reason=reason, funding=0.0, note="exec plan %s" % spec["id"], path=path,
-                                   pnl_override=pnl, fees_usdt=round(real["fees"], 6), rule_followed=None, err=None, lesson=None)
+                                   pnl_override=pnl, fees_usdt=round(real["fees"], 6), rule_followed=None, err=None, lesson=None,
+                                   exit_rule=self._exit_case_rule(p))
         for t in (rt.get("targets") or {}).values():
             if t.get("state") in ("resting", "pending", "touch"):
                 t["state"] = "cancelled"
@@ -1437,6 +1580,8 @@ class Executor(object):
         if last.get("exec_type") in ("BustTrade", "AdlTrade"):
             return "liquidation"
         link = last.get("link") or ""
+        if link and any(r.get("link") == link for r in (rt.get("policy_orders") or {}).values()):
+            return "rule"
         if link and any(t.get("link") == link for t in (rt.get("targets") or {}).values()):
             return "tp"
         stop = float(rt["pos"].get("cur_stop") or rt["pos"].get("initial_stop") or 0)
@@ -1475,6 +1620,7 @@ class Executor(object):
                           "t_best": round(now, 3), "t_worst": round(now, 3), "lev": pos.get("lev"), "path_n": 0, "path_cov": 0.0,
                           "entries": [{"ts": round(now, 3), "px": avg, "qty": qty, "fee": 0.0, "link": None, "exec_id": "adopt", "kind": "entry"}],
                           "risk0": qty * abs(avg - stop0)})
+        rt["pos"]["exit"] = self._exit_doc(p, avg)
         rt["ts"]["armed"] = rt["ts"]["entered"] = round(now, 3)
         rt["entry"]["state"] = "filled"
         self.exch_pos[sym] = dict(pos)
@@ -1498,6 +1644,7 @@ class Executor(object):
         for tid, t in [("t1", spec["targets"][0])]:
             rt["targets"][tid] = {"state": "touch", "qty": qty, "price": t["price"], "link": None, "filled_qty": 0.0}
         self._to_status(p, "managing", "ADOPT")
+        self.act.place_policy_limits(p, why="ADOPT")
         self.emit("entry_filled", {"avg": avg, "qty": qty, "partial": False, "sl": stop0, "journal_id": rt["pos"].get("journal_id")}, plan=spec["id"], sym=sym)
 
     # ------------------------------------------------------------------ таймер и команды

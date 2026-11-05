@@ -142,3 +142,43 @@ RE_WHY_VER = 1
 META_RE_WHY_KEY = "knowledge_re_why_ver"
 RE_WHY_COLS = (("event_why", "TEXT"), ("event_kind", "TEXT"))
 V2B_TRIGGERS = tuple("tr_%s_%s" % (t, w) for t in MEM_TABLES for w in ("nu", "nd"))
+
+# ---- x1 (R4 «Выходы», задача 7; design.md «Цикл выходов, миграция x1»): варианты меню, оценки, версии политики выхода (хеш-цепочка
+# append_row по колонкам prev_h/row_h), поиск, испытания (триггер неизменности критерия), чёрный список. Свой ключ версии meta.knowledge_x1_ver:
+# база v2a без таблиц x1 остаётся зелёной (ready/TABLES/TRIGGERS v2a их не требуют). Миграция - knowledge.store2.migrate_x1 (копия premigrate).
+X1_VER = 1
+META_X1_KEY = "knowledge_x1_ver"
+X1_TABLES = ("exit_variants", "exit_evals", "exit_versions", "exit_search", "exit_trials", "exit_blacklist")
+# policy_h в ключе exit_evals: у варианта с другой таблицей near_tp другая политика и другая оценка (R4, задача 10б)
+EXIT_TRIALS_IMMUTABLE = ("criterion", "criterion_h")
+X1 = [
+    """CREATE TABLE exit_variants(id TEXT NOT NULL, ver INTEGER NOT NULL, family TEXT NOT NULL, policy TEXT NOT NULL, policy_h TEXT NOT NULL,
+  menu_ver INTEGER NOT NULL, status TEXT NOT NULL, created_ts INTEGER NOT NULL, PRIMARY KEY(id, ver))""",
+    """CREATE TABLE exit_evals(src TEXT NOT NULL, key TEXT NOT NULL, var_id TEXT NOT NULL, var_ver INTEGER NOT NULL, ord TEXT NOT NULL,
+  px_mode TEXT NOT NULL, policy_h TEXT NOT NULL, cost_h TEXT NOT NULL, sim_ver TEXT NOT NULL, t0 INTEGER NOT NULL, block TEXT NOT NULL,
+  labeled_ts INTEGER NOT NULL, r_net REAL, r_gross REAL, fees_r REAL, mfe_r REAL, mae_r REAL, path_mfe_r REAL, exit_reason TEXT,
+  hold_min REAL, end_ts INTEGER, amb INTEGER NOT NULL, created_ts INTEGER NOT NULL,
+  PRIMARY KEY(src, key, var_id, var_ver, ord, px_mode, policy_h, cost_h, sim_ver))""",
+    "CREATE INDEX ix_ee_var ON exit_evals(var_id, var_ver, t0)",
+    """CREATE TABLE exit_versions(seq INTEGER PRIMARY KEY, ver TEXT UNIQUE NOT NULL, parent TEXT, reason_code TEXT NOT NULL, policy TEXT NOT NULL,
+  policy_h TEXT NOT NULL, floor_h TEXT NOT NULL, numbers TEXT, actor TEXT NOT NULL, ts INTEGER NOT NULL, prev_h TEXT, row_h TEXT NOT NULL)""",
+    """CREATE TABLE exit_search(id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, a INTEGER, b INTEGER, cut_ts INTEGER, sample_h TEXT, cfg_h TEXT,
+  menu_ver INTEGER, base_ver TEXT, block_h INTEGER, code TEXT NOT NULL, results TEXT)""",
+    """CREATE TABLE exit_trials(trial_id TEXT PRIMARY KEY, var_id TEXT NOT NULL, var_ver INTEGER NOT NULL, base_ver TEXT NOT NULL,
+  criterion TEXT NOT NULL, criterion_h TEXT NOT NULL, state TEXT NOT NULL, verdict TEXT, numbers TEXT, start_ts INTEGER NOT NULL,
+  deadline_ts INTEGER NOT NULL, cut_ts INTEGER, closed_ts INTEGER)""",
+    "CREATE TABLE exit_blacklist(var_id TEXT NOT NULL, var_ver INTEGER NOT NULL, until_ts INTEGER NOT NULL, reason TEXT NOT NULL, ts INTEGER NOT NULL)",
+    "CREATE TRIGGER tr_exit_versions_nu BEFORE UPDATE ON exit_versions BEGIN SELECT RAISE(ABORT, 'APPEND_ONLY exit_versions'); END",
+    "CREATE TRIGGER tr_exit_versions_nd BEFORE DELETE ON exit_versions BEGIN SELECT RAISE(ABORT, 'APPEND_ONLY exit_versions'); END",
+    "CREATE TRIGGER tr_exit_trials_crit BEFORE UPDATE OF %s ON exit_trials BEGIN SELECT RAISE(ABORT, 'IMMUTABLE exit_trials criterion'); END"
+    % ", ".join(EXIT_TRIALS_IMMUTABLE),
+    "CREATE TRIGGER tr_exit_trials_nd BEFORE DELETE ON exit_trials BEGIN SELECT RAISE(ABORT, 'APPEND_ONLY exit_trials'); END",
+]
+X1_INDEXES = ("ix_ee_var",)
+X1_TRIGGERS = ("tr_exit_versions_nu", "tr_exit_versions_nd", "tr_exit_trials_crit", "tr_exit_trials_nd")
+# хеш-цепочки: таблица -> (колонка prev, колонка h)
+CHAIN_COLS = {"rulebook_versions": ("prev", "h"), "exit_versions": ("prev_h", "row_h")}
+X1_MUTABLE = {"exit_trials": ("trial_id", ("state", "verdict", "numbers", "cut_ts", "closed_ts"))}
+X1_ROW_MAX = {"exit_variants": 4096, "exit_evals": 4096, "exit_versions": 8192, "exit_search": 262144, "exit_trials": 16384,
+              "exit_blacklist": 1024}
+X1_HASH_FIELDS = frozenset(("policy_h", "floor_h", "prev_h", "row_h", "cost_h", "cfg_h"))

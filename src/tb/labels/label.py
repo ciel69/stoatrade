@@ -9,7 +9,7 @@
 import json
 
 from tb import paths
-from tb.labels import features, klines, policies as pol_mod, schema, store
+from tb.labels import features, klines, paths as path_mod, policies as pol_mod, schema, store
 from tb.logic import bars
 from tb.logic import costs as costs_mod
 from tb.logic import geometry, sim
@@ -158,17 +158,20 @@ def _outcomes(row, r1, s0, px0, atr_pct, cost_rt, no_spread, horizons):
 
 
 def _policy_rows(root, cfg, row, feat, px0, ev, r1, t0, pols, geom_cfg, gap):
-    """Строки policy_runs для включённых подходящих политик; tradable=false -> []. Ошибка конфигурации -> ValueError."""
+    """Строки policy_runs для включённых подходящих политик; tradable=false -> [].
+
+    -> (rows, extra): extra — заполненные прогоны с планом и результатом симулятора для записи минутного пути прогона (R4).
+    Ошибка конфигурации -> ValueError."""
     sig = {"key": row["key"], "type": row["type"], "side": row.get("side"), "tradable": row.get("tradable")}
     todo = [p for p in pols if pol_mod.applicable(p, sig)]
     if not todo:
-        return []
+        return [], []
     featp = dict(feat, px=px0)
     ctx = pol_mod.shadow_ctx(root, cfg, featp, ev)
     cver = ctx["ctx_ver"]
     costs, manage = pol_mod.sim_inputs(root, cfg, ev)
     gver = geom_cfg.get("geometry_ver") or geometry.GEOMETRY_VER
-    rows = []
+    rows, extra = [], []
     for p in todo:
         plan, code = pol_mod.pick(p, sig, featp, ctx, geom_cfg)
         base = (row["key"], p["id"], int(p["ver"]), gver, cver, t0, row["sym"], row["type"])
@@ -183,20 +186,46 @@ def _policy_rows(root, cfg, row, feat, px0, ev, r1, t0, pols, geom_cfg, gap):
         v = (lambda k: res.get(k) if filled else None)
         rows.append(base + (plan["side"], _jd(plan), code, 1 if filled else 0, res.get("exit_reason"),
                             v("r_gross"), v("r_net"), v("fees_r"), v("mfe_r"), v("mae_r"), v("hold_min"), flags))
-    return rows
+        if filled:
+            extra.append({"policy_id": p["id"], "policy_ver": int(p["ver"]), "plan": plan, "res": res})
+    return rows, extra
+
+
+def _path_rows(root, row, extra, r1, feat, now_s):
+    """Строки run_paths (state=partial) для политик config/exits.json:paths.policies; пусто, если конфига нет (R4, задача 8)."""
+    pcfg = path_mod.load_cfg(root)
+    pcfg = path_mod.paths_cfg(pcfg)
+    if not pcfg or not pcfg.get("policies"):
+        return []
+    want = set(pcfg["policies"])
+    hold_mult = path_mod.cfg_float(pcfg, "hold_mult", 1.5)
+    reserve_min = path_mod.cfg_float(pcfg, "reserve_min", 30.0)
+    out = []
+    for e in extra:
+        if e["policy_id"] not in want:
+            continue
+        run = {"key": row["key"], "policy_id": e["policy_id"], "policy_ver": e["policy_ver"], "t0": int(row["t0"]),
+               "sym": row["sym"], "type": row["type"]}
+        rec = path_mod.run_path_row(run, e["plan"], e["res"], r1, feat, hold_mult, reserve_min, now_s=now_s)
+        if rec is not None:
+            out.append(rec)
+    return out
 
 
 def _rerun_write(conn, root, row, cfg, pols, geom_cfg, feat, px0, ev, r1, t0, gap, now_s):
     """Перепрогон политик (code=RERUN:<id,...>): пересчитываются и перезаписываются ТОЛЬКО строки policy_runs указанных политик (текущих версий,
-    INSERT OR REPLACE по (key, policy_id, policy_ver)); признаки, исходы, gap_min, строки остальных политик и прежних версий не трогаются."""
+    INSERT OR REPLACE по (key, policy_id, policy_ver)) и их минутные пути run_paths (R4); признаки, исходы, gap_min, строки остальных политик
+    и прежних версий не трогаются."""
     try:
-        runs = _policy_rows(root, cfg, row, feat, px0, ev, r1, t0, pols, geom_cfg, gap)
+        runs, extra = _policy_rows(root, cfg, row, feat, px0, ev, r1, t0, pols, geom_cfg, gap)
     except ValueError:
         return defer(conn, row, cfg, now_s, schema.CONFIG)
+    paths_rows = _path_rows(root, row, extra, r1, feat, now_s)
     with store.tx(conn):
         for r in runs:
             conn.execute("INSERT OR REPLACE INTO policy_runs(key, policy_id, policy_ver, geometry_ver, ctx_ver, t0, sym, type, side, plan, code, filled,"
                          " exit_reason, r_gross, r_net, fees_r, mfe_r, mae_r, hold_min, flags) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", r)
+        path_mod.insert_run_paths(conn, paths_rows, replace=True)
         conn.execute("UPDATE signals SET status=?, code=NULL, attempts=0 WHERE key=?", (schema.DONE, row["key"]))
     return schema.DONE
 
@@ -234,9 +263,10 @@ def label_one(conn, root, row, cfg, policies, geom_cfg, fetch, btc_cache, now_s)
     horizons = cfg.get("horizons") or DEFAULT_HORIZONS
     outs = _outcomes(row, r1, s0, px0, feat.get("atr5_pct"), cost_rt, no_spread, horizons)
     try:
-        runs = _policy_rows(root, cfg, row, feat, px0, ev, r1, t0, policies, geom_cfg, gap)
+        runs, extra = _policy_rows(root, cfg, row, feat, px0, ev, r1, t0, policies, geom_cfg, gap)
     except ValueError:
         return defer(conn, row, cfg, now_s, schema.CONFIG)
+    paths_rows = _path_rows(root, row, extra, r1, feat, now_s)
 
     with store.tx(conn):
         conn.execute("DELETE FROM outcomes WHERE key=?", (row["key"],))
@@ -245,6 +275,7 @@ def label_one(conn, root, row, cfg, policies, geom_cfg, fetch, btc_cache, now_s)
         for r in runs:
             conn.execute("INSERT OR REPLACE INTO policy_runs(key, policy_id, policy_ver, geometry_ver, ctx_ver, t0, sym, type, side, plan, code, filled,"
                          " exit_reason, r_gross, r_net, fees_r, mfe_r, mae_r, hold_min, flags) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", r)
+        path_mod.insert_run_paths(conn, paths_rows, replace=True)
         conn.execute("UPDATE signals SET status=?, code=NULL, feat=?, missing=?, levels_src=?, gap_min=?, labeled_ts=? WHERE key=?",
                      (schema.DONE, _jd(feat), _jd(missing), LEVELS_SRC, gap, int(now_s), row["key"]))
     return schema.DONE

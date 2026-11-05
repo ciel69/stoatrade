@@ -1,6 +1,11 @@
-"""Схема базы знаний (метки), версия 1; статусы и коды. Только данные, без ввода-вывода."""
+"""Схема базы знаний (метки), версия 2; статусы и коды. Только данные, без ввода-вывода.
 
-SCHEMA_VER = 1
+Версия 2 (R4 «Выходы», задача 7; design.md «Data Models»): минутные пути заполненных прогонов `run_paths` (состояние partial -> complete,
+`complete_ts`) и сделок мозга `trade_paths` (с `qty`, `qty_step`, `min_qty` инструмента на входе); курсор шины `position_closed` — строка
+таблицы `cursor` с `src = CURSOR_BUS_CLOSED` (пишет шаг путей сделок). Миграция только добавляет таблицы: строки v1 не меняются.
+"""
+
+SCHEMA_VER = 2
 META_VER_KEY = "labels_schema_ver"
 DB_NAME = "knowledge.sqlite"
 
@@ -51,5 +56,34 @@ V1 = [
     "CREATE INDEX ix_pr_type ON policy_runs(type, t0)",
 ]
 
+# версия 2 (R4): пути прогонов и сделок мозга для контрфактической оценки выходов
+PATH_PARTIAL, PATH_COMPLETE = "partial", "complete"          # run_paths.state
+PATH_STATES = (PATH_PARTIAL, PATH_COMPLETE)
+FLAG_GAP = "gap"                 # пропуск свечей длиннее bars.GAP_MAX_MIN: путь вне оценок (Requirement 1.5)
+FLAG_ADOPTED = "adopted"         # сделка принята командой plan adopt: в оценки мозга не входит (Requirement 1, Edge Cases)
+CURSOR_BUS_CLOSED = "bus_closed"  # cursor.src: позиция чтения событий position_closed шины (шаг trade_paths_step)
+RUN_PATHS = "run_paths"
+TRADE_PATHS = "trade_paths"
+
+V2 = [
+    """CREATE TABLE run_paths(
+  key TEXT NOT NULL, policy_id TEXT NOT NULL, policy_ver INTEGER NOT NULL, t0 INTEGER NOT NULL, sym TEXT NOT NULL,
+  type TEXT NOT NULL, side TEXT NOT NULL, horizon TEXT NOT NULL, entry_ts INTEGER NOT NULL, entry_px REAL NOT NULL, stop REAL NOT NULL,
+  tick REAL NOT NULL, max_hold_min REAL NOT NULL, atr5_pct REAL, plan TEXT NOT NULL, rows BLOB NOT NULL, n_rows INTEGER NOT NULL,
+  end_ts INTEGER NOT NULL, state TEXT NOT NULL, flags TEXT, aux BLOB, aux_ver TEXT, labeled_ts INTEGER NOT NULL, complete_ts INTEGER,
+  PRIMARY KEY(key, policy_id, policy_ver))""",
+    "CREATE INDEX ix_rp_t0 ON run_paths(t0)",
+    "CREATE INDEX ix_rp_state ON run_paths(state, end_ts)",
+    """CREATE TABLE trade_paths(
+  journal_id TEXT PRIMARY KEY, plan_id TEXT, sym TEXT NOT NULL, side TEXT NOT NULL, mode TEXT NOT NULL,
+  entry_ts INTEGER NOT NULL, entry_px REAL NOT NULL, stop0 REAL NOT NULL, tick REAL NOT NULL, qty REAL NOT NULL, qty_step REAL NOT NULL,
+  min_qty REAL NOT NULL, horizon TEXT, max_hold_min REAL, atr5_pct REAL, sig_type TEXT, exit_ver TEXT, policy_h TEXT,
+  close_ts INTEGER NOT NULL, r REAL, parts TEXT NOT NULL, timeline TEXT NOT NULL, rows BLOB NOT NULL, end_ts INTEGER NOT NULL,
+  flags TEXT, fetched_ts INTEGER NOT NULL)""",
+    "CREATE INDEX ix_tp_entry ON trade_paths(mode, entry_ts)",
+]
+V2_TABLES = (RUN_PATHS, TRADE_PATHS)
+V2_INDEXES = ("ix_rp_t0", "ix_rp_state", "ix_tp_entry")
+
 # (версия, [операторы]) по возрастанию
-MIGRATIONS = [(1, V1)]
+MIGRATIONS = [(1, V1), (2, V2)]

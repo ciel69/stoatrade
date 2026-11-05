@@ -1026,7 +1026,8 @@ def events_feed(root, query):
 
 # ---------------------------------------------------------------- досье
 _BRIEF_ALLOW = ("brief_id", "ts", "scope", "trunc", "system", "account", "session", "room", "positions", "plans", "market", "hot", "levels", "ideas", "recent",
-                "lessons", "checklist", "since_last", "unacked", "struct", "limits", "risk_level", "economics", "experiments", "intel", "news_digest", "flash", "flow", "playbook", "rulebook", "cands")
+                "lessons", "checklist", "since_last", "unacked", "struct", "limits", "risk_level", "economics", "experiments", "intel", "news_digest", "flash", "flow", "playbook", "rulebook", "cands",
+                "exit")
 
 
 def _clean_brief(x, depth=0):
