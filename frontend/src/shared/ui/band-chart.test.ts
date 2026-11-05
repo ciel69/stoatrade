@@ -72,6 +72,18 @@ describe('layoutOf', () => {
     const zero = l.ticks.find((t) => t.zero)!
     for (const t of l.ticks.filter((x) => !x.zero)) expect(Math.abs(t.y - zero.y)).toBeGreaterThanOrEqual(14)
   })
+  it('показывает площадь и точки пересечения нуля', () => {
+    const l = layoutOf([p(1, -1), p(2, 1), p(3, -0.5)], 390, 120)
+    expect(l.area.startsWith('M')).toBe(true)
+    expect(l.crossings).toHaveLength(2)
+    expect(l.crossings[0]!.up).toBe(true)
+    expect(l.crossings[1]!.up).toBe(false)
+    for (const c of l.crossings) {
+      expect(c.x).toBeGreaterThanOrEqual(l.xs[0]!)
+      expect(c.x).toBeLessThanOrEqual(l.xs[2]!)
+      expect(c.y).toBe(l.zeroY)
+    }
+  })
 })
 
 describe('навигация', () => {
@@ -106,6 +118,15 @@ describe('тексты', () => {
 
 describe('UiBandChart', () => {
   const mk = (points: BandPoint[], width = 390) => mount(UiBandChart, { props: { points, label: 'Средний R', unit: 'R', xLabel: 'Сделка', width } })
+  const mkSigned = (points: BandPoint[], width = 390) => mount(UiBandChart, { props: { points, label: 'Средний R', unit: 'R', xLabel: 'Сделка', width, signed: true } })
+
+  it('signed: площади знака, точки пересечения и клипы', () => {
+    const w = mkSigned([p(1, -0.5), p(2, 0.4)])
+    expect(w.find('.area.pos').exists()).toBe(true)
+    expect(w.find('.area.neg').exists()).toBe(true)
+    expect(w.findAll('.cross')).toHaveLength(1)
+    expect(w.find('clipPath').exists()).toBe(true)
+  })
 
   it('нет точек: текст вместо графика', () => {
     const w = mk([])

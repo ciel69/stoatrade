@@ -21,12 +21,17 @@ const props = withDefaults(defineProps<{
   width?: number
   format?: (v: number) => string
   emptyText?: string
-}>(), { unit: '', xLabel: 'Точка', height: 120, emptyText: 'Данных пока нет' })
+  /** Подсветить знак относительно нуля: площади pos/neg и точки пересечения. */
+  signed?: boolean
+}>(), { unit: '', xLabel: 'Точка', height: 120, emptyText: 'Данных пока нет', signed: false })
 
 const box = ref<HTMLElement | null>(null)
 const measured = ref(0)
 const ready = ref(false)
 const active = ref<number | null>(null)
+const uid = Math.random().toString(36).slice(2, 9)
+const clipPos = `band-pos-${uid}`
+const clipNeg = `band-neg-${uid}`
 
 const fmt = computed(() => props.format ?? ((v: number) => fmtNum(v)))
 const w = computed(() => props.width ?? (measured.value || 320))
@@ -81,10 +86,14 @@ onBeforeUnmount(() => ro?.disconnect())
 </script>
 
 <template>
-  <div ref="box" class="bc" :class="{ ready }">
+  <div ref="box" class="bc" :class="{ ready, signed }">
     <div v-if="!count" class="empty" :style="{ height: height + 'px' }" role="img" :aria-label="aria">{{ emptyText }}</div>
     <div v-else class="chart" tabindex="0" role="group" :aria-label="aria" @pointermove="onMove" @pointerdown="onDown" @pointerleave="active = null" @keydown="onKey" @blur="active = null">
       <svg class="svg" :width="w" :height="height" :viewBox="`0 0 ${w} ${height}`" aria-hidden="true" focusable="false">
+        <defs v-if="signed">
+          <clipPath :id="clipPos"><rect :x="PAD.l" :y="PAD.t" :width="w - PAD.l - PAD.r" :height="Math.max(0, lay.zeroY - PAD.t)" /></clipPath>
+          <clipPath :id="clipNeg"><rect :x="PAD.l" :y="lay.zeroY" :width="w - PAD.l - PAD.r" :height="Math.max(0, height - PAD.b - lay.zeroY)" /></clipPath>
+        </defs>
         <g class="ticks">
           <g v-for="t in lay.ticks" :key="t.text + t.y">
             <line v-if="!t.zero" class="grid" :x1="PAD.l" :x2="w - PAD.r" :y1="t.y" :y2="t.y" />
@@ -94,8 +103,13 @@ onBeforeUnmount(() => ro?.disconnect())
         <g class="series">
           <path v-for="(d, k) in lay.bands" :key="k" class="band" :d="d" />
           <line v-for="(s, k) in lay.whiskers" :key="'w' + k" class="whisker" :x1="s.x" :x2="s.x" :y1="s.y1" :y2="s.y2" />
+          <template v-if="signed">
+            <path class="area pos" :d="lay.area" :clip-path="`url(#${clipPos})`" />
+            <path class="area neg" :d="lay.area" :clip-path="`url(#${clipNeg})`" />
+          </template>
           <path v-if="lay.line" class="line" :d="lay.line" />
           <line class="zero" :x1="PAD.l" :x2="w - PAD.r" :y1="lay.zeroY" :y2="lay.zeroY" />
+          <circle v-for="(c, k) in lay.crossings" v-show="signed" :key="'c' + k" class="cross" :class="c.up ? 'up' : 'down'" :cx="c.x" :cy="c.y" r="3" />
           <circle class="last-ring" :cx="lay.xs[lastIx]" :cy="lay.ys[lastIx]" r="5" />
           <circle class="last" :cx="lay.xs[lastIx]" :cy="lay.ys[lastIx]" r="3" />
           <text class="lv" :x="Math.min(w - PAD.r, lay.xs[lastIx]! + 4)" :y="lastLabelY" text-anchor="end">{{ lastLabel }}</text>
@@ -138,6 +152,17 @@ onBeforeUnmount(() => ro?.disconnect())
 .band { fill: var(--accent); fill-opacity: 0.2; stroke: none; }
 .whisker { stroke: var(--accent); stroke-opacity: 0.5; stroke-width: 2; stroke-linecap: round; }
 .line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.area { stroke: none; }
+.cross { fill: var(--panel); stroke-width: 2; }
+.cross.up { stroke: var(--pos); }
+.cross.down { stroke: var(--neg); }
+.signed .grid { stroke-dasharray: 2 5; }
+.signed .band { fill: var(--muted); fill-opacity: 0.08; stroke: var(--muted); stroke-opacity: 0.22; stroke-width: 1; }
+.signed .area.pos { fill: var(--pos); fill-opacity: 0.16; }
+.signed .area.neg { fill: var(--neg); fill-opacity: 0.16; }
+.signed .line { stroke-width: 2.5; }
+.signed .zero { stroke: var(--text); stroke-opacity: 0.55; stroke-width: 1.5; stroke-dasharray: none; }
+.signed .tl.z { fill: var(--text); font-weight: 700; }
 .last { fill: var(--accent); }
 .last-ring, .cur-ring { fill: var(--panel); }
 .cur-dot { fill: var(--text); }

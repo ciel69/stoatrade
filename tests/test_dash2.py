@@ -52,6 +52,12 @@ class HomeEventsTopics(Fx):
         w(self.root, "state/control/platform.json", json.dumps({"state": "stopped", "mode": "live"}))
         self.assertEqual(topics.default_mode(self.root), "paper")                                       # остановленная платформа: безопасный режим по умолчанию
 
+    def test_position_margin_prefers_journal_and_falls_back_to_notional_over_leverage(self):
+        p = topics._position({"qty": 2.0, "avg": 10.0, "lev": 5.0, "targets": []}, {})
+        self.assertEqual(p["margin"], 4.0)
+        p = topics._position({"qty": 2.0, "avg": 10.0, "lev": 5.0, "targets": []}, {"margin": 3.5})
+        self.assertEqual(p["margin"], 3.5)
+
     def test_home_pnl_today_counts_all_trades_even_flagged_artifacts(self):
         today = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         rows = []
@@ -226,8 +232,8 @@ class ServerTest(Fx, unittest.IsolatedAsyncioTestCase):
     async def test_snapshot_then_only_changes(self):
         self.hb()
         async with connect("ws://127.0.0.1:%d/ws" % self.port) as ws:
-            first = [await self.recv(ws) for _ in range(17)]
-            self.assertEqual([m["topic"] for m in first], ["hello", "brain", "briefs", "ctl", "day", "events", "market", "news", "notify", "settings", "system", "decisions", "home", "ideas", "models", "plans", "trades"])
+            first = [await self.recv(ws) for _ in range(18)]
+            self.assertEqual([m["topic"] for m in first], ["hello", "brain", "briefs", "cmkt", "ctl", "day", "events", "market", "news", "notify", "settings", "system", "decisions", "home", "ideas", "models", "plans", "trades"])
             self.assertEqual(first[1]["data"]["status"], "idle")
             self.assertEqual((first[0]["data"]["mode"], first[12]["data"]["mode"]), ("paper", "paper"))
             self.assertIn("enabled", first[0]["data"]["ctl"])

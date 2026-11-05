@@ -247,6 +247,50 @@ def trade_pcts(t):
     return move, mp
 
 
+def _history_segments(t):
+    parts = [p for p in (t.get("parts") or []) if isinstance(p, dict)]
+    if not parts:
+        return [t] if t.get("status") == "closed" else []
+    tid = str(t.get("id"))
+    entry, lev = num(t.get("entry")), num(t.get("lev"))
+    initial = (num(t.get("qty")) or 0.0) + sum(num(p.get("qty"), 0.0) for p in parts)
+    risk_total = num(t.get("risk_usdt"))
+    out, fees_sum, net_sum = [], 0.0, 0.0
+    for i, p in enumerate(parts):
+        q, px = num(p.get("qty")), num(p.get("px"))
+        fee, gross = num(p.get("fee"), 0.0), num(p.get("pnl"), 0.0)
+        if not (q and q > 0 and px and px > 0):
+            continue
+        net = gross - fee
+        row = dict(t)
+        margin = (q * entry / lev) if entry and lev else None
+        risk = (risk_total * q / initial) if risk_total is not None and initial else None
+        row.update({"id": "%s#p%d" % (tid, i + 1), "parent": tid, "status": "closed", "qty": q,
+                    "notional": q * entry if entry else None, "exit": px, "ts_close": p.get("ts"),
+                    "ts_close_epoch": parse_ts(p.get("ts")), "pnl_usdt": net, "fees_usdt": fee,
+                    "funding_usdt": 0.0, "margin": margin, "risk_usdt": risk, "reason": "partial",
+                    "partial": True, "parts": [], "realized_parts": None, "path": None})
+        row["move_pct"], row["pnl_pct_margin"] = trade_pcts(row)
+        row["r"] = (net / risk) if risk else None
+        out.append(row)
+        fees_sum += fee
+        net_sum += net
+    if t.get("status") != "closed":
+        return out
+    remaining = num(t.get("qty")) or 0.0
+    final_net = (num(t.get("pnl_usdt"), 0.0) or 0.0) - net_sum
+    if remaining > 1e-12 or abs(final_net) > 1e-9:
+        row = dict(t)
+        risk = (risk_total * remaining / initial) if risk_total is not None and initial else None
+        row.update({"id": "%s#final" % tid, "parent": tid, "pnl_usdt": final_net,
+                    "fees_usdt": max(0.0, (num(t.get("fees_usdt"), 0.0) or 0.0) - fees_sum),
+                    "risk_usdt": risk, "partial": False, "final": True, "parts": [], "realized_parts": None})
+        row["move_pct"], row["pnl_pct_margin"] = trade_pcts(row)
+        row["r"] = (final_net / risk) if risk else None
+        out.append(row)
+    return out or [t]
+
+
 def _apply_post(t, r):
     err = r.get("err")
     if isinstance(err, list) and err:
@@ -1250,7 +1294,7 @@ def build_state(root=None, mode="live", venue="all", now=None):
         warns.append({"level": "info", "text": "Журнал: повторных open %d, close без open %d, битых строк %d" % (
             tw["dup_open"], tw["orphan_close"], tw["bad_rows"])})
 
-    history = sorted(closed, key=lambda x: x.get("ts_close_epoch") or 0.0, reverse=True)
+    history = sorted([seg for t in shown for seg in _history_segments(t)], key=lambda x: x.get("ts_close_epoch") or 0.0, reverse=True)
     learning = read_json(paths.state("learning.json", root=root))
     from tb.dash import model2          # отложенный импорт: model2 сам импортирует model
     try:

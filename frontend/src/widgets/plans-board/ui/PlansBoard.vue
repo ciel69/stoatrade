@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { PlanRow, useTradingStore } from '@/entities/trading'
 import { UiChip } from '@/shared/ui'
-import { useNow } from '@/shared/lib'
+import { countdown, useNow } from '@/shared/lib'
 
 /**
  * Планы, которые ждут входа: ближайшие к триггеру сверху. Каждый план нарисован так же, как открытая позиция (полоса стоп, вход, цель, цена), а словами сказано, чего он ждёт,
@@ -16,7 +16,14 @@ const counts = computed(() => {
   const c = block.value?.counts
   return c ? [{ id: 'waiting', label: 'ждёт входа', n: c.waiting }, { id: 'watching', label: 'далеко от входа', n: c.watching }, { id: 'in_trade', label: 'в сделке', n: c.in_trade }].filter((x) => x.n > 0) : []
 })
-const active = computed(() => (block.value ? block.value.counts.waiting + block.value.counts.watching + block.value.counts.in_trade : 0))      // закрытые за сутки в «в работе» не входят
+const active = computed(() => (block.value ? block.value.counts.waiting + block.value.counts.watching + block.value.counts.in_trade : 0))
+const rateText = computed(() => {
+  const r = block.value?.rate
+  if (!r) return ''
+  const base = `Лимит планов: ${r.used}/${r.limit} за ${r.window_min} мин`
+  const left = r.next_at != null ? Math.max(0, r.next_at - now.value) : 0
+  return left > 0 ? `${base} · следующий слот через ${countdown(left)}` : base
+})      // закрытые за сутки в «в работе» не входят
 </script>
 
 <template>
@@ -25,6 +32,7 @@ const active = computed(() => (block.value ? block.value.counts.waiting + block.
     <div v-if="counts.length" class="counts">
       <UiChip v-for="c in counts" :key="c.id" :tone="c.id === 'waiting' ? 'accent' : 'neutral'">{{ c.label }} {{ c.n }}</UiChip>
     </div>
+    <p v-if="rateText" class="rate">{{ rateText }}</p>
 
     <ul v-if="block?.near.length" class="list">
       <PlanRow v-for="p in block.near" :key="p.id" :plan="p" :now="now" />
@@ -39,6 +47,7 @@ const active = computed(() => (block.value ? block.value.counts.waiting + block.
 .title { margin: 0; font-size: 14px; font-weight: 600; display: flex; align-items: baseline; gap: var(--space-2); }
 .n { font-size: 12px; font-weight: 400; color: var(--muted); }
 .counts { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
+.rate { margin: var(--space-2) 0 0; font-size: 12px; color: var(--muted); }
 .list { list-style: none; margin: var(--space-3) 0 0; padding: 0; }
 .empty { margin: var(--space-3) 0 0; font-size: 13px; color: var(--muted); }
 .skel { height: 64px; margin-top: var(--space-3); border-radius: var(--radius-sm); background: var(--panel2); }

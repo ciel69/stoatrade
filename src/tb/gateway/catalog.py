@@ -784,7 +784,9 @@ def h_submit(ctx, a):
     check_plan(ctx, plan)
     n = _plans_last_hour(ctx)
     if n >= lim["plans_per_hour"]:
-        raise ToolError("E_RATE_PLANS", "лимит планов в час: %d" % lim["plans_per_hour"], "", "denied")
+        from tb.gateway import audit
+        wait = audit.next_slot(ctx.agent.id, "submit_plan", lim["plans_per_hour"], 3600.0, root=ctx.root, now=ctx.now)
+        raise ToolError("E_RATE_PLANS", "лимит планов: %d за последние 60 минут; следующий слот через %s" % (lim["plans_per_hour"], audit.wait_text(wait)), "", "denied")
     chk = _rule_gate(ctx, a, plan)
     resp = None
     try:

@@ -889,6 +889,41 @@ class MomentumChase(unittest.TestCase):
         self.assertIn("CHASE_CONFIRM", check(candle, brief=self.brief())[1])
 
 
+class NoConfirmVariant(unittest.TestCase):
+    """Риск 4-5: платформа даёт ранний вход без 5м свечи (confirm=none) с уменьшенным размером."""
+
+    def brief(self, level=5, allowed=True):
+        b = copy.deepcopy(SCAN_BRIEF)
+        b.update({"session": {"id": "S-1", "type": "day", "cost_rt_pct": 0.28, "horizons": {"scalp": {"max_stop_pct": 0.8, "min_rr": 1.0},
+                                                                                          "intraday": {"max_stop_pct": 3.0, "min_rr": 1.5}}},
+                  "risk_level": {"level": level, "no_confirm": {"allowed": allowed, "size_mult_max": 0.5}}})
+        b["struct"]["s"]["SOL"].update(res=[[146.5, 0.9, 0.5, "dh"], [150.0, 3.3, 1.8, "wh"]], sup=[[144.0, -0.8, 0.4, "s1h"], [141.0, -2.9, 1.5, "pdl"]])
+        b["levels"]["SOL"]["swing_5m"] = [144.6, 145.0]
+        return b
+
+    def variant(self, b):
+        return next((r for r in cands.candidates(b, "SOL", high_risk=True) or [] if r.get("confirm") == "none" and "no-confirm" in (r.get("tags") or [])), None)
+
+    def test_level5_has_no_confirm_variant_and_it_is_valid(self):
+        b = self.brief(5)
+        r = self.variant(b)
+        self.assertIsNotNone(r)
+        self.assertTrue(r.get("ok"))
+        self.assertEqual(r["size_mult"], 0.5)
+        self.assertLess(r["zone"]["low"], r["level"])
+        self.assertGreater(r["zone"]["high"], r["level"])
+        o = propose(side=r["side"], horizon=r["horizon"], setup="level_reclaim", level=r["level"], stop=r["stop"], tp=r["tp"], confirm="none", zone=r["zone"], size_mult=r["size_mult"], tags=r["tags"])
+        self.assertEqual(check(o, brief=b)[1], [])
+        p = entryplan.build(o, validate.entry_context(b, EV))
+        self.assertEqual(p["entry"]["when"]["kind"], "price_in_zone")
+        self.assertTrue(p["risk"]["confirm_waiver"])
+        self.assertEqual(p["risk"]["size_mult"], 0.5)
+
+    def test_level3_and_forbidden_have_no_variant(self):
+        self.assertIsNone(self.variant(self.brief(3)))
+        self.assertIsNone(self.variant(self.brief(5, allowed=False)))
+
+
 class BriefPause(unittest.TestCase):
     def test_pause_block_from_closed_stops(self):
         class C(object):

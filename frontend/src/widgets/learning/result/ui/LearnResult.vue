@@ -46,7 +46,7 @@ const message = computed(() => bv.value.message || (bv.value.kind === 'data' && 
     <p v-if="!res" class="msg" role="status">{{ message }}</p>
 
     <template v-else>
-      <UiBandChart :points="points" :label="LEARN_RESULT_SERIES(win)" unit="R" :x-label="LEARN_RESULT_X" :height="148" :empty-text="LEARN_RESULT_CHART_EMPTY" />
+      <UiBandChart :points="points" :label="LEARN_RESULT_SERIES(win)" unit="R" :x-label="LEARN_RESULT_X" :height="148" :empty-text="LEARN_RESULT_CHART_EMPTY" signed />
 
       <p class="sig" :class="`w-${where}`">
         <svg class="gl" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">

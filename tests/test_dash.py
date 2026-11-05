@@ -77,6 +77,23 @@ class TestJournalParsing(Base):
         tr, _ = model.load_trades(self.root)
         self.assertEqual([t["status"] for t in tr], ["open"])
 
+    def test_partial_close_is_a_realized_segment_and_rest_stays(self):
+        part = {"ev": "part", "id": "A", "ts": iso(NOW - 200), "px": 110.0, "qty": 0.08, "fee": 0.01, "pnl": 0.8}
+        self.jl("trades.jsonl", [op("A"), part])
+        tr, _ = model.load_trades(self.root)
+        self.assertEqual([t["status"] for t in tr], ["open"])
+        seg = model._history_segments(tr[0])
+        self.assertEqual(len(seg), 1)
+        self.assertEqual((seg[0]["reason"], seg[0]["partial"], seg[0]["qty"]), ("partial", True, 0.08))
+        self.assertAlmostEqual(seg[0]["pnl_usdt"], 0.79)
+
+        self.jl("trades.jsonl", [op("A"), part, cl("A", 1.0, exit=105.0)])
+        tr, _ = model.load_trades(self.root)
+        seg = model._history_segments(tr[0])
+        self.assertEqual([x["reason"] for x in seg], ["partial", "tp"])
+        self.assertAlmostEqual(sum(x["pnl_usdt"] for x in seg), 1.0)
+        self.assertAlmostEqual(seg[1]["qty"], 0.12)
+
     def test_duplicate_open_replaces_and_reopen_after_close_is_new(self):
         self.jl("trades.jsonl", [op("A", entry=100.0), op("A", entry=101.0), op("B"), cl("B", 0.1), op("B", entry=105.0)])
         tr, w = model.load_trades(self.root)

@@ -12,7 +12,7 @@ const tone = (x: number | null) => ((x ?? 0) > 0 ? 'up' : (x ?? 0) < 0 ? 'down' 
 const held = computed(() => (props.trade.ts_open != null && props.trade.ts_close != null ? props.trade.ts_close - props.trade.ts_open : null))
 const GOOD = new Set(['good', 'good-process-bad-luck'])
 const RULE: Record<string, string> = { yes: 'соблюдены', no: 'нарушены', partial: 'частично' }
-const EXIT: Record<string, string> = { sl: 'стоп', tp: 'тейк', manual: 'вручную', time: 'по времени' }
+const EXIT: Record<string, string> = { sl: 'стоп', tp: 'тейк', manual: 'вручную', time: 'по времени', partial: 'частичное' }
 const dateFmt = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false })
 const dt = (t: number | null) => (t == null ? '–' : dateFmt.format(new Date(t * 1000)))
 

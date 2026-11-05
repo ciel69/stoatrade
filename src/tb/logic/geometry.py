@@ -148,7 +148,46 @@ def _horizon(ctx, stop_pct, rr, wide_pct=None, tp1_pct=None, base=None):
     return near[0], round(near[1], 2), "rr_low:need_%.2f" % near[3]
 
 
-def candidates(levels, ctx, profiles=None):
+def _num(x):
+    if isinstance(x, bool):
+        return None
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return None
+
+
+def _no_confirm_variants(ctx, ok_rows, profile):
+    """Варианты входа без подтверждающей свечи для риска 4-5: тот же уровень/стоп/цели,
+    но вход в зоне вокруг уровня сразу, с уменьшенным size_mult и тегом no-confirm.
+    Это осознанно более рискованный вход (без ожидания 5м закрытия); уровень 3 и ниже
+    такие варианты не получает. -> [row] (не больше одного на сторону)."""
+    if (ctx.get("risk_level") or 0) < CHASE_MIN_LEVEL or ctx.get("no_confirm_allowed") is False or (ctx.get("stop_streak") or 0) >= 2:
+        return []
+    cap = ctx.get("no_confirm_max")
+    cap = ENTRY_SIZE_MULT_MAX if cap is None else min(ENTRY_SIZE_MULT_MAX, float(cap))
+    if cap <= 0:
+        return []
+    z = float(profile.get("zone_pct") or 0.3) / 100.0
+    out, seen = [], set()
+    for r in ok_rows:
+        side, lvl = r.get("side"), _num(r.get("level"))
+        if side in seen or not lvl:
+            continue
+        size = min(cap, _num(r.get("size_mult")) or cap)
+        v = dict(r)
+        v["confirm"] = "none"
+        v["entry_type"] = "market"
+        v["zone"] = {"low": _px(lvl * (1 - z)), "high": _px(lvl * (1 + z))}
+        v["size_mult"] = round(size, 2)
+        v["tags"] = list(dict.fromkeys(list(r.get("tags") or []) + ["no-confirm"]))
+        v["high_risk"] = True
+        out.append(v)
+        seen.add(side)
+    return out
+
+
+def candidates(levels, ctx, profiles=None, high_risk=False):
     """-> [кандидат] (ok сначала, по убыванию rr_net) или None.
     levels: цены уровней монеты (кластеризуются здесь); ctx: словарь вида validate.entry_context (px, a5_pct, spread_bps, range_5m_pct, cost_rt_pct, cost_rt_maker_pct,
     min_rr, max_stop_pct, horizons, max_horizon, off_plan_ok, risk_level, day_size_mult, surge_x, ret_5m, stop_streak, session_type, no_confirm_allowed, no_confirm_max);
@@ -223,7 +262,8 @@ def candidates(levels, ctx, profiles=None):
                 ok.append(row)
     ok.sort(key=lambda r: -r["rr_net"])
     bad.sort(key=lambda r: -r["rr_net"])
-    out = ([ch] if ch else []) + ok[:base["max_ok"]] + bad[:base["max_fail"]]      # импульс первым: он живёт минуты
+    extra = _no_confirm_variants(ctx, ok[:base["max_ok"]], chp) if high_risk else []      # риск 4-5: ранний вход без свечи, уменьшенный размер
+    out = ([ch] if ch else []) + ok[:base["max_ok"]] + bad[:base["max_fail"]] + extra      # импульс первым: он живёт минуты
     for i, r in enumerate(out):
         r["n"] = i + 1                                                # номер для es_take / es_watch (модели не нужно считать позиции)
     return out or None

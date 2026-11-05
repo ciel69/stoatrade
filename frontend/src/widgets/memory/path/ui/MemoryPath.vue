@@ -75,7 +75,7 @@ const shown = computed(() => (props.detail?.paths?.length ?? 0))
 
 /* воронка: станции на одной линии; линия — псевдоэлемент на всю ширину, прорисовывается через scaleX */
 .funnel { position: relative; list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: var(--space-3); }
-.funnel::before { content: ""; position: absolute; left: 6px; right: 6px; top: 5px; height: 2px; border-radius: 2px; background: var(--line2); transform-origin: left center; transform: scaleX(0.04); transition: transform 420ms var(--ease-out); }
+.funnel::before { content: ""; position: absolute; left: 6px; right: 6px; top: 5px; height: 2px; border-radius: 2px; background: var(--line2); transform-origin: left center; transform: scaleX(0); transition: transform 420ms var(--ease-out); }
 .funnel.on::before { transform: scaleX(1); }
 .st { position: relative; display: grid; justify-items: start; gap: 2px; min-width: 0; opacity: 0.55; transition: opacity var(--dur-enter) var(--ease-out), transform var(--dur-enter) var(--ease-out); transition-delay: calc(var(--i) * 50ms + 80ms); }
 .funnel.on .st { opacity: 1; }

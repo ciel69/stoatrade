@@ -427,7 +427,7 @@ class TestBothPathsSameDecision(GwRules):
     def test_brief_build_passes_root_and_event_to_cands(self):
         seen = []
 
-        def spy(b, sym, ctx=None, root=None, event_seq=None, now=None, view=None):
+        def spy(b, sym, ctx=None, root=None, event_seq=None, now=None, view=None, high_risk=False):
             seen.append((sym, root, event_seq, view is not None or root is not None))
             return None
         with mock.patch.object(brief_mod.cands_mod, "candidates", side_effect=spy):

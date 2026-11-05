@@ -54,6 +54,7 @@ export interface Position {
   pnl_pct: number | null
   risk: number | null
   pnl_at_sl: number | null
+  margin?: number | null
   held_s: number | null
   hold_left_s: number | null
   liq: number | null
@@ -121,10 +122,20 @@ export interface NearPlan {
   warnings: string[]
 }
 
+export interface PlanRate {
+  agent: string
+  limit: number
+  used: number
+  window_min: number
+  next_in_s: number
+  next_at: number | null
+}
+
 export interface PlansBlock {
   counts: { waiting: number; watching: number; in_trade: number; closed: number }
   total: number
   near: NearPlan[]
+  rate?: PlanRate | null
 }
 
 /** Страница «Планы»: все планы режима. Порядок задаёт сервер: ближайшие к входу, в сделке, закрытые за сутки. */
@@ -133,6 +144,7 @@ export interface PlansSnapshot {
   counts: PlansBlock['counts']
   total: number
   items: NearPlan[]
+  rate?: PlanRate | null
 }
 
 export interface PlanRev {

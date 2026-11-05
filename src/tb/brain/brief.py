@@ -1488,7 +1488,9 @@ def _trim_struct(b):
 TRIM_STEPS = (
     ("lessons", _drop("lessons")), ("rulebook", _drop("rulebook")), ("missing", _drop("missing")), ("memory", _drop("memory")), ("playbook", _drop("playbook")), ("deriv", _drop("deriv")), ("flow", _drop("flow")), ("cmkt", _drop("cmkt")), ("since_last", _drop("since_last")), ("paper_history", _drop("paper_history")), ("checklist_text", _checklist_ids), ("recent>5", _trim_recent(5)),
     ("hot>3", _trim_hot(3)), ("ideas>4", _trim_ideas(4)), ("struct>3", _trim_struct), ("levels", _trim_levels), ("recent>3", _trim_recent(3)), ("pending", _drop("pending")),
-    ("hot", _drop("hot")), ("ideas", _drop("ideas")), ("experiments", _drop("experiments")), ("cands", _drop("cands")), ("struct", _drop("struct")), ("news_digest", _drop("news_digest")), ("intel", _drop("intel")), ("recent>1", _trim_recent(1)), ("checklist", _drop("checklist")), ("market", _drop("market")),
+    ("hot", _drop("hot")), ("ideas", _drop("ideas")), ("experiments", _drop("experiments")),
+    ("news_digest", _drop("news_digest")), ("intel", _drop("intel")), ("checklist", _drop("checklist")), ("recent>1", _trim_recent(1)),
+    ("cands", _drop("cands")), ("struct", _drop("struct")), ("market", _drop("market")),
     ("recent", _drop("recent")),
 )
 
@@ -1614,7 +1616,7 @@ def build(scope="start", since=None, budget_tokens=None, root=None, now=None, co
         b["market"] = mk or None
         b["playbook"] = _safe("playbook", lambda: _b_playbook(c, b, job_sym), missing) if (job_sym and not involved) else None      # только поиск входа: у событий планов карточки не нужны
         b["rulebook"] = _safe("rulebook", lambda: _b_rulebook(c), missing) if (job_sym and not involved) else None      # R2: действующие правила (применяет код)
-        b["cands"] = _safe("cands", lambda: cands_mod.candidates(b, job_sym, root=root, event_seq=event_seq, now=now, view=_rule_view(c)), missing) \
+        b["cands"] = _safe("cands", lambda: cands_mod.candidates(b, job_sym, root=root, event_seq=event_seq, now=now, view=_rule_view(c), high_risk=True), missing) \
             if (job_sym and not involved) else None      # предрасчёт входов (уровень, стоп, цели, RR, горизонт): модель выбирает, а не считает; правила rulebook размечают RULE_<id>
         if job_sym:
             b["deriv"] = _safe("deriv", lambda: _b_deriv(root, now, job_sym), missing)          # деривативы монеты события: funding, OI за сутки, лонг/шорт, базис к другим биржам
@@ -1643,7 +1645,21 @@ def build(scope="start", since=None, budget_tokens=None, root=None, now=None, co
         budget_tokens += tokens(b["memory"])          # блок памяти имеет собственный лимит (<= 450) и не вытесняет остальное досье из бюджета по умолчанию
     if own_budget and b.get("struct"):
         budget_tokens += tokens(b["struct"])          # struct (структура рынка) тоже со своим лимитом (STRUCT_BUDGET / STRUCT_EVENT_BUDGET): не вытесняет остальное досье
+    cands_full = b.get("cands")                       # до обрезки: high-risk варианты нельзя терять вместе с блоком
     b = fit(b, budget_tokens)
+    if cands_full and "cands" in (b.get("cut") or []):
+        hr = [dict(r) for r in cands_full if isinstance(r, dict) and r.get("high_risk") and r.get("ok")]
+        if hr:
+            rest = [dict(r) for r in cands_full if isinstance(r, dict) and r.get("ok") and not r.get("high_risk")]
+            pick = (hr[:1] + rest[:1]) or hr[:1]
+            for i, r in enumerate(pick, 1):
+                r["n"] = i
+            b["cands"] = pick
+            b["cut"] = [x for x in (b.get("cut") or []) if x != "cands"]
+            if not b["cut"]:
+                b.pop("cut", None)
+            if isinstance(b.get("data"), dict):
+                b["data"]["cands"] = len(pick)
     if isinstance(b.get("data"), dict) and any(x in (b.get("cut") or []) for x in ("struct", "cands")):
         b["data"] = dict(b["data"], ready=False, missing=sorted(set(b["data"].get("missing") or []) | {"struct_cut"}))      # бюджет срезал структуру/кандидатов: модель данных не видит, входа нет
     return b

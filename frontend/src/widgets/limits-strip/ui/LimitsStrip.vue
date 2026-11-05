@@ -12,8 +12,13 @@ const paper = computed(() => trading.snapshot?.limits_paper ?? false)
 const closed = computed(() => !paper.value && trading.snapshot?.allowed === false)
 
 function text(r: LimitRow): string {
-  if (r.id === 'stops') return `${fixed(r.used, 0)} / ${fixed(r.limit, 0)}`
-  return r.unit === 'USDT' ? `${fixed(r.room)} из ${fixed(r.limit)}` : `${fixed(r.room, 0)} из ${fixed(r.limit, 0)}`
+  const digits = r.unit === 'USDT' ? 2 : 0
+  return `${fixed(r.used, digits)} / ${fixed(r.limit, digits)}`
+}
+function over(r: LimitRow): string {
+  if (r.room == null) return ''
+  const digits = r.unit === 'USDT' ? 2 : 0
+  return r.room < 0 ? `превышение на ${fixed(-r.room, digits)} ${r.unit ?? ''}`.trim() : `осталось ${fixed(r.room, digits)} ${r.unit ?? ''}`.trim()
 }
 function fill(r: LimitRow): number {
   if (!r.limit) return 0
@@ -24,7 +29,7 @@ function fill(r: LimitRow): number {
 <template>
   <section v-if="rows.length" class="limits" aria-label="Запас до лимитов">
     <div v-for="r in rows" :key="r.id" class="lim">
-      <div class="top"><span class="name">{{ SHORT[r.id] ?? r.label }}</span><span class="val">{{ text(r) }}</span></div>
+      <div class="top" :title="over(r)"><span class="name">{{ SHORT[r.id] ?? r.label }}</span><span class="val">{{ text(r) }}</span></div>
       <UiMeter :fill="fill(r)" :level="r.level" :label="SHORT[r.id] ?? r.label" />
     </div>
     <UiChip v-if="paper" class="note">{{ PAPER_LIMITS_NOTE }}</UiChip>

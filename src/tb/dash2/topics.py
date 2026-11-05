@@ -150,10 +150,14 @@ def _first(*xs):
 def _position(vp, trade):
     tg = [{"price": _num(t.get("price")), "state": t.get("state")} for t in (vp.get("targets") or []) if _num(t.get("price")) is not None]
     calc = (trade or {}).get("calc") or {}
-    return {"plan": vp.get("plan"), "sym": vp.get("sym"), "side": vp.get("side"), "mode": vp.get("mode"), "lev": _num(vp.get("lev")), "qty": _num(vp.get("qty")),
-            "avg": _num(vp.get("avg")), "price": _num(vp.get("price")), "stale": bool(vp.get("price_stale")), "stop": _num(vp.get("cur_stop")), "stop0": _num(vp.get("initial_stop")),
-            "targets": tg, "r": _first(calc.get("r_now"), vp.get("r_now")), "upnl": _first(calc.get("pnl"), vp.get("upnl")), "pnl_pct": _num(calc.get("pnl_pct_margin")),       # результат считает журнал сделок, как на старом дашборде: после комиссии входа, к реальной марже
-            "risk": _num((trade or {}).get("risk_usdt")), "pnl_at_sl": _num(calc.get("pnl_at_sl")),
+    qty, avg, lev = _num(vp.get("qty")), _num(vp.get("avg")), _num(vp.get("lev"))
+    margin = _first((trade or {}).get("margin"), vp.get("margin"))       # из журнала; иначе номинал / плечо
+    if margin is None and qty and avg and lev:
+        margin = qty * avg / lev
+    return {"plan": vp.get("plan"), "sym": vp.get("sym"), "side": vp.get("side"), "mode": vp.get("mode"), "lev": lev, "qty": qty,
+            "avg": avg, "price": _num(vp.get("price")), "stale": bool(vp.get("price_stale")), "stop": _num(vp.get("cur_stop")), "stop0": _num(vp.get("initial_stop")),
+            "targets": tg, "r": _first(calc.get("r_now"), vp.get("r_now")), "upnl": _first(calc.get("pnl"), vp.get("upnl")), "pnl_pct": _num(calc.get("pnl_pct_margin")),       # १���� ��⠥� ��ୠ� ᤥ���, ��� �� ��஬ ��衮थ: ��᫥ �����ᨨ �室�, � ॠ�쭮� ��থ
+            "risk": _num((trade or {}).get("risk_usdt")), "pnl_at_sl": _num(calc.get("pnl_at_sl")), "margin": _num(margin),
             "held_s": _num(vp.get("held_s")), "hold_left_s": _num(vp.get("hold_left_s")), "liq": _num(vp.get("liq"))}
 
 
@@ -162,7 +166,7 @@ def _trade_position(t):
     c = t.get("calc") or {}
     return {"plan": t.get("plan_id"), "sym": t.get("sym"), "side": t.get("side"), "mode": t.get("mode"), "lev": _num(t.get("lev")), "qty": None, "avg": _num(t.get("entry")),
             "price": _num(c.get("price")), "stale": bool(c.get("price_stale")), "stop": _num(t.get("sl")), "stop0": _num(t.get("sl")), "targets": [{"price": _num(t.get("tp")), "state": "resting"}] if _num(t.get("tp")) else [],
-            "r": _num(c.get("r_now")), "upnl": _num(c.get("pnl")), "pnl_pct": _num(c.get("pnl_pct_margin")), "risk": _num(t.get("risk_usdt")), "pnl_at_sl": _num(c.get("pnl_at_sl")), "held_s": _num(t.get("held_s")), "hold_left_s": None, "liq": _num(c.get("liq_est"))}
+            "r": _num(c.get("r_now")), "upnl": _num(c.get("pnl")), "pnl_pct": _num(c.get("pnl_pct_margin")), "risk": _num(t.get("risk_usdt")), "pnl_at_sl": _num(c.get("pnl_at_sl")), "margin": _num(t.get("margin")), "held_s": _num(t.get("held_s")), "hold_left_s": None, "liq": _num(c.get("liq_est"))}
 
 
 CURVE_POINTS = 300
@@ -268,8 +272,21 @@ def models(root=None, now=None, mode=None):
     return {"mode": mode, "periods": {str(d): dashapi.models_perf(root, now, d, mode) for d in MODEL_DAYS}}
 
 
-def _plans(v2, mode, now):
-    """Планы в работе для режима: счётчики колонок доски и ближайшие к входу. Ожидание свечи отдаём моментом (eta_at, округлён до 5 с), а не остатком: остаток менялся бы каждую секунду и тема не молчала бы."""
+def _plan_rate(root, now):
+    """Лимит планов агента api за скользящие 60 минут: used/limit и время до следующего слота."""
+    try:
+        from tb.gateway import audit
+        agents = _read_json(paths.config("agents.json", root=root)).get("agents") or {}
+        lim = int((((agents.get("api") or {}).get("limits") or {}).get("plans_per_hour")))
+        used = audit.count_recent("api", "submit_plan", 3600.0, root=root, now=now)
+        wait = audit.next_slot("api", "submit_plan", lim, 3600.0, root=root, now=now)
+        return {"agent": "api", "limit": lim, "used": used, "window_min": 60, "next_in_s": round(wait, 1), "next_at": round(now + wait, 1) if wait > 0 else None}
+    except (TypeError, ValueError, OSError, ImportError, KeyError, AttributeError):
+        return None
+
+
+def _plans(v2, mode, now, root=None):
+    """Планы в работе для режима: счётчики колонок и ближайшие к входу. Возраст свечей отдаётся абсолютом (eta_at, округлён до 5 с), а не тикает: фронт считает по времени секунды и сам показывает отсчёт."""
     cards = [c for c in ((v2 or {}).get("plans") or {}).get("cards") or [] if isinstance(c, dict) and (mode == "all" or c.get("mode") == mode)]
     counts = {k: 0 for k in ("waiting", "watching", "in_trade", "closed")}
     for c in cards:
@@ -277,7 +294,7 @@ def _plans(v2, mode, now):
             counts[c["col"]] += 1
     near = [c for c in cards if c.get("col") in ("waiting", "watching")]
     near.sort(key=lambda c: (_num((c.get("trigger") or {}).get("dist_pct")) is None, _num((c.get("trigger") or {}).get("dist_pct")) or 0.0))
-    return {"counts": counts, "total": len(cards), "near": [_plan_row(c, now) for c in near[:PLANS_OUT]]}
+    return {"counts": counts, "total": len(cards), "near": [_plan_row(c, now) for c in near[:PLANS_OUT]], "rate": _plan_rate(root, now)}
 
 
 def _plan_row(c, now):
@@ -310,7 +327,7 @@ def plans(root=None, now=None, mode=None):
     for c in cards:
         if c.get("col") in counts:
             counts[c["col"]] += 1
-    return {"mode": mode, "counts": counts, "total": len(cards), "items": [_plan_row(c, now) for c in cards[:PLANS_PAGE_OUT]]}
+    return {"mode": mode, "counts": counts, "total": len(cards), "items": [_plan_row(c, now) for c in cards[:PLANS_PAGE_OUT]], "rate": _plan_rate(root, now)}
 
 
 def ideas(root=None, now=None, mode=None):
@@ -732,7 +749,7 @@ def home(root=None, now=None, mode=None):
             "limits": [{"id": r.get("id"), "label": r.get("label"), "limit": _num(r.get("limit")), "used": _num(r.get("used")), "room": _num(r.get("room")), "unit": r.get("unit"), "level": r.get("level")}
                        for r in (rr.get("rows") or []) if isinstance(r, dict)],
             "limits_paper": bool(rr.get("paper")), "allowed": rr.get("allowed"), "positions": pos[:POSITIONS_OUT], "positions_total": len(pos),
-            "curve": _curve(s.get("curve")), "plans": _plans(s.get("v2"), mode, now), "pending": _pending(s.get("pending"), now, s.get("v2"), mode)}
+            "curve": _curve(s.get("curve")), "plans": _plans(s.get("v2"), mode, now, root=root), "pending": _pending(s.get("pending"), now, s.get("v2"), mode)}
 
 
 # ---------------------------------------------------------------- events: лента для плавающего «облака» (шина событий, поля уже из белых списков)
@@ -1033,8 +1050,55 @@ def learning_detail(root, mode, now=None):
     return model.scrub(dashapi.detail(root, mode, now))
 
 
-TOPICS = {"brain": brain, "ctl": ctl, "day": day, "events": events, "market": market, "news": news, "notify": notify, "briefs": briefs, "system": system, "settings": settings}
-INTERVAL = {"decisions": 3.0, "models": 30.0, "ideas": 10.0, "market": 5.0, "news": 15.0, "notify": 5.0, "day": 5.0, "briefs": 10.0, "system": 5.0, "settings": 15.0}      # тема -> не чаще раза в N секунд (по умолчанию HEAVY_S сервера)
+def cmkt(root=None, now=None):
+    """Сводный рынок (R1.7, задача 29): свежий снимок runtime/cmkt/snap.json через tb.core.cmktdoc — рынки, монеты, свежесть
+    и коды бирж, флаги. Снимка нет или он старше 5 с — ok False со state "stale" и без чисел (экран покажет «нет данных»)."""
+    from tb.core import cmktdoc
+    now = time.time() if now is None else now
+    doc = cmktdoc.latest(root, now=now)
+    if doc is None:
+        return {"ok": False, "state": "stale", "ts": None, "age_s": None, "n_ex": {"perp": 0, "spot": 0},
+                "n_syms": 0, "skew_ms": None, "warn": ["STALE"], "venues": [], "coins": []}
+    venues = []
+    for mkt, row in sorted((doc.get("ex") or {}).items()):
+        r = row if isinstance(row, (list, tuple)) else ()
+        age_ms = _num(r[3]) if len(r) > 3 else None
+        venues.append({"mkt": str(mkt), "code": str(r[0]) if r and r[0] else "OK", "lag_ms": _num(r[1]) if len(r) > 1 else None,
+                       "age_s": None if age_ms is None else round(age_ms / 1000.0, 1)})
+    ne = doc.get("n_ex") if isinstance(doc.get("n_ex"), dict) else {}
+    coins = cmktdoc.symbols(root, now)
+    return {"ok": True, "state": "ok", "ts": int(doc["ts"]), "age_s": round(float(now) - float(doc["ts"]), 1),
+            "n_ex": {"perp": _num(ne.get("perp")) or 0, "spot": _num(ne.get("spot")) or 0}, "n_syms": len(coins),
+            "skew_ms": _num(doc.get("skew_ms")), "warn": [str(w) for w in (doc.get("warn") or [])],
+            "venues": venues, "coins": coins}
+
+
+def cmkt_symbol(root, sym, now=None):
+    """Монета сводного рынка по запросу (R1.7, задача 29): полосы стакана, стены, CVD, OI, ликвидации, funding и состояние бирж
+    из tb.core.cmktdoc.detail (тот же читатель, что у мозга; лимит tool.max_bytes) и лестница сводного стакана из файлов рынков
+    (tb.core.cmktdoc.book). Нет снимка — warn STALE, монета вне фокуса — NOT_FOCUS."""
+    from tb.core import cmktdoc
+    s = str(sym)[:20] if isinstance(sym, str) else None
+    d = cmktdoc.detail(root, s, parts=None, now=now)
+    return {"ok": not (d.get("warn") or []), "sym": d.get("sym"), "ts": d.get("ts"), "age_s": d.get("age_s"),
+            "n_ex": d.get("n_ex"), "cov": d.get("cov"), "warn": [str(w) for w in (d.get("warn") or [])],
+            "book": d.get("book"), "cvd": d.get("cvd"), "oi": d.get("oi"), "liq": d.get("liq"),
+            "funding": d.get("funding"), "venues": d.get("venues"), "trunc": d.get("trunc"),
+            "ladder": cmktdoc.book(root, s)}
+
+
+def exits_policy(root=None, now=None):
+    """Политика выхода (R4, только чтение): версия, что видит исполнитель, выключатель, режим, аренда, испытания, сторож и ошибки
+    конфига — тот же отчёт, что `./tb exits status`. База недоступна — ok False с кодом причины, файловые поля остаются."""
+    from tb.knowledge import exits_cli
+    rep = exits_cli.status_view(root, now)
+    keep = ("ok", "ts", "db", "error", "version", "versions", "effective", "snapshot", "lease", "switch",
+            "promotion", "trials", "watch", "config")
+    return dict((k, rep.get(k)) for k in keep)
+
+
+TOPICS = {"brain": brain, "ctl": ctl, "day": day, "events": events, "market": market, "cmkt": cmkt, "news": news, "notify": notify, "briefs": briefs, "system": system, "settings": settings}
+INTERVAL = {"decisions": 3.0, "models": 30.0, "ideas": 10.0, "market": 5.0, "cmkt": 5.0, "news": 15.0, "notify": 5.0, "day": 5.0, "briefs": 10.0, "system": 5.0, "settings": 15.0}      # тема -> не чаще раза в N секунд (по умолчанию HEAVY_S сервера)
 MODE_TOPICS = {"home": home, "trades": trades, "decisions": decisions, "models": models, "plans": plans, "ideas": ideas}        # зависят от режима клиента: строятся для каждого режима, который сейчас смотрит хотя бы один клиент
 
 

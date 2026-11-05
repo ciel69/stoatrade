@@ -17,6 +17,7 @@ const farTake = computed(() => {
 /** Результат при срабатывании стопа и при последнем тейке, в USDT (нужен размер позиции). */
 const atStop = computed(() => props.position.pnl_at_sl ?? (props.position.risk != null ? -props.position.risk : null))
 const atTake = computed(() => (props.position.qty != null && props.position.avg != null && farTake.value != null ? props.position.qty * sign.value * (farTake.value - props.position.avg) : null))
+const margin = computed(() => props.position.margin ?? (props.position.qty != null && props.position.avg != null && props.position.lev ? (props.position.qty * props.position.avg) / props.position.lev : null))
 const tone = computed(() => ((props.position.upnl ?? 0) > 0 ? 'up' : (props.position.upnl ?? 0) < 0 ? 'down' : ''))
 /** Стоп сдвинут от начального (автозащита или правило): это важнее цифры стопа */
 const protectedStop = computed(() => props.position.stop != null && props.position.stop0 != null && props.position.stop !== props.position.stop0)
@@ -65,7 +66,7 @@ const bands = computed<StripBand[]>(() => {
       <span class="pnl" :class="tone">{{ signed(position.upnl) }} <small>USDT</small></span>
       <UiTip :tip="roiHint(signed(movePct))"><span class="r" :class="tone">{{ signed(roiPct ?? movePct, 1) }}%</span></UiTip>
     </div>
-    <p class="sub">вход {{ price(position.avg) }} · сейчас {{ price(position.price) }} ({{ signed(movePct) }}%) · {{ signed(position.r, 2) }}R</p>
+    <p class="sub"><template v-if="margin != null">маржа {{ price(margin) }} USDT · </template>вход {{ price(position.avg) }} · сейчас {{ price(position.price) }} ({{ signed(movePct) }}%) · {{ signed(position.r, 2) }}R</p>
 
     <UiRouteStrip v-if="r" class="strip" :marks="marks" :bands="bands" :label="`${position.sym}: от стопа ${price(position.stop)} через вход ${price(position.avg)} к тейку ${price(farTake)}, цена ${price(position.price)}`">
       <template #caption="{ active, set }">

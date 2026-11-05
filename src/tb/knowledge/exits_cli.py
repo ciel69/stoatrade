@@ -35,6 +35,7 @@ import sqlite3
 import sys
 import time
 
+from tb import paths
 from tb.core import exitdoc as XD
 from tb.knowledge import markers as KM
 from tb.knowledge import schema2 as S2
@@ -262,6 +263,29 @@ def _status(root, now):
     return rep
 
 
+def status_view(root=None, now=None):
+    """Состояние политики выхода для дашборда и CLI (R4, только чтение): тот же отчёт, что печатает `./tb exits status`, без вывода.
+    База недоступна — отчёт с файловыми полями и `ok: False` (код причины в `db`), как у `cmd_status`. Не бросает, базу не создаёт."""
+    root = paths.root() if root is None else root
+    now = _now(now)
+    try:
+        return _status(root, now)
+    except Unavailable as e:
+        rep = _db_report(e.code, str(e), now, "status")
+        rep["switch"] = _switch_view(root)
+        rep["snapshot"] = _snapshot_view(root)
+        rep["lease"] = _lease_view(root)
+        cfg, errs = EC.load(root)
+        rep["promotion"] = {"mode": EC.promotion_mode(cfg)}
+        rep["config"] = {"errors": list(errs)}
+        rep["version"] = None
+        rep["versions"] = 0
+        rep["trials"] = {"open": 0, "closed": 0, "rows": []}
+        rep["watch"] = None
+        rep["effective"] = None
+        return rep
+
+
 def _status_lines(rep):
     sw = "включено" if rep["switch"]["apply"] else "ВЫКЛЮЧЕНО"
     v = rep.get("version") or {}
@@ -284,25 +308,9 @@ def _status_lines(rep):
 
 
 def cmd_status(a, root):
-    now = _now()
-    try:
-        rep = _status(root, now)
-    except Unavailable as e:
-        rep = _db_report(e.code, str(e), now, "status")
-        rep["switch"] = _switch_view(root)
-        rep["snapshot"] = _snapshot_view(root)
-        rep["lease"] = _lease_view(root)
-        cfg, errs = EC.load(root)
-        rep["promotion"] = {"mode": EC.promotion_mode(cfg)}
-        rep["config"] = {"errors": list(errs)}
-        rep["version"] = None
-        rep["trials"] = {"open": 0, "closed": 0, "rows": []}
-        rep["watch"] = None
-        rep["effective"] = None
-        _out(rep, a.text, _status_lines(rep))
-        return 1
+    rep = status_view(root)
     _out(rep, a.text, _status_lines(rep))
-    return 0
+    return 0 if rep.get("ok") else 1
 
 
 def cmd_versions(a, root):

@@ -72,7 +72,27 @@ def tail(n=50, root=None):
 
 
 def count_recent(agent, tool, window_s, root=None, now=None, only_ok=True):
-    """Сколько раз агент вызвал инструмент за последние window_s секунд (по аудиту; переживает перезапуск процесса)."""
+    """Сколько раз агент вызывал инструмент за последние window_s секунд (по аудиту; перезапуск не сбрасывает)."""
     now = time.time() if now is None else now
     return sum(1 for r in tail(0, root) if r.get("agent") == agent and r.get("tool") == tool and isinstance(r.get("t"), (int, float))
                and now - r["t"] <= window_s and (not only_ok or r.get("ok") is not False))
+
+
+def next_slot(agent, tool, limit, window_s=3600.0, root=None, now=None):
+    """Секунд до освобождения слота в скользящем окне; 0, если слот уже есть.
+    Слот освобождается, когда самая старая из учтённых записей выходит из окна."""
+    now = time.time() if now is None else now
+    if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
+        return 0.0
+    ts = [r["t"] for r in tail(0, root) if r.get("agent") == agent and r.get("tool") == tool and isinstance(r.get("t"), (int, float))
+          and now - r["t"] <= window_s and r.get("ok") is not False]
+    if len(ts) < limit:
+        return 0.0
+    ts.sort()
+    return max(0.0, float(window_s) - (now - ts[len(ts) - limit]))
+
+
+def wait_text(seconds):
+    """Секунды -> короткая строка для сообщения пользователю."""
+    s = int(round(max(0.0, float(seconds or 0.0))))
+    return ("%d мин %02d с" % (s // 60, s % 60)) if s >= 60 else ("%d с" % s)

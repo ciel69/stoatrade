@@ -18,6 +18,12 @@ export const PAD: Pad = { l: 38, r: 10, t: 10, b: 8 }
 
 export interface Tick { y: number; text: string; zero: boolean }
 
+export interface ZeroCrossing {
+  x: number
+  y: number
+  up: boolean
+}
+
 export interface BandLayout {
   /** точки после очистки от нечисловых значений */
   pts: BandPoint[]
@@ -25,10 +31,12 @@ export interface BandLayout {
   ys: number[]
   /** ломаная ряда; для одной точки пусто (рисуется только точка) */
   line: string
+  area: string
   /** закрашенные участки ленты: непрерывные отрезки, где интервал известен у каждой точки */
   bands: string[]
   /** вертикальные усы интервала там, где соседей нет (одиночная точка между пустыми) */
   whiskers: { x: number; y1: number; y2: number }[]
+  crossings: ZeroCrossing[]
   /** y нулевой линии или null, если нуль вне видимой области (не бывает: домен всегда включает 0) */
   zeroY: number
   ticks: Tick[]
@@ -118,12 +126,23 @@ export function layoutOf(src: BandPoint[], width: number, height: number, pad: P
   }
 
   const zeroY = yOf(0)
+  const area = n > 1
+    ? `M${r1(xs[0]!)} ${r1(zeroY)}${pts.map((_, j) => `L${r1(xs[j]!)} ${r1(ys[j]!)}`).join('')}L${r1(xs[n - 1]!)} ${r1(zeroY)}Z`
+    : ''
+  const crossings: ZeroCrossing[] = []
+  for (let j = 0; j + 1 < n; j++) {
+    const a = pts[j]!.v
+    const b = pts[j + 1]!.v
+    if (a * b >= 0) continue
+    const t = Math.abs(a) / (Math.abs(a) + Math.abs(b))
+    crossings.push({ x: xs[j]! + (xs[j + 1]! - xs[j]!) * t, y: zeroY, up: b > a })
+  }
   const ticks: Tick[] = [{ y: zeroY, text: '0', zero: true }]
   for (const v of [max, min]) {
     const y = yOf(v)
     if (Math.abs(y - zeroY) >= 14) ticks.push({ y, text: fmt(v), zero: false })
   }
-  return { pts, xs, ys, line, bands, whiskers, zeroY, ticks, min, max }
+  return { pts, xs, ys, line, area, bands, whiskers, crossings, zeroY, ticks, min, max }
 }
 
 /** индекс ближайшей точки к координате x (в пикселях SVG) */
