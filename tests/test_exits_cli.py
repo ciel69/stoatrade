@@ -127,12 +127,16 @@ class TestReadCommands(Base):
         self.assertEqual(code, 0)
         self.assertIn(tid, raw)
 
-    def test_gate_placeholder(self):
-        code, _rep, raw = self.run_cli(["gate"])
+    def test_gate_report(self):
+        code, rep, _raw = self.run_cli(["gate"])
         self.assertEqual(code, 0)
-        self.assertEqual(raw, "gate появится после задачи 22")
-        code, rep, _raw = self.run_cli(["gate", "--json"])
-        self.assertEqual((code, rep["pending"]), (0, True))
+        self.assertEqual((rep["ok"], rep["db"], rep["passed"]), (True, "OK", False))
+        self.assertEqual((rep["version"]["ver"], rep["conds"]["VERSION"]), ("X-0001", False))
+        self.assertEqual(rep["why"], ["VERSION"])
+        code, _rep, raw = self.run_cli(["gate", "--text"])
+        self.assertEqual(code, 0)
+        self.assertIn("гейт этапа 4", raw)
+        self.assertIn("итог: гейт не пройден", raw)
 
     def test_brain_and_after_on_empty_db(self):
         code, rep, _raw = self.run_cli(["after"])

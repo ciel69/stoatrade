@@ -60,6 +60,9 @@ from tb.labels import schema as LS
 from tb.labels import store as LST
 from tb.learnloop import exits_conf as EC
 from tb.learnloop import exits_eval as EV
+from tb.learnloop import exits_trial as ET
+from tb.learnloop import exits_versions as XV
+from tb.learnloop.exits_codes import DB_ERROR, MODES, NO_DB, REASONS_RU, RESTORING
 from tb.llm import usage as LLM
 from tb.logic import exitpol as XP
 from tb.logic import exitsim
@@ -69,13 +72,14 @@ WILSON_Z = 1.96
 REASONS = ("sl", "tp", "rule", "manual", "timeout")
 OTHER = "other"
 R_EPS = 1e-12
-MODES = ("paper", "testnet", "live")
+FLOOR_VER = "X-0001"                 # пол защиты: версия, с которой сравнивает страница и гейт
+# Требование 17.3: гейт этапа 4 — одной формулой. Числа стоят здесь, потому что спека задаёт их буквально
+# (в config/exits.json раздела гейта нет; пороги испытания и сторожа сюда не подставляются).
+GATE_MIN_TRADES = 100                # «на первых ≥ 100 сделках мозга после продвижения»
+GATE_MIN_R = -0.02                   # средний R не хуже: нижняя граница одностороннего 90% интервала, в R
+GATE_ALPHA = 0.10                    # односторонний 90% интервал (t-квантиль 0.90)
 _SL_KINDS = ("sl", "stop", "stoploss", "partialstoploss", "trailingstop", "be", "trail")
 _TP_KINDS = ("tp", "tp1", "tp2", "tp3", "target", "takeprofit", "partialtakeprofit")
-NO_DB, RESTORING, DB_ERROR = "NO_DB", "RESTORING", "DB_ERROR"
-REASONS_RU = {NO_DB: "базы знаний нет (state/knowledge.sqlite не создана)",
-              RESTORING: "база знаний восстанавливается (runtime/knowledge.restoring): повторите после восстановления",
-              DB_ERROR: "база знаний не читается"}
 
 
 def _num(v, default=None):
@@ -90,6 +94,15 @@ def _num(v, default=None):
 
 def _mean(vals):
     return round(sum(vals) / len(vals), 4) if vals else None
+
+
+def _int(v, default=None):
+    if isinstance(v, bool) or v is None:
+        return default
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
 
 
 def wilson(k, n, z=WILSON_Z):
@@ -416,7 +429,7 @@ def case_fields(row):
 # ---------------------------------------------------------------- R4.3: мозг против алгоритма (Requirement 12, задача 19)
 
 BRAIN_COLS = ("journal_id", "plan_id", "sym", "side", "mode", "entry_ts", "entry_px", "stop0", "tick", "qty", "qty_step", "min_qty",
-              "horizon", "max_hold_min", "atr5_pct", "sig_type", "exit_ver", "close_ts", "rows", "end_ts", "flags", "timeline", "fetched_ts")
+              "horizon", "max_hold_min", "atr5_pct", "sig_type", "exit_ver", "close_ts", "r", "rows", "end_ts", "flags", "timeline", "fetched_ts")
 INTERVENTION_TYPES = ("move_stop", "close", "partial_close")
 REPORT_MIN_N = 30                       # Requirement 12.2: n < 30 — «данных мало»
 PM_ROLE = "position_manager"
@@ -736,6 +749,398 @@ def run_brain(root=None, mode=None, since=None, now=None):
         return rep
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------- страница «Выходы» и гейт этапа 4 (Requirement 17)
+
+def lower90(xs):
+    """Нижняя граница одностороннего 90% интервала среднего (t-квантиль 0.90, df = n − 1); n < 2 — само среднее."""
+    xs = [float(x) for x in (xs or [])]
+    n = len(xs)
+    if not n:
+        return None
+    m = sum(xs) / float(n)
+    s = _sd(xs)
+    if n < 2 or s is None or s == 0.0:
+        return round(m, 4)
+    try:
+        q = XSTAT.t_quantile(0.90, n - 1)
+    except (ValueError, TypeError, ZeroDivisionError):
+        q = WILSON_Z
+    return round(m - q * s / math.sqrt(float(n)), 4)
+
+
+def _version_brief(v):
+    if not isinstance(v, dict):
+        return None
+    return {"ver": v.get("ver"), "parent": v.get("parent"), "reason_code": v.get("reason_code"), "actor": v.get("actor"),
+            "ts": _num(v.get("ts")), "policy_h": v.get("policy_h")}
+
+
+def _trials_brief(conn):
+    """Открытые и закрытые испытания (Requirement 17.1): счётчики и последние 20 строк."""
+    try:
+        rows = ET.trials(conn)
+    except Exception:                                    # noqa: BLE001 — нет таблицы испытаний
+        rows = []
+    rows = sorted((r for r in rows if isinstance(r, dict)),
+                  key=lambda t: (int(t.get("start_ts") or 0), str(t.get("trial_id"))), reverse=True)
+    brief = [{"trial_id": t.get("trial_id"), "var_id": t.get("var_id"), "var_ver": t.get("var_ver"), "base_ver": t.get("base_ver"),
+              "state": t.get("state"), "verdict": t.get("verdict"), "start_ts": _num(t.get("start_ts")),
+              "deadline_ts": _num(t.get("deadline_ts")), "numbers": t.get("numbers")} for t in rows[:20]]
+    return {"open": sum(1 for t in rows if t.get("state") == ET.OPEN),
+            "closed": sum(1 for t in rows if t.get("state") == ET.CLOSED), "rows": brief}
+
+
+def _watch_brief(doc):
+    """Состояние сторожа из `meta.exits_watch` (Requirement 17.1): время, версия, коды, точки, расхождение симуляции."""
+    if not isinstance(doc, dict):
+        return None
+    st = doc.get("state") if isinstance(doc.get("state"), dict) else {}
+    pts = st.get("points") if isinstance(st.get("points"), list) else []
+    return {"ts": _num(doc.get("ts")), "ver": doc.get("ver"), "prev": doc.get("prev"),
+            "codes": [c for c in (doc.get("codes") or []) if isinstance(c, str)][:10],
+            "points": len(pts), "last": pts[-1] if pts else None,
+            "sim_gap": doc.get("sim_gap") if isinstance(doc.get("sim_gap"), dict) else None}
+
+
+def _trade_modes(conn, keys):
+    """Режим торговли сделки по `trade_paths` -> {journal_id: mode} (Requirement 17.5: режимы не смешиваются)."""
+    out = {}
+    items = sorted(str(k) for k in keys or [])
+    if not items:
+        return out
+    for i in range(0, len(items), 400):
+        chunk = items[i:i + 400]
+        try:
+            for jid, mode in conn.execute("SELECT journal_id, mode FROM trade_paths WHERE journal_id IN (%s)"
+                                          % ",".join("?" * len(chunk)), chunk).fetchall():
+                out[str(jid)] = str(mode)
+        except sqlite3.Error:
+            return {}
+    return out
+
+
+def _fact_r(conn, keys):
+    """Фактический R сделки (`trade_paths.r`) -> {journal_id: r}. Нет значения — ключа нет."""
+    out = {}
+    items = sorted(str(k) for k in keys or [])
+    for i in range(0, len(items), 400):
+        chunk = items[i:i + 400]
+        try:
+            for jid, r in conn.execute("SELECT journal_id, r FROM trade_paths WHERE journal_id IN (%s)"
+                                       % ",".join("?" * len(chunk)), chunk).fetchall():
+                v = _num(r)
+                if v is not None:
+                    out[str(jid)] = v
+        except sqlite3.Error:
+            return {}
+    return out
+
+
+EVAL_PAGE_COLS = ("key", "t0", "block", "r_net", "r_gross", "fees_r", "path_mfe_r")
+
+
+def _eval_index(conn, src, ver, cost_h, sim_ver, since):
+    """Оценки версии `ver` источника `src` после `since` -> {ключ: {r_net, r_gross, fees_r, mfe, t0, block}}.
+
+    Строки берутся только при текущих входах издержек и версии симулятора (Requirement 4.5): оценки прежних
+    `cost_h`/`sim_ver` не смешиваются с новыми. Нет таблицы или издержек — пусто.
+    """
+    if not cost_h or not isinstance(ver, str) or not ver:
+        return {}
+    name, num = EV.version_var(ver)
+    sql = ("SELECT %s FROM exit_evals WHERE src=? AND var_id=? AND var_ver=? AND ord=? AND px_mode=? AND cost_h=? AND sim_ver=? AND t0>=?"
+           % ", ".join(EVAL_PAGE_COLS))
+    try:
+        raw = conn.execute(sql, (src, name, int(num), EV.ORDER_S, EV.PX_FEE, str(cost_h), str(sim_ver), int(since))).fetchall()
+    except sqlite3.Error:
+        return {}
+    out = {}
+    for r in raw:
+        d = dict(zip(EVAL_PAGE_COLS, r))
+        if _num(d.get("r_net")) is None:
+            continue
+        out[str(d["key"])] = {"t0": _int(d.get("t0"), 0), "block": str(d.get("block") or ""), "r_net": _num(d.get("r_net")),
+                              "r_gross": _num(d.get("r_gross")), "fees_r": _num(d.get("fees_r")) or 0.0,
+                              "mfe": _num(d.get("path_mfe_r"))}
+    return out
+
+
+def _pairs(conn, src, cur, base, cost_h, sim_ver, since, mode=None):
+    """Пары «действующая версия — X-0001» на одних и тех же путях (Requirement 17.1) по возрастанию (t0, ключ).
+
+    -> [{"src", "key", "t0", "block", "d", "r_cur", "r_base", "fees_cur", "fees_base", "gross_cur", "gross_base", "mfe"}].
+    Для сделок мозга (`src="trade"`) режим отбирается по `trade_paths` (Requirement 17.5).
+    """
+    a = _eval_index(conn, src, cur, cost_h, sim_ver, since)
+    b = _eval_index(conn, src, base, cost_h, sim_ver, since)
+    keys = sorted(set(a) & set(b))
+    if src == EV.SRC_TRADE and mode in MODES:
+        modes = _trade_modes(conn, keys)
+        keys = [k for k in keys if modes.get(k) in (None, mode)]
+    out = []
+    for k in keys:
+        va, vb = a[k], b[k]
+        out.append({"src": src, "key": k, "t0": int(va["t0"] or vb["t0"] or 0), "block": va["block"] or vb["block"],
+                    "d": round(va["r_net"] - vb["r_net"], 4), "r_cur": va["r_net"], "r_base": vb["r_net"],
+                    "fees_cur": va["fees_r"], "fees_base": vb["fees_r"], "gross_cur": va["r_gross"], "gross_base": vb["r_gross"],
+                    "mfe": va["mfe"] if va["mfe"] is not None else vb["mfe"]})
+    out.sort(key=lambda p: (p["t0"], p["key"]))
+    return out
+
+
+def _block_ci(rows):
+    """Среднее `d` по блокам с двусторонним 95% интервалом и число блоков (Requirement 17.1)."""
+    by = {}
+    for r in rows:
+        by.setdefault(str(r.get("block")), []).append(float(r["d"]))
+    vals = [sum(by[k]) / float(len(by[k])) for k in sorted(by)]
+    m, lo, hi = mean_ci(vals)
+    return {"mean": m, "lo": lo, "hi": hi, "n_blocks": len(vals), "n_paths": len(rows)}
+
+
+def _share(a, b):
+    return round(float(a) / float(b), 4) if a is not None and b not in (None, 0.0) else None
+
+
+def _sum(rows, field):
+    return sum(float(r[field]) for r in rows if r.get(field) is not None)
+
+
+def _page_verdict(n_blocks, n_trades, d_lo, db_lo):
+    """Вердикт блока (Requirement 17.2): сначала «данных мало», затем обе нижние границы 95% интервалов выше нуля."""
+    if n_blocks < REPORT_MIN_N or n_trades < REPORT_MIN_N:
+        return {"state": "few_data", "text": "%s: путей %d блоков, сделок мозга %d, нужно по %d."
+                % (VERDICT_LOW, n_blocks, n_trades, REPORT_MIN_N)}
+    if d_lo is not None and db_lo is not None and float(d_lo) > 0.0 and float(db_lo) > 0.0:
+        return {"state": "confirmed", "text": "Нижние границы 95% интервалов выше нуля: действующая версия выходов "
+                                             "лучше X-0001 и по путям прогонов, и по сделкам мозга."}
+    return {"state": "no_difference", "text": "%s: данных достаточно, но нижняя граница интервала не выше нуля." % VERDICT_FLAT}
+
+
+def page_block(conn, mode=None, now=None, root=None):
+    """Блок «Выходы» страницы «Учится ли мозг» (Requirement 17.1–17.2, 17.5–17.6) по открытому соединению (только чтение).
+
+    Действующая версия против пола `X-0001`: `d` по путям прогонов (на бумаге), `d_b` по сделкам мозга текущего режима,
+    `cap = Σ R / Σ MFE` фактом и у `X-0001` на тех же сделках с MFE > 0, доли издержек, испытания и сторож. Без продвижения
+    (или только `X-0001`) — статус `no_data` и текст «появится после первого продвижения» (Requirement 17.6).
+    """
+    now = int(time.time() if now is None else now)
+    cfg, cerrs = EC.load(root)
+    mode = mode if mode in MODES else (_mode_of(cfg, mode) or "paper")
+    notes = []
+    out = {"ts": now, "mode": mode, "status": "no_data", "reason": None, "note": "", "version": None, "since": None,
+           "d": None, "d_b": None, "cap": None, "costs": None, "trials": _trials_brief(conn), "watch": None,
+           "verdict": {"state": "few_data", "text": VERDICT_LOW}, "notes": notes}
+    try:
+        vers = XV.versions(conn)
+    except sqlite3.Error:
+        vers = []
+    active = vers[-1] if vers else None
+    out["version"] = _version_brief(active)
+    out["watch"] = _watch_brief(XV.watch_state(conn))
+    if active is None or active.get("ver") == FLOOR_VER:
+        out["note"] = "Появится после первого продвижения."
+        return out
+    since = int(active.get("ts") or 0)
+    out["since"] = since
+    if cerrs:
+        notes.append("конфиг выходов не прочитан (%s)" % ",".join(cerrs[:3]))
+    try:
+        inp = EV.market_inputs(root)
+    except (ValueError, TypeError, KeyError, OSError) as e:
+        notes.append("входы симулятора не прочитаны: %s" % type(e).__name__)
+        inp = {"cost_h": None}
+    d = None
+    if mode == "paper":
+        run_pairs = _pairs(conn, EV.SRC_RUN, active["ver"], FLOOR_VER, inp.get("cost_h"), exitsim.SIM_VER, since)
+        d = _block_ci(run_pairs)
+    else:
+        notes.append("прогоны меток — paper: при режиме %s сравнение по путям не показывается" % mode)
+    trade_pairs = _pairs(conn, EV.SRC_TRADE, active["ver"], FLOOR_VER, inp.get("cost_h"), exitsim.SIM_VER, since, mode=mode)
+    fact = _fact_r(conn, [p["key"] for p in trade_pairs])
+    for p in trade_pairs:
+        p["fact_r"] = fact.get(p["key"])
+    d_vals = [p["d"] for p in trade_pairs]
+    dm, dlo, dhi = mean_ci(d_vals)
+    db = {"mean": dm, "lo": dlo, "hi": dhi, "n": len(d_vals)}
+    cap_rows = [p for p in trade_pairs if p["mfe"] is not None and p["mfe"] > 0.0 and p.get("fact_r") is not None]
+    sum_mfe = _sum(cap_rows, "mfe")
+    sum_fact = _sum(cap_rows, "fact_r")
+    sum_base = _sum(cap_rows, "r_base")
+    cap = {"fact": _share(sum_fact, sum_mfe), "x0001": _share(sum_base, sum_mfe), "n": len(cap_rows),
+           "mfe_sum": round(sum_mfe, 4), "r_fact_sum": round(sum_fact, 4), "r_x0001_sum": round(sum_base, 4)}
+    costs = {"cur": _share(_sum(trade_pairs, "fees_cur"), abs(_sum(trade_pairs, "gross_cur"))),
+             "x0001": _share(_sum(trade_pairs, "fees_base"), abs(_sum(trade_pairs, "gross_base"))), "n": len(trade_pairs)}
+    n_blocks = int((d or {}).get("n_blocks") or 0)
+    out.update(d=d, d_b=db, cap=cap, costs=costs)
+    out["verdict"] = _page_verdict(n_blocks, len(d_vals), (d or {}).get("lo"), dlo)
+    if n_blocks < REPORT_MIN_N or len(d_vals) < REPORT_MIN_N:
+        out["status"], out["reason"] = "few_data", "n_lt_min"
+    else:
+        out["status"] = "ok"
+    return out
+
+
+def unavailable_page(code, detail=None, now=None, mode=None):
+    """Блок без базы: пустые секции и причина (Requirement 17.6: страница не пустует)."""
+    why = REASONS_RU.get(code, code) + ((": %s" % detail) if detail else "")
+    return {"ok": False, "db": code, "error": why, "ts": int(time.time() if now is None else now), "mode": mode,
+            "status": "no_data", "reason": "no_promotion", "note": "Появится после первого продвижения.",
+            "version": None, "since": None, "d": None, "d_b": None, "cap": None, "costs": None,
+            "trials": {"open": 0, "closed": 0, "rows": []}, "watch": None,
+            "verdict": {"state": "few_data", "text": VERDICT_LOW},
+            "notes": [why]}
+
+
+def run_block(root=None, mode=None, now=None):
+    """Блок для страницы по базе root: соединение только для чтения на вызов (`labels.store.open_ro`)."""
+    try:
+        conn = LST.open_ro(root)
+    except LST.KnowledgeRestoring:
+        return unavailable_page(RESTORING, now=now, mode=mode)
+    except sqlite3.Error as e:
+        return unavailable_page(DB_ERROR, "%s: %s" % (type(e).__name__, e), now=now, mode=mode)
+    if conn is None:
+        return unavailable_page(NO_DB, now=now, mode=mode)
+    try:
+        rep = page_block(conn, mode=mode, now=now, root=root)
+        rep["ok"] = True
+        rep["db"] = "OK"
+        return rep
+    except sqlite3.Error as e:
+        return unavailable_page(DB_ERROR, "%s: %s" % (type(e).__name__, e), now=now, mode=mode)
+    finally:
+        conn.close()
+
+
+def gate(conn, mode=None, now=None, root=None):
+    """Гейт этапа 4 одной формулой Requirement 17.3 по открытому соединению (только чтение).
+
+    На первых ≥ 100 сделках мозга после продвижения версии, отличной от `X-0001` (режим считается отдельно,
+    Requirement 17.5): `cap_факт = Σ R_факт / Σ MFE > cap_X0001 = Σ r(replay_brain(X-0001)) / Σ MFE` на сделках с MFE > 0
+    AND нижняя граница одностороннего 90% интервала среднего `R_факт − r(replay_brain(X-0001))` ≥ −0.02R.
+    `r(replay_brain(X-0001))` берётся из оценок `exit_evals` (сделки идут через `replay_brain` с хронологией мозга).
+    """
+    now = int(time.time() if now is None else now)
+    cfg, cerrs = EC.load(root)
+    mode = mode if mode in MODES else (_mode_of(cfg, mode) or "paper")
+    rep = {"ok": True, "ts": now, "mode": mode, "version": None, "since": None, "n": 0, "scanned": 0, "min_n": GATE_MIN_TRADES,
+           "alpha": GATE_ALPHA, "tol_r": GATE_MIN_R, "cap_fact": None, "cap_x0001": None, "mfe_sum": None,
+           "r_fact_sum": None, "r_x0001_sum": None, "mean_diff": None, "lower90": None, "n_cap": 0,
+           "conds": {"VERSION": False, "N": False, "CAP": False, "R": False}, "passed": False, "why": [], "notes": []}
+    try:
+        vers = XV.versions(conn)
+    except sqlite3.Error:
+        vers = []
+    active = vers[-1] if vers else None
+    rep["version"] = _version_brief(active)
+    if cerrs:
+        rep["notes"].append("конфиг выходов не прочитан (%s)" % ",".join(cerrs[:3]))
+    if active is None:
+        rep["notes"].append("версий политики выхода нет: продвижения не было")
+        rep["why"] = ["VERSION"]
+        return rep
+    since = int(active.get("ts") or 0)
+    rep["since"] = since
+    rep["conds"]["VERSION"] = active.get("ver") != FLOOR_VER
+    if not rep["conds"]["VERSION"]:
+        rep["notes"].append("действующая версия — пол защиты %s: продвижения не было" % FLOOR_VER)
+        rep["why"] = ["VERSION"]
+        return rep
+    try:
+        inp = EV.market_inputs(root)
+    except (ValueError, TypeError, KeyError, OSError) as e:
+        rep["notes"].append("входы симулятора не прочитаны: %s" % type(e).__name__)
+        inp = {"cost_h": None}
+    pairs = _pairs(conn, EV.SRC_TRADE, active["ver"], FLOOR_VER, inp.get("cost_h"), exitsim.SIM_VER, since, mode=mode)
+    fact = _fact_r(conn, [p["key"] for p in pairs])
+    sample = []
+    scanned = 0
+    for p in pairs:
+        scanned += 1
+        p["fact_r"] = fact.get(p["key"])
+        if p["fact_r"] is None:
+            continue
+        sample.append(p)
+        if len(sample) >= GATE_MIN_TRADES:
+            break
+    rep["n"], rep["scanned"] = len(sample), scanned
+    rep["conds"]["N"] = len(sample) >= GATE_MIN_TRADES
+    cap_rows = [p for p in sample if p["mfe"] is not None and p["mfe"] > 0.0]
+    sum_mfe = _sum(cap_rows, "mfe")
+    sum_fact = _sum(cap_rows, "fact_r")
+    sum_base = _sum(cap_rows, "r_base")
+    rep.update(mfe_sum=round(sum_mfe, 4), r_fact_sum=round(sum_fact, 4), r_x0001_sum=round(sum_base, 4), n_cap=len(cap_rows),
+               cap_fact=_share(sum_fact, sum_mfe), cap_x0001=_share(sum_base, sum_mfe))
+    if rep["cap_fact"] is not None and rep["cap_x0001"] is not None:
+        rep["conds"]["CAP"] = bool(rep["cap_fact"] > rep["cap_x0001"])
+    diffs = [p["fact_r"] - p["r_base"] for p in sample if p.get("fact_r") is not None and p.get("r_base") is not None]
+    rep["mean_diff"] = _mean(diffs)
+    rep["lower90"] = lower90(diffs)
+    rep["conds"]["R"] = bool(rep["lower90"] is not None and rep["lower90"] >= GATE_MIN_R)
+    rep["passed"] = all(rep["conds"].values())
+    rep["why"] = [c for c in ("VERSION", "N", "CAP", "R") if not rep["conds"].get(c)]
+    return rep
+
+
+def unavailable_gate(code, detail=None, now=None, mode=None):
+    """Гейт при недоступной базе: пустые числа, `db` = код причины, `ok` = False."""
+    why = REASONS_RU.get(code, code) + ((": %s" % detail) if detail else "")
+    return {"ok": False, "db": code, "error": why, "ts": int(time.time() if now is None else now), "mode": mode,
+            "version": None, "since": None, "n": 0, "scanned": 0, "min_n": GATE_MIN_TRADES, "alpha": GATE_ALPHA,
+            "tol_r": GATE_MIN_R, "cap_fact": None, "cap_x0001": None, "mfe_sum": None, "r_fact_sum": None,
+            "r_x0001_sum": None, "mean_diff": None, "lower90": None, "n_cap": 0,
+            "conds": {"VERSION": False, "N": False, "CAP": False, "R": False}, "passed": False, "why": [], "notes": [why]}
+
+
+def run_gate(root=None, mode=None, now=None):
+    """Гейт по базе root: соединение только для чтения на вызов (`labels.store.open_ro`)."""
+    try:
+        conn = LST.open_ro(root)
+    except LST.KnowledgeRestoring:
+        return unavailable_gate(RESTORING, now=now, mode=mode)
+    except sqlite3.Error as e:
+        return unavailable_gate(DB_ERROR, "%s: %s" % (type(e).__name__, e), now=now, mode=mode)
+    if conn is None:
+        return unavailable_gate(NO_DB, now=now, mode=mode)
+    try:
+        rep = gate(conn, mode=mode, now=now, root=root)
+        rep["ok"] = True
+        rep["db"] = "OK"
+        return rep
+    except sqlite3.Error as e:
+        return unavailable_gate(DB_ERROR, "%s: %s" % (type(e).__name__, e), now=now, mode=mode)
+    finally:
+        conn.close()
+
+
+def render_gate(rep):
+    """Текст гейта: каждое условие с числами и итог (Requirement 17.4)."""
+    def mark(name):
+        return "выполняется" if (rep.get("conds") or {}).get(name) else "НЕ выполняется"
+
+    v = rep.get("version") or {}
+    lines = ["гейт этапа 4: режим %s, версия %s%s, сделок после продвижения %d (нужно ≥ %d)"
+             % (rep.get("mode") or "—", v.get("ver") or "—",
+                (" от %s" % time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(v["ts"])))) if v.get("ts") else "",
+                rep.get("n") or 0, rep.get("min_n") or GATE_MIN_TRADES)]
+    lines.append("  VERSION: версия отлична от %s — %s" % (FLOOR_VER, mark("VERSION")))
+    cf, cx = rep.get("cap_fact"), rep.get("cap_x0001")
+    lines.append("  CAP:     Σ R / Σ MFE фактом %s против %s у %s на %d сделках с MFE > 0 — %s"
+                 % ("—" if cf is None else "%.4f" % cf, "—" if cx is None else "%.4f" % cx, FLOOR_VER,
+                    rep.get("n_cap") or 0, mark("CAP")))
+    md, lo = rep.get("mean_diff"), rep.get("lower90")
+    lines.append("  R:       средний R факт − %s %s, нижняя граница 90%% %s (допуск %.3fR) — %s"
+                 % (FLOOR_VER, "—" if md is None else "%+.4fR" % md, "—" if lo is None else "%+.4fR" % lo,
+                    rep.get("tol_r") if rep.get("tol_r") is not None else GATE_MIN_R, mark("R")))
+    lines.append("  N:       сравнимых сделок %d ≥ %d — %s" % (rep.get("n") or 0, rep.get("min_n") or GATE_MIN_TRADES, mark("N")))
+    lines.append("итог: гейт %s%s" % ("пройден" if rep.get("passed") else "не пройден",
+                                     (" (не выполнено: %s)" % ", ".join(rep.get("why") or [])) if rep.get("why") else ""))
+    for n in rep.get("notes") or []:
+        lines.append("примечание: " + n)
+    return lines
 
 
 # ---------------------------------------------------------------- R4.2: писатель полей после закрытия (Requirement 13.4)

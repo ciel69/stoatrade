@@ -6,7 +6,7 @@ import type { Challenge, MemoryActionResult, MemoryHello } from '../model/types'
  * Сервер шлёт предупреждения своими словами (с командами терминала); владельцу показываем их простым русским по id, исходный текст уходит в запас.
  */
 
-export const MEMORY_ACTIONS = ['lesson_reject', 'rule_disable', 'rules_disable_all'] as const
+export const MEMORY_ACTIONS = ['lesson_reject', 'rule_disable', 'rules_disable_all', 'exits_rollback'] as const
 export type MemoryAction = (typeof MEMORY_ACTIONS)[number]
 export const isMemoryAction = (a: string | undefined): a is MemoryAction => !!a && (MEMORY_ACTIONS as readonly string[]).includes(a)
 
@@ -18,6 +18,8 @@ export const MEMORY_WARN_TEXT: Readonly<Record<string, string>> = {
   block_forever: 'Платформа больше никогда не предложит это правило сама. Вернуть его сможет только разработчик командой в терминале.',
   switch_off: 'Применение всех правил выключится сразу. Включить обратно можно только командой в терминале платформы.',
   all_off: 'Все действующие правила снимутся, испытания закроются, появится новая версия набора правил без единого правила.',
+  exits_floor: 'Политика выхода вернётся к нижней границе защиты: появится новая версия, снимок и аренда. Вернуть прежнюю версию можно только новым продвижением циклом.',
+  exits_open_positions: 'Открытые позиции продолжат вести свою версию выхода: откат действует на новые входы.',
   /** то же предупреждение у «Отключить все»: правил несколько */
   'rules_disable_all:block_forever': 'Платформа больше никогда не предложит эти правила сама. Вернуть их сможет только разработчик командой в терминале.',
 }
@@ -63,5 +65,6 @@ export function memoryDoneText(op: string): string {
   if (op === 'lesson_reject') return 'Урок отклонён. Действующие правила не тронуты.'
   if (op === 'rule_disable') return 'Правило отключено. Платформа не вернёт его сама.'
   if (op === 'rules_disable_all') return 'Все правила отключены. Мозг торгует без правил.'
+  if (op === 'exits_rollback') return 'Выходы вернулись к границе защиты. Открытые позиции не изменились.'
   return 'Готово.'
 }

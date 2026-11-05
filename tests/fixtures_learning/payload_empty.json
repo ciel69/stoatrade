@@ -52,6 +52,28 @@
    },
    "id": "exits",
    "note": "У закрытых сделок нет данных о пути цены (MFE).",
+   "r4": {
+    "cap": null,
+    "costs": null,
+    "d": null,
+    "d_b": null,
+    "mode": "paper",
+    "note": "Появится после первого продвижения.",
+    "reason": "no_promotion",
+    "since": null,
+    "status": "no_data",
+    "trials": {
+     "closed": 0,
+     "open": 0,
+     "rows": []
+    },
+    "verdict": {
+     "state": "few_data",
+     "text": "данных мало"
+    },
+    "version": null,
+    "watch": null
+   },
    "reason": "no_path",
    "series": {
     "200": [],

@@ -1,14 +1,35 @@
-"""Блок «Выходы» страницы «Учится ли мозг» (R0.2, задача 6). Чистый.
+"""Блок «Выходы» страницы «Учится ли мозг» (R0.2, задача 6) и раздел R4 о политике выхода (R4, задача 22). Чистый по данным памяти:
+числа R0.2 считаются по сделкам мозга, раздел `r4` читает базу знаний ТОЛЬКО на чтение через `tb.learnloop.exits_report.run_block`
+(Requirement 17.1–17.2, 17.5–17.6); без базы или до первого продвижения раздел показывает «появится после первого продвижения».
 
-По сделкам мозга с известным путём (`mfe_r`): средний MFE и доля забранного (среднее r / mfe_r по выигрышным сделкам с mfe_r > 0,
-как expstats.mfe_capture). Окна 50, 200 и весь период берутся по последним W сделкам мозга; ряды идут по сделкам с известным путём
+R0.2: по сделкам мозга с известным путём (`mfe_r`): средний MFE и доля забранного (среднее r / mfe_r по выигрышным сделкам с mfe_r > 0,
+как expstats.mfe_capture). Окна 50, 200 и весь период берутся по последним W сделок мозга; ряды идут по сделкам с известным путём
 от 30-й такой сделки.
 """
 from tb.core import expstats as X
 from tb.learn import stats as S
+from tb.learnloop import exits_report as ER
 
 ID = "exits"
 TITLE = "Выходы"
+R4_FIELDS = ("status", "reason", "note", "version", "since", "d", "d_b", "cap", "costs", "trials", "watch", "verdict", "mode")
+
+
+def empty_r4():
+    """Раздел без расчёта (нет флага страницы): пустое состояние Requirement 17.6."""
+    return {"status": "no_data", "reason": "no_promotion", "note": "Появится после первого продвижения.", "version": None,
+            "since": None, "d": None, "d_b": None, "cap": None, "costs": None, "trials": {"open": 0, "closed": 0, "rows": []},
+            "watch": None, "verdict": {"state": "few_data", "text": "данных мало"}, "mode": None}
+
+
+def r4_view(rep):
+    """Ответ `exits_report.run_block` -> поля блока: без служебных `ok`/`db`/`error`, примечания сведены в `note` (ключ `note` — текст)."""
+    rep = rep if isinstance(rep, dict) else {}
+    out = dict((k, rep.get(k)) for k in R4_FIELDS)
+    notes = [n for n in (rep.get("notes") or []) if isinstance(n, str)]
+    if not out.get("note") and notes:
+        out["note"] = "; ".join(notes)[:200]
+    return out
 
 
 def _get(ctx, name, default=None):
@@ -76,4 +97,6 @@ def build(ctx):
         blk["note"] = "Сделок с известным путём %d из %d: значения показаны, но выводов делать рано." % (len(path), X.MIN_N)
     else:
         blk["note"] = "Доля забранного: средняя доля максимального хода, которую выход оставил в прибыли (по выигрышным сделкам)."
+    blk["r4"] = r4_view(ER.run_block(_get(ctx, "root"), _get(ctx, "mode"), _get(ctx, "now"))) \
+        if _get(ctx, "exits_loop") else empty_r4()
     return blk

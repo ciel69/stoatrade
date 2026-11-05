@@ -9,8 +9,7 @@
     trials     испытания `exit_trials` (state, verdict, числа; только чтение)
     brain      R4.3 «мозг против алгоритма» (задача 19)
     after      R4.2 путь после закрытия (задача 20)
-    gate       гейт этапа 4 (Requirement 17.3–17.4) — реализует задача 22; до неё подкоманда честно сообщает
-               «gate появится после задачи 22» и возвращает 0
+    gate       гейт этапа 4 одной формулой Requirement 17.3: каждое условие с числами и итог (задача 22)
 
 Аварийные средства владельца (необязательные; вне пакета `tb.learnloop`; каждое изменяющее действие пишет `learn_events`
 с `actor=OWNER`, если база доступна):
@@ -43,9 +42,10 @@ from tb.knowledge import store2
 from tb.labels import store as LST
 from tb.learnloop import conf as LC
 from tb.learnloop import exits_conf as EC
-from tb.learnloop import exits_report as ER
 from tb.learnloop import exits_trial as ET
 from tb.learnloop import exits_versions as XV
+from tb.learnloop.exits_codes import DB_ERROR, MODES, NO_DB, RESTORING
+from tb.learnloop.exits_codes import REASONS_RU as DB_REASONS_RU
 from tb.logic import exitpol as XP
 
 OWNER = S2.OWNER
@@ -54,9 +54,9 @@ RE_MODE = re.compile(r'("promotion"\s*:\s*\{[^{}]*?"mode"\s*:\s*)"(?:auto|off)"'
 DB_ERRORS = (sqlite3.Error, store2.KnowledgeError, OSError)
 SEARCH_COLS = ("id", "ts", "a", "b", "cut_ts", "sample_h", "cfg_h", "menu_ver", "base_ver", "block_h", "code", "results")
 REASONS_RU = {
-    ER.NO_DB: ER.REASONS_RU[ER.NO_DB],
-    ER.RESTORING: ER.REASONS_RU[ER.RESTORING],
-    ER.DB_ERROR: ER.REASONS_RU[ER.DB_ERROR],
+    NO_DB: DB_REASONS_RU[NO_DB],
+    RESTORING: DB_REASONS_RU[RESTORING],
+    DB_ERROR: DB_REASONS_RU[DB_ERROR],
     "NOT_READY": "таблиц цикла выходов нет (нужна миграция x1: R4 включён после первого прохода цикла)",
 }
 
@@ -106,16 +106,16 @@ def _open_ro(root):
     try:
         conn = LST.open_ro(root)
     except LST.KnowledgeRestoring as e:
-        raise Unavailable(ER.RESTORING, str(e)) from e
+        raise Unavailable(RESTORING, str(e)) from e
     except DB_ERRORS as e:
-        raise Unavailable(ER.DB_ERROR, "%s: %s" % (type(e).__name__, e)) from e
+        raise Unavailable(DB_ERROR, "%s: %s" % (type(e).__name__, e)) from e
     if conn is None:
-        raise Unavailable(ER.NO_DB)
+        raise Unavailable(NO_DB)
     try:
         ok = store2.ready_x1(conn)
     except DB_ERRORS as e:
         conn.close()
-        raise Unavailable(ER.DB_ERROR, "%s: %s" % (type(e).__name__, e)) from e
+        raise Unavailable(DB_ERROR, "%s: %s" % (type(e).__name__, e)) from e
     if not ok:
         conn.close()
         raise Unavailable("NOT_READY")
@@ -125,20 +125,20 @@ def _open_ro(root):
 def _open_rw(root):
     """Соединение писателя. Отсутствующая база НЕ создаётся (аварийные средства не должны заводить пустую базу)."""
     if not _has_db(root):
-        raise Unavailable(ER.NO_DB)
+        raise Unavailable(NO_DB)
     try:
         conn = LST.open_rw(root)
     except LST.KnowledgeRestoring as e:
-        raise Unavailable(ER.RESTORING, str(e)) from e
+        raise Unavailable(RESTORING, str(e)) from e
     except DB_ERRORS as e:
-        raise Unavailable(ER.DB_ERROR, "%s: %s" % (type(e).__name__, e)) from e
+        raise Unavailable(DB_ERROR, "%s: %s" % (type(e).__name__, e)) from e
     if conn is None:
-        raise Unavailable(ER.NO_DB)
+        raise Unavailable(NO_DB)
     try:
         ok = store2.ready_x1(conn)
     except DB_ERRORS as e:
         conn.close()
-        raise Unavailable(ER.DB_ERROR, "%s: %s" % (type(e).__name__, e)) from e
+        raise Unavailable(DB_ERROR, "%s: %s" % (type(e).__name__, e)) from e
     if not ok:
         conn.close()
         raise Unavailable("NOT_READY")
@@ -148,7 +148,7 @@ def _open_rw(root):
 def _try_owner_log(root, code, ref, body, now, rep):
     """Запись `learn_events` с `actor=OWNER` — если база доступна и таблицы v2 на месте. Сбой не ломает аварийную команду."""
     if not _has_db(root):
-        rep["log_error"] = REASONS_RU[ER.NO_DB]
+        rep["log_error"] = REASONS_RU[NO_DB]
         return None
     try:
         conn = LST.open_rw(root)
@@ -256,7 +256,7 @@ def _status(root, now):
                          "rows": [_trial_brief(t) for t in trs[:20]]}
         rep["watch"] = _watch_brief(XV.watch_state(conn))
     except DB_ERRORS as e:
-        raise Unavailable(ER.DB_ERROR, "%s: %s" % (type(e).__name__, e)) from e
+        raise Unavailable(DB_ERROR, "%s: %s" % (type(e).__name__, e)) from e
     finally:
         conn.close()
     return rep
@@ -336,7 +336,7 @@ def cmd_search(a, root):
         rows = conn.execute("SELECT %s FROM exit_search ORDER BY ts DESC, id DESC LIMIT ?" % ", ".join(SEARCH_COLS),
                             (limit,)).fetchall()
     except DB_ERRORS as e:
-        _out(_db_report(ER.DB_ERROR, "%s: %s" % (type(e).__name__, e), now, "search"), a.text, ["поиски: база не читается"])
+        _out(_db_report(DB_ERROR, "%s: %s" % (type(e).__name__, e), now, "search"), a.text, ["поиски: база не читается"])
         return 1
     finally:
         conn.close()
@@ -381,12 +381,13 @@ def cmd_trials(a, root):
 
 
 def cmd_gate(a, root):
-    """Гейт этапа 4 — задача 22. До неё подкоманда существует и не падает (Requirement 16.5: аварийные команды необязательны)."""
-    msg = "gate появится после задачи 22"
-    if getattr(a, "json", False):
-        _out({"ok": True, "pending": True, "message": msg})
-    else:
-        print(msg)
+    """Гейт этапа 4 (Requirement 17.3–17.4): каждое условие с числами и итог. Код 1 — база знаний недоступна."""
+    from tb.learnloop import exits_report as ER
+    rep = ER.run_gate(root, mode=getattr(a, "mode", None))
+    if rep.get("db") not in (None, "OK"):
+        _err("%s" % rep.get("error"))
+        return 1
+    _out(rep, getattr(a, "text", False), ER.render_gate(rep))
     return 0
 
 
@@ -570,6 +571,7 @@ def cmd_promotion(a, root):
 # ---------------------------------------------------------------- after / brain
 
 def cmd_after(a, root):
+    from tb.learnloop import exits_report as ER
     since = int(time.time()) - int(a.days) * 86400 if a.days else None
     rep = ER.run(root, mode=a.mode, since=since)
     if rep.get("db") not in (None, "OK"):
@@ -580,6 +582,7 @@ def cmd_after(a, root):
 
 
 def cmd_brain(a, root):
+    from tb.learnloop import exits_report as ER
     since = int(time.time()) - int(a.days) * 86400 if a.days else None
     rep = ER.run_brain(root, mode=a.mode, since=since)
     if rep.get("db") not in (None, "OK"):
@@ -609,8 +612,9 @@ def build_parser():
     tr.add_argument("state", nargs="?", choices=("open", "closed"), help="только открытые или только закрытые")
     tr.add_argument("--text", action="store_true", help="короткий текст вместо JSON")
 
-    ga = sub.add_parser("gate", help="гейт этапа 4 (появится после задачи 22)")
-    ga.add_argument("--json", action="store_true", help="JSON вместо текста")
+    ga = sub.add_parser("gate", help="гейт этапа 4: каждое условие с числами и итог (только чтение)")
+    ga.add_argument("--mode", choices=MODES, help="режим торговли (по умолчанию brain.mode конфига, иначе paper)")
+    ga.add_argument("--text", action="store_true", help="короткий текст вместо JSON")
 
     ap = sub.add_parser("apply", help="выключатель применения политики runtime/exits_switch.json (работает без базы)")
     ap.add_argument("state", choices=("on", "off"), help="on — применять политику, off — пол защиты")
@@ -624,12 +628,12 @@ def build_parser():
     pr.add_argument("--text", action="store_true")
 
     af = sub.add_parser("after", help="путь после закрытия: ход после выхода, достижение t1 по причинам (только чтение)")
-    af.add_argument("--mode", choices=ER.MODES, help="режим торговли для сделок мозга (по умолчанию brain.mode конфига)")
+    af.add_argument("--mode", choices=MODES, help="режим торговли для сделок мозга (по умолчанию brain.mode конфига)")
     af.add_argument("--days", type=int, default=0, help="окно: сделки и прогоны с entry_ts не старше N суток")
     af.add_argument("--text", action="store_true", help="короткий текст вместо JSON")
 
     br = sub.add_parser("brain", help="R4.3: мозг против алгоритма по сделкам мозга (только чтение)")
-    br.add_argument("--mode", choices=ER.MODES, help="режим торговли (по умолчанию brain.mode конфига)")
+    br.add_argument("--mode", choices=MODES, help="режим торговли (по умолчанию brain.mode конфига)")
     br.add_argument("--days", type=int, default=0, help="окно: сделки с entry_ts не старше N суток")
     br.add_argument("--text", action="store_true", help="короткий текст вместо JSON")
     return p
