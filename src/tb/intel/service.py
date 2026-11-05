@@ -16,6 +16,7 @@ import threading
 import time
 
 from tb import paths
+from tb.cmkt import conf as cmkt_conf
 from tb.core import filelock
 from tb.intel import calendar as ical
 from tb.intel import fetch as ifetch
@@ -53,9 +54,12 @@ class Service(object):
         # кросс-биржевые данные (ccxt, без ключей); с подменённым транспортом (тесты, разработка) живой сети через ccxt нет
         self.xex = ixex.Collector(root, self.cfg, clock, log=self.log) if ixex.xcfg(self.cfg)["enabled"] and transport is None else None
         self._xex_thread = None
-        # потоковые кросс-биржевые данные по сокетам ccxt.pro (сделки, стакан, тикер, ликвидации) по монетам позиций и планов: отдельный поток с asyncio
+        # потоковые кросс-биржевые данные по сокетам ccxt.pro (сделки, стакан, тикер, ликвидации) по монетам позиций и планов: отдельный поток с asyncio.
+        # При config/cmkt.json compat_xflow=true файл runtime/intel/xflow.json пишет сводный рынок (tb.cmkt.compat), XStream не запускается: один писатель
         self.xstream = None
-        if transport is None and ixex.xcfg(self.cfg)["enabled"] and xstream_mod.scfg(self.cfg)["enabled"] and xstream_mod.available():
+        self.xflow_by_cmkt = cmkt_conf.compat_xflow_on(root)
+        if (transport is None and not self.xflow_by_cmkt and ixex.xcfg(self.cfg)["enabled"] and xstream_mod.scfg(self.cfg)["enabled"]
+                and xstream_mod.available()):
             self.xstream = xstream_mod.XStream(root, self.cfg, clock, log=self.log,
                                                symbols_fn=lambda: xstream_mod.symbol_set(root, self.symbols, xstream_mod.scfg(self.cfg)["n_syms"]))
             self.xstream.start()

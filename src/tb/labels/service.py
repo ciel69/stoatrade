@@ -301,6 +301,8 @@ class Service(object):
             self.t_stats = now
             try:
                 self.stats = query.heartbeat_stats(self.conn, now, self.cfg.get("coverage_fields"))
+                cov = capture.cm_coverage(self.conn, now - 86400, capture.warm_s(self.root))     # R1.7 (Requirement 11.4): CM_COV статуса
+                self.stats["cm_cov_24h"] = {"focus": cov["focus"], "all": cov["all"], "n_focus": cov["n_focus"], "n_all": cov["n_all"]}
             except sqlite3.Error as e:
                 if self._is_corrupt_v2(e):
                     self._corrupt("heartbeat", e)
@@ -323,6 +325,8 @@ class Service(object):
               "failed_24h": st.get("failed_24h"), "no_data_24h": st.get("no_data_24h"), "rate_limited_24h": len(self.rate_events), "req_per_min": rpm,
               "bad_lines": self.bad_lines, "last_error": self.last_error or store.LAST_ERROR, "db_mb": db_mb,
               "missing_share_24h": st.get("missing_share_24h"), "warnings": warnings, "enabled": bool(self.cfg.get("enabled", True))}
+        if st.get("cm_cov_24h") is not None:
+            hb["cm_cov_24h"] = st["cm_cov_24h"]
         if self.v2:
             hb["v2"] = True
             hb["db_state"] = self.db_state

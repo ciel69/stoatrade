@@ -14,6 +14,7 @@ Append-only, `seq` монотонный (блокировка `state/bus/.lock`)
   - дедупликация на записи: веха плана (`milestone` с тем же `plan` и `name`) не повторяется, `connectivity` (канал+состояние) не чаще раза в 30 с.
 Модуль самодостаточен (только `tb.paths` и `tb.fsutil`): не зависит от других пакетов v2 и не трогает биржевой код.
 """
+import datetime
 import json
 import math
 import os
@@ -112,7 +113,8 @@ D_FIELDS = {
     "scanner_signal": {"kind": ("enum", SCANNER_KINDS), "px": "num", "score": "num", "dir": _ENUM_DIR, "range_5m_pct": "num", "ret_5m_pct": "num",
                        "turn_surge_5m": "num", "spread_bps": "num", "funding_pct": "num", "chg_24h_pct": "num", "turn_24h_musd": "num", "idea": "idea", "stale": ("enum", STALE_CODES), "wake": "bool", "big": "bool",      # big: крупное событие (каскад от big_x порогов монеты)
                        "oi_chg_15m_pct": "num", "oi_chg_1h_pct": "num", "liq_usd": "num", "liq_side": ("enum", ("long", "short")),
-                       "cvd_pct": "num", "wall_usd": "num", "wall_dist_pct": "num", "wall_side": ("enum", ("bid", "ask")), "xex_bps": "num"},
+                       "cvd_pct": "num", "wall_usd": "num", "wall_dist_pct": "num", "wall_side": ("enum", ("bid", "ask")), "xex_bps": "num",
+                       "t0": "num"},      # R1.7 Requirement 23: время сигнала (целая секунда UTC поля ts строки hot_events.jsonl, = signals.t0 меток)
     "plan_armed": {"rev": "num", "codes": "ids", "preview": "numdict"},
     "plan_rejected": {"rev": "num", "codes": "ids", "preview": "numdict"},
     "trigger_fired": {"cond": "id", "level": "num", "px": "num"},
@@ -147,9 +149,10 @@ D_FIELDS = {
     "rulebook_rollback": {"ver": "id", "rule": "id", "code": "id", "n": "num", "mean_r": "num", "p": "num"},
 }
 # защищённые поля `d`: при превышении MAX_EVENT_BYTES `sanitize` выбрасывает их только после всех прочих (R2 Requirement 7.10):
-# kind, dir и признаки правил `memory.features.rule_features` (их потеря молча выключила бы правило)
+# kind, dir, признаки правил `memory.features.rule_features` (их потеря молча выключила бы правило) и t0 (R1.7 Requirement 23: по нему
+# мозг берёт признаки сводного рынка той же строки, что метки)
 D_PROTECTED = {
-    "scanner_signal": ("kind", "dir", "range_5m_pct", "ret_5m_pct", "turn_surge_5m", "chg_24h_pct", "spread_bps", "funding_pct", "turn_24h_musd"),
+    "scanner_signal": ("kind", "dir", "range_5m_pct", "ret_5m_pct", "turn_surge_5m", "chg_24h_pct", "spread_bps", "funding_pct", "turn_24h_musd", "t0"),
 }
 
 
@@ -170,6 +173,26 @@ def parse_iso(s):
         import calendar
         return float(calendar.timegm(time.strptime(s[:19], "%Y-%m-%dT%H:%M:%S")))
     except (ValueError, TypeError):
+        return None
+
+
+def signal_t0(ts):
+    """Время сигнала сканера: поле `ts` строки hot_events.jsonl -> целая секунда UTC или None (R1.7 Requirement 23).
+    Тот же разбор, что `labels/capture._t0` (signals.t0 меток): ISO 8601, `Z` = UTC, без зоны = UTC, дробная часть отбрасывается."""
+    if not isinstance(ts, str) or not ts:
+        return None
+    s = ts.strip()
+    if s.endswith("Z") or s.endswith("z"):
+        s = s[:-1] + "+00:00"
+    try:
+        dt = datetime.datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    try:
+        return int(dt.timestamp())
+    except (OverflowError, OSError, ValueError):
         return None
 
 

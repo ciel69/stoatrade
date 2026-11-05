@@ -3,6 +3,8 @@
 Сейчас реально работает одна биржа: Bybit (USDT-перпетуалы). Остальные записи реестра (okx, binance) заготовки: `enabled:false`, `implemented:false`, включить нельзя. Реальных вторых
 бирж в проекте нет; всё ниже проверено на ФЕЙКОВОЙ бирже `fake2` (`FakePort`), см. `tests/test_exchanges.py`.
 
+Отдельно от торговых бирж работает публичный сбор сводного рынка (`cmkt`, 6 бирж и 11 рынков): он не торгует, ключей не использует и в реестр `config/exchanges.json` не входит — раздел «Публичные адаптеры сводного рынка».
+
 ## Подключение ключей Bybit
 
 Ключ биржи нужен только для `testnet` и `live`; paper работает без него (по публичным ценам). Проверена и реализована ТОЛЬКО Bybit (paper, testnet, несколько небольших live-сделок владельца).
@@ -34,6 +36,25 @@
   `ВКЛЮЧАЮ LIVE НА БИРЖЕ <ID>`). Контракт: `docs/spec_v2/SETTINGS_API.md`. Руками: правьте `config/local/exchanges.json`.
 * Фабрика `src/tb/venues/registry.py`: `make_bundle(exchange_id, profile, root, selftest)` -> `Bundle(port, feed, saver, client)`; bybit = `LivePort` (trade/testnet) и `PaperPort` на публичных
   потоках (paper). Нереализованная биржа даёт `ExchangeNotImplemented` с понятным текстом. `make_client(exchange_id, env)` для сервисов чтения.
+
+## Публичные адаптеры сводного рынка (`cmkt`, R1.7)
+
+Сводный рынок (`src/tb/cmkt/`, `docs/ARCHITECTURE.md`, «Сводный рынок») — отдельный слой от торговых бирж: `config/cmkt.json` и адаптеры `src/tb/cmkt/ex/<биржа>.py` только читают публичные каналы и эндпоинты без ключей и подписи, торговать не умеют и в реестр `config/exchanges.json` не входят. Ключи бирж, `tb.venues`, исполнитель и guard им недоступны (проверяет `tests/test_layering.py`).
+
+Первая очередь — 6 бирж и 11 рынков: `perp` (линейный USDT-бессрочный) и `spot` к USDT у Binance, Bybit, OKX, Bitget, Gate и только `spot` к USD у Coinbase. Обратные, USDC-маржинальные и срочные контракты, спот к FDUSD, USDC и прочим котировкам отбрасываются при загрузке метаданных.
+
+| Биржа | Рынки | Что собирается | Снимок стакана |
+|---|---|---|---|
+| `binance` | `perp`, `spot` | стакан, сделки, тикер (марк, funding, оборот), OI (REST), ликвидации `!forceOrder@arr` (Binance `liq_partial`) | `perp` — WS API `depth`; `spot` — REST `data-api.binance.vision` |
+| `bybit` | `perp`, `spot` | стакан `orderbook.1000` (`deep`) / `orderbook.50` (`light`), сделки, тикер (funding, OI, интервал), ликвидации `allLiquidation` | по WS |
+| `okx` | `perp`, `spot` | стакан `books` (400 уровней), сделки, тикер, `mark-price`, `funding-rate`, `open-interest`, `liquidation-orders` (OKX `liq_partial`) | по WS |
+| `bitget` | `perp`, `spot` | стакан `books` (`deep`) / `books15` (`light`), сделки, тикер (`holdingAmount` — OI); ликвидаций нет | по WS |
+| `gate` | `perp`, `spot` | стакан `futures.obu`/`spot.obu` (400 уровней) и частичный `order_book` (`light`), сделки, тикер (`total_size` — OI, `funding_rate`), ликвидации `futures.public_liquidates` + REST `liq_orders` (Gate `liq_partial`) | по WS |
+| `coinbase` | `spot` | `ticker` (`BASE-USD` и курс `USDT-USD`), `matches`; стакан не собирается | нет |
+
+Общее для всех: адаптер реализует контракт `tb.cmkt.adapter.VenueAdapter` (метаданные инструментов, план подписок, разбор сообщения в нормализованные события, правило непрерывности стакана, серверное время), соединения идут через `tb.marketdata.wsclient` (stdlib, без ccxt), хосты — только из белого списка `config/cmkt.json: venues.<id>.hosts` (иначе `HOST_DENIED`; хостов платных агрегаторов в нём нет), пределы подписок и REST — `config/cmkt.json: limits` (200 тем на соединение, Bitget 50, OKX 150, Gate и Coinbase 100; 5 сообщений подписки в секунду; 1 соединение в секунду; вес REST в минуту по рынку). Выключение биржи — `venues.<id>.enabled: false`: она не соединяется, её рынки в снимке получают код `OFF`.
+
+**Как добавить биржу.** Новый модуль `src/tb/cmkt/ex/<биржа>.py` с классом `ADAPTER` (наследник `VenueAdapter`), запись `venues.<id>` (виды рынков, включение, белый список хостов), при необходимости `limits.subs_per_conn` и `limits.rest_weight_per_min`, фикстуры в `tests/fixtures_cmkt/`. Сводка, логика и хранение не меняются; контракт проверяется на поддельной бирже `fakex` (`tests/test_cmkt_adapter.py`).
 
 ## Параллельный запуск: один исполнитель на биржу
 

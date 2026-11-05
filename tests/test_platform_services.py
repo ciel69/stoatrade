@@ -57,6 +57,38 @@ class TestRegistration(unittest.TestCase):
             self.assertIn("GH_TOKEN", env, name)
 
 
+class TestCmktRegistration(unittest.TestCase):
+    """R1.7, задача 17 (свойство 21; Requirements 3.1, 18.2, 18.3): сводка cmkt и сборщики cmkt@* в платформе. Подробно — tests/test_cmkt_service.py."""
+
+    def test_order_profiles_and_settings(self):
+        self.assertIn("cmkt", S.ORDER)
+        self.assertLess(S.ORDER.index("cmkt"), S.ORDER.index("labels"))         # потребители (метки, мозг) стартуют позже и останавливаются раньше
+        for prof in S.PROFILES:
+            self.assertIn("cmkt", S.DEFAULTS["services"][prof], prof)
+        for k in ("cmkt", "cmkt@"):
+            self.assertEqual(S.DEFAULTS["svc"][k], {"hb": "file", "hb_stale_s": 30.0, "grace_s": 60.0})
+
+    def test_property_21(self):
+        for v, k in (("binance", "perp"), ("binance", "spot"), ("bybit", "perp"), ("bybit", "spot"), ("okx", "perp"), ("okx", "spot"),
+                     ("bitget", "perp"), ("bitget", "spot"), ("gate", "perp"), ("gate", "spot"), ("coinbase", "spot")):
+            self.assertEqual(S.cmkt_market(S.cmkt_name(v, k)), (v, k))
+        self.assertIsNone(S.cmkt_market("cmkt"))
+        self.assertEqual(S.parse_services("cmkt@binancep,cmkt"), ["cmkt", "cmkt@binancep"])
+        with self.assertRaises(S.ConfigError):
+            S.parse_services("cmkt@x_y")
+        order = S.stop_order(["exec", "cmkt", "cmkt@binancep", "cmkt@okxs", "labels"])
+        self.assertEqual(order, ["labels", "cmkt", "cmkt@binancep", "cmkt@okxs", "exec"])
+        for name in ("cmkt", "cmkt@binancep", "cmkt@coinbases"):
+            env = S.child_env(name, dict(SECRETS, **SAFE), "/tmp/r", profile="trade")
+            self.assertFalse([k for k in env if k in SECRETS], name)
+        self.assertEqual(S.svc_cfg(S.DEFAULTS, "cmkt@okxp")["hb_stale_s"], 30.0)
+
+    def test_logs_accepts_collector_names(self):
+        self.assertTrue(S.known_service("cmkt@binancep"))
+        self.assertTrue(S.known_service("exec@okx"))
+        self.assertFalse(S.known_service("cmkt@x_y"))
+
+
 class TestStatusBlock(unittest.TestCase):
     NOW = 1790900000.0
 

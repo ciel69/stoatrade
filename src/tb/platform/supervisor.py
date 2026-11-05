@@ -210,7 +210,7 @@ class Platform(object):
             pass
 
     def _check_hb(self, svc, now):
-        sc = (self.cfg.get("svc") or {}).get(svc.name) or {}
+        sc = S.svc_cfg(self.cfg, svc.name)                 # сборщики cmkt@* без своей записи — по шаблону svc["cmkt@"]
         kind = sc.get("hb", "none")
         if kind == "none" or svc.started is None:
             svc.hb_ok, svc.hb_age = None, None
@@ -622,7 +622,7 @@ def main_logs(argv):
         return 2
     if a.root:
         os.environ["TB_ROOT"] = os.path.abspath(a.root)
-    if a.service != "platform" and a.service not in S.SERVICE_NAMES:
+    if a.service != "platform" and not S.known_service(a.service):
         _err("неизвестный сервис: %s" % a.service)
         return 2
     path = S.log_file(a.service, paths.root())

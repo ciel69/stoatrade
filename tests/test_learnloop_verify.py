@@ -225,7 +225,7 @@ class TestMenuPure(unittest.TestCase):
     def test_min_n_menu_formula(self):
         self.assertEqual(LC.min_n_menu_formula(150, 0.8, 30, 14), 88)
         self.assertEqual(CFG["verify"]["min_n_menu"], 88)
-        self.assertEqual(MN.K_MAX, 17)
+        self.assertEqual(MN.K_MAX, 25)                              # R1.7 первая волна: 17 + 4 × 2 (было 17)
 
     def test_quantile(self):
         self.assertIsNone(MN.quantile([], 0.8))
@@ -240,7 +240,10 @@ class TestMenuPure(unittest.TestCase):
         self.assertNotIn("side", feats)
         self.assertNotIn("utc_session", feats)
         ops = sorted((it["cond"][0]["feature"], it["cond"][0]["op"]) for it in m["items"] if it["cond"][0]["feature"] in NUM)
-        self.assertEqual(ops, sorted((f, o) for f in NUM for o in (">=", "<=")))
+        self.assertEqual(ops, sorted((f, o) for f in learn_cond.BASE_MENU_NUM for o in (">=", "<=")))
+        # R1.7: строки без признаков cm_ (прежние cluster_runs) -> признаки волны отсечены COVERAGE_LOW
+        cov = dict((d["feature"], d["code"]) for d in m["dropped"] if d.get("feature"))
+        self.assertEqual(set(f for f, c in cov.items() if c == "COVERAGE_LOW"), set(learn_cond.CM_WAVE))
         coins = sorted(it["cond"][0]["value"] for it in m["items"] + m["dropped"] if it.get("cond") and it["cond"][0]["feature"] == "coin_class")
         self.assertEqual(coins, sorted(learn_cond.menu_cat_values("coin_class")))
         self.assertNotIn("unknown", coins)

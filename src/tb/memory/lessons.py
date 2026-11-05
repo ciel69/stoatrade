@@ -25,6 +25,7 @@ import time
 from tb import paths
 from tb.core import expstats
 from tb.core.filelock import FileLock
+from tb.logic import learn_cond as LCD
 from tb.logic.learn_cond import cmp_val, matches_features  # noqa: F401  (реэкспорт: lessons.matches_features, lessons._cmp_val)
 from tb.memory import agg, cases, chain, privacy, similar
 from tb.memory import cfg as memcfg
@@ -54,13 +55,15 @@ CAT_FEATURES = {"coin_class": cases.COIN_CLASSES, "setup": cases.SETUPS, "regime
                 "confirm_kind": cases.CONFIRM_KINDS}
 BOOL_FEATURES = ("confirmed", "no_confirm_tag", "blackout")
 NUM_FEATURES = ("range_5m_pct", "range_15m_pct", "ret_5m_pct", "turn_surge_5m", "chg_24h_pct", "spread_bps", "funding_pct", "stop_pct",
-                "stop_dist_vs_range5", "rr_planned", "size_mult", "btc_ret_1h_pct")
+                "stop_dist_vs_range5", "rr_planned", "size_mult", "btc_ret_1h_pct") + LCD.CM_RULE_FEATURES   # R1.7: волна cm_ (уроки меток)
 FEATURES = tuple(CAT_FEATURES) + BOOL_FEATURES + NUM_FEATURES
 FEATURE_RU = {"coin_class": "класс монеты", "setup": "сетап", "regime": "режим", "utc_session": "сессия", "side": "сторона", "confirm_kind": "тип подтверждения",
               "confirmed": "подтверждение", "no_confirm_tag": "метка no-confirm", "blackout": "блэкаут", "range_5m_pct": "диапазон 5м %", "range_15m_pct": "диапазон 15м %",
               "ret_5m_pct": "доходность 5м %", "turn_surge_5m": "всплеск оборота", "chg_24h_pct": "изменение 24ч %", "spread_bps": "спред bps",
               "funding_pct": "funding %", "stop_pct": "стоп %", "stop_dist_vs_range5": "стоп/диапазон5м", "rr_planned": "RR плана", "size_mult": "множитель размера",
-              "btc_ret_1h_pct": "BTC 1ч %"}
+              "btc_ret_1h_pct": "BTC 1ч %",
+              "cm_imb_025_pct": "дисбаланс стакана ±0.25% (сводный)", "cm_oi_liq_5m_pct": "изменение OI без ликвидаций 5м % (сводный)",
+              "cm_cvd_5m_perp_pct": "CVD фьючерсов 5м % (сводный)", "cm_wall_pull_15m_pct": "снятые стены 15м % (сводный)"}
 METRIC_RU = {"mean_r": "средний R", "win_rate": "доля плюсовых", "stop_hit_share": "доля стопов", "err_share": "доля ошибок"}
 DIR_RU = {"lower": "ниже", "higher": "выше"}
 VS_RU = {"base": "базового", "zero": "нуля"}

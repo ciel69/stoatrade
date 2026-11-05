@@ -287,7 +287,8 @@ class LiveGuardTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {"TB_ROOT": root}), mock.patch("sys.stdout", new=out):
             self.assertEqual(SV.main_up(["--dry-run"]), 0)
         self.assertIn("профиль paper", out.getvalue())
-        self.assertIn("exec, scan, feed, context, intel, sync, dispatch, ctl, dash", out.getvalue())     # WP12: ctl; feed, context (context.json), intel (facts.json), sync (капитал) входят по умолчанию
+        self.assertIn("exec, scan, feed, cmkt, ", out.getvalue())                                           # R1.7: сводный рынок (сводка и сборщики рынков)
+        self.assertIn("cmkt@coinbases, context, intel, sync, dispatch, ctl, dash", out.getvalue())     # WP12: ctl; feed, context (context.json), intel (facts.json), sync (капитал) входят по умолчанию
 
     def test_unknown_service_and_profile(self):
         root = H.mk_root(self)

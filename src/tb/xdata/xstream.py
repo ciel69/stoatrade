@@ -6,7 +6,7 @@
   watch_order_book  -> xflow.book_stats (полосы ликвидности, корзины для стен);
   watch_ticker      -> цена, фандинг и открытый интерес из info биржи (где биржа их отдаёт в тикере), изменение OI за 5 мин;
   watch_liquidations -> кольцо ликвидаций: USD лонгов и шортов за 5 мин и 1 ч (ccxt.pro: bybit, binanceusdm, okx; у bitget канала нет).
-Результат пишется в тот же runtime/intel/xflow.json (формат xflow.XFlow.document + блок live), поэтому xflow.summary() -> facts deriv[SYM]["x"] и
+Результат пишется в runtime/intel/xflow.json (cvd/ob/walls/slow по монетам + блок live), поэтому xflow.summary() -> facts deriv[SYM]["x"] и
 сторож позиции читают его без изменений. Метод, которого у биржи нет, не вызывается; сбой одной биржи = её backoff, остальные работают.
 Цикл asyncio живёт в отдельном потоке сервиса intel; никаких ордеров, ключей и импорта исполнителя здесь нет.
 """
@@ -318,7 +318,8 @@ class XStream(object):
 
     # ---- документ
     def document(self, now):
-        """Тот же формат, что xflow.XFlow.document (cvd/ob/walls/slow по монетам) плюс live: тикеры бирж и ликвидации за 5 мин/1 ч."""
+        """Документ xflow.json: cvd/ob/walls/slow по монетам плюс live (тикеры бирж и ликвидации за 5 мин/1 ч). Тот же формат пишет
+        tb.cmkt.compat при compat_xflow=true (тогда сервис intel этот поток не запускает)."""
         c = self.fc
         out = {"ts_epoch": now, "src": "xstream", "req_min": 0,
                "ex": {e: {"ok": s["ok"], "fails": s["fails"], "err": s["err"], "msgs": s["msgs"], "nosup": sorted(self.nosup.get(e, {})),

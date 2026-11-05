@@ -19,7 +19,7 @@ import time
 
 from tb import paths
 from tb.brain import common, conf as conf_mod, entryplan, fallback, guards, jobs, roles_runtime, swap, validate
-from tb.core import decisions, hyps, plan_schema
+from tb.core import cmktdoc, decisions, hyps, plan_schema
 
 TRUNC_MAX_TOKENS = 8192         # потолок удвоения лимита вывода при обрезанном ответе
 from tb.llm import budget as budget_mod, schema as schema_mod, toolloop, usage as usage_mod
@@ -118,6 +118,16 @@ ES_TOOL_NOTE = ("\n\nTOOL MODE (this run). Act by calling exactly ONE tool: es_t
 PM_TOOL_NOTE = ("\n\nTOOL MODE (this run). Act by calling exactly ONE tool: pm_hold, pm_move_stop, pm_partial_close, pm_close, pm_cancel, pm_amend, pm_extend_hold, pm_hold_plan, pm_release_plan or pm_escalate "
                 "(reason is a code from the enum, why is a short note with numbers from the brief; the plan is filled in by the platform). The tool is executed immediately and "
                 "the run ends. Do not output JSON. If a call is rejected with codes, fix it with another call.")
+
+# get_market_detail (R1.7, Requirement 21): инструмент чтения в режимах es_*/pm_*, если он есть у роли (tools_optional). Модель выбирает только части; монету
+# подставляет раннер из задания/плана. Это не действие: state["done"] не ставится, повторы ограничивает шлюз (E_RATE_MARKET).
+MD_TOOL = "get_market_detail"
+MD_SPEC = {"name": MD_TOOL, "description": "Read-only: consolidated market details of the job coin (code-computed numbers, do not recompute). Not an action: "
+                                           "after it call one action tool.",
+           "schema": {"type": "object", "properties": {"parts": {"type": "array", "maxItems": len(cmktdoc.PARTS), "items": {"type": "string", "enum": list(cmktdoc.PARTS)},
+                                                                 "description": "optional parts, default all"}}, "additionalProperties": False}}
+MD_NOTE = " get_market_detail (optional, at most once) only reads market details of the job coin before the action; it is not the action."
+RE_PLAN_SYM = re.compile(r"^PL-\d{4}-([A-Z0-9]{2,20})-\d{2,3}$")
 
 
 def _rejected(errs):
@@ -761,6 +771,30 @@ class Runner(object):
         (entryplan.expand); модель даёт только выбор, сетап, тезис и why. Теги: кандидата, затем модели, до 2. ctx["_cand"] = {n, geometry_ver} выбранного кандидата входа (для basis решения)."""
         return entryplan.expand_ctx(name, a, ctx)
 
+    @staticmethod
+    def _md_on(role):
+        """get_market_detail выдаётся модели в режимах es_*/pm_*, только если он есть в инструментах роли (tools_optional, отфильтрованные каталогом шлюза)."""
+        return MD_TOOL in (role.tools or ())
+
+    @staticmethod
+    def _md_sym(ctx, job, plan=None):
+        """Монета для get_market_detail: монета задания (ctx/job), иначе из id плана PL-MMDD-SYM-NN. Модель монету не называет."""
+        for s in (ctx.get("sym"), job.get("sym")):
+            if isinstance(s, str) and common.RE_SYMBOL.fullmatch(s):
+                return s
+        m = RE_PLAN_SYM.match(plan) if isinstance(plan, str) else None
+        return m.group(1) if m else None
+
+    def _md_call(self, agent, a, sym, meta):
+        """Чтение подробностей рынка через шлюз; ответ шлюза возвращается модели как есть (отказы шлюза, в том числе E_RATE_MARKET, тоже)."""
+        if not sym:
+            return {"ok": False, "errors": [{"code": "NO_SYM", "msg": "job has no coin"}]}
+        args = {"sym": sym}
+        parts = a.get("parts") if isinstance(a, dict) else None
+        if isinstance(parts, list):
+            args["parts"] = [p for p in parts if p in cmktdoc.PARTS][:len(cmktdoc.PARTS)]
+        return self.gateway.call(agent, MD_TOOL, args, meta=meta)
+
     def _entry_tool_mode(self, role, client, req, meta, deadline, sem, ctx):
         """entry_scout: действие одним вызовом es_take / es_skip / es_watch, числа из кандидата; исполняется сразу (те же проверки validate и шлюз).
         Без вызова инструмента ответ в старом формате entry/1 принимается как раньше. -> тот же словарь, что _call_profile, плюс executed/result."""
@@ -790,7 +824,11 @@ class Runner(object):
             state["done"] = {"obj": obj, "result": res, "tool": "es_revise"}
             return {"ok": True, "outcome": "hold", "code": "REVISE", "idea": iid, "action": act}
 
+        md_on = self._md_on(role) and not ctx.get("revise_only")       # ревизия идеи: только es_revise / es_skip
+
         def run_tool(name, a):
+            if name == MD_TOOL and md_on:          # чтение, не действие: done не ставится и не проверяется
+                return self._md_call(run["agent"], a, self._md_sym(ctx, run["job"]), meta)
             if name not in ("es_take", "es_skip", "es_watch", "es_revise"):
                 return {"ok": False, "error": "UNKNOWN_TOOL"}
             if state["done"] is not None:
@@ -815,6 +853,9 @@ class Runner(object):
             note = ES_TOOL_NOTE + ES_REVISE_NOTE
             if ctx.get("revise_only"):
                 specs, note = [s for s in specs if s["name"] in ("es_revise", "es_skip")], ES_REVISE_ONLY_NOTE
+        if md_on:
+            specs.append(dict(MD_SPEC))
+            note = note + MD_NOTE
         req = req.copy(system=(req.system or "") + note, tools=specs, tool_choice="auto")
         lr = self._run_tools_once(client, req, run_tool, state, max_rounds=max(3, role.max_rounds),
                                   should_stop=lambda: state["done"] is not None or self.clock() > deadline or self.stop_event.is_set())
@@ -869,7 +910,11 @@ class Runner(object):
         if not plan:          # плана нет (событие без плана, позиций несколько): инструментам нечего назвать, модель не зовём (раньше: BAD_TYPE:$.plan -> MAX_ROUNDS)
             return {"obj": None, "code": "NO_PLAN", "errors": [], "rounds": 0}
 
+        md_on = self._md_on(role)
+
         def run_tool(name, a):
+            if name == MD_TOOL and md_on:          # чтение, не действие: done не ставится и не проверяется
+                return self._md_call(run["agent"], a, self._md_sym(ctx, run["job"], plan), meta)
             d = PM_TOOL_DECISION.get(name)
             if d is None:
                 return {"ok": False, "error": "UNKNOWN_TOOL"}
@@ -907,8 +952,12 @@ class Runner(object):
             state["done"] = {"decision": d, "obj": obj, "result": res, "tool": name, "reason": a.get("reason"), "why": a.get("why")}
             return {"ok": res["outcome"] in ("decision", "hold"), "outcome": res["outcome"], "code": res["code"]}
         tl = [dict(t) for t in PM_TOOL_SPECS if not (ctx.get("has_position") is True and t["name"] == "pm_hold_plan")]      # план в позиции на паузу не ставится (2026-11-03)
+        note = PM_TOOL_NOTE
+        if md_on:
+            tl.append(dict(MD_SPEC))
+            note = note + MD_NOTE
         base = req
-        req = req.copy(system=(req.system or "") + PM_TOOL_NOTE, tools=tl, tool_choice="auto")
+        req = req.copy(system=(req.system or "") + note, tools=tl, tool_choice="auto")
         lr = self._run_tools_once(client, req, run_tool, state, max_rounds=max(3, role.max_rounds), schema=None,
                                   should_stop=lambda: state["done"] is not None or self.clock() > deadline or self.stop_event.is_set())
         if state["done"] is not None:          # действие исполнено: объяснение пришло аргументом why, второго раунда нет

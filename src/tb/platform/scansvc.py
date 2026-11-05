@@ -6,7 +6,8 @@
   - idea_stale: ревизия живой идеи (ideawatch, флаг stale_code): d.stale = причина (bus.STALE_CODES), d.idea = id; окно дедупликации 4 ч на идею;
   - источник событий тот же файл runtime/hot_events.jsonl, что пишет hotscan (хвост с конца файла, без истории при старте);
   - белый список полей d: kind, px, score, dir, range_5m_pct, ret_5m_pct, turn_surge_5m, spread_bps, funding_pct, chg_24h_pct, turn_24h_musd, idea, wake
-    (+ поля деривативов и ордерфлоу, см. NUM_KEYS; reasons/note/idea_note и любой текст сканера НЕ попадают в шину; финальную очистку делает bus.sanitize);
+    (+ поля деривативов и ордерфлоу, см. NUM_KEYS; t0 = время сигнала, целая секунда UTC поля ts строки, как signals.t0 меток (R1.7 Req 23),
+    строка без разбираемого ts — без t0; reasons/note/idea_note и любой текст сканера НЕ попадают в шину; финальную очистку делает bus.sanitize);
   - дедупликация: (kind, symbol, idea) не чаще окна dedup_s (по умолчанию 300 с; idea_near 1800 с; idea_level/invalidated/tp/expired сутки);
     окна сеются из хвоста шины при старте, поэтому перезапуск сервиса не даёт дублей;
   - idea_expired: идея снята по ttl (ideawatch делает это молча); сервис замечает смену статуса в state/ideas.jsonl и публикует событие;
@@ -116,6 +117,9 @@ class Publisher(object):
             if r.get("stale") not in bus.STALE_CODES or "idea" not in d:
                 return None                           # ревизия без идеи или с неизвестной причиной не нужна: нечего ревизовать
             d["stale"] = r["stale"]
+        t0 = bus.signal_t0(r.get("ts"))
+        if t0 is not None:
+            d["t0"] = t0                          # время сигнала (= signals.t0 меток): по нему мозг берёт признаки сводного рынка (R1.7 Req 23)
         d["wake"] = wake
         if r.get("big") is True:
             d["big"] = True                       # крупное событие: диспетчер даёт класс 1, лимит сигналов сканера его не съедает

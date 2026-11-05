@@ -14,7 +14,7 @@ from tb.logic.learn_cond import MENU_CAT, MENU_NUM, is_num, menu_cat_values
 
 Q_HI, Q_LO = 0.8, 0.2
 Q_ROUND = 6
-K_MAX = len(MENU_NUM) * 2 + sum(len(menu_cat_values(f)) for f in MENU_CAT)
+K_MAX = len(MENU_NUM) * 2 + sum(len(menu_cat_values(f)) for f in MENU_CAT)       # R1.7 первая волна: 10 × 2 + 5 = 25 (было 17)
 
 
 def quantile(xs, q):
@@ -33,12 +33,14 @@ def _qv(x):
     return 0.0 if y == 0 else y
 
 
-def conditions(p, cfg):
-    """Условия меню по подготовленным строкам метрик окна (verify.prepared). -> (условия [{"cond", "feature", "q"}], отсев [{"feature", "code", "cover"}])."""
+def conditions(p, cfg, num=None):
+    """Условия меню по подготовленным строкам метрик окна (verify.prepared). num — числовые признаки (по умолчанию MENU_NUM; другой набор —
+    только для проверки волны). -> (условия [{"cond", "feature", "q"}], отсев [{"feature", "code", "cover"}]).
+    Прежние строки cluster_runs без признаков cm_ дают None: признак с заполнением ниже feat_cover_min отсекается COVERAGE_LOW."""
     n = len(p["m"])
     cover_min = float(cfg["verify"]["feat_cover_min"])
     conds, skipped = [], []
-    for f in MENU_NUM:
+    for f in (MENU_NUM if num is None else num):
         xs = [x for x in VF.column(p, f) if is_num(x)]
         cover = len(xs) / float(n) if n else 0.0
         if not xs or cover < cover_min:
@@ -57,16 +59,17 @@ def conditions(p, cfg):
     return conds, skipped
 
 
-def build_menu(win, cfg, blocked=None, side="lower"):
+def build_menu(win, cfg, blocked=None, side="lower", num=None):
     """Меню по выборке окна поиска ({"rows", "a", "b"}). blocked — множество ключей или функция ключ -> bool (чёрный список); условие отсекается
     (BLOCKED), если в списке его семейство block_h (порог числового признака не важен: квантиль окна сдвигается) или точный cond_h (прежние записи).
+    num — набор числовых признаков (None — MENU_NUM; иной — только проверка волны wave_check).
     -> {"items": [{"cond", "claim", "cond_h", "block_h", "n", "share", "tc"}], "k", "dropped": [{"cond", "code", ...}], "n_rows"}; K = len(items)."""
     p = VF.prepared(win)
     n_rows = len(p["m"])
     broad = float(cfg["trial"]["max_trade_loss_share"])
     min_n = int(cfg["verify"]["min_n_menu"])
     is_blocked = blocked if callable(blocked) else (lambda h, s=frozenset(blocked or ()): h in s)
-    conds, skipped = conditions(p, cfg)
+    conds, skipped = conditions(p, cfg, num)
     items, dropped = [], [dict(s) for s in skipped]
     for c in conds:
         cond = c["cond"]
@@ -205,3 +208,181 @@ def session_items(win, cfg, blocked=None, side="lower", k_base=0):
         items.append(dict(base, claim={"metric": "mean_r", "dir": side, "vs": "base", "effect": eff}, n=pw["n_in"], tc=[], test="welch",
                           groups=g, power=pw))
     return items, dropped
+
+
+# ---------------------------------------------------------------- критерий волны признаков (R1.7, Requirement 15.7; задача 19)
+#
+# `./tb learn menu-wave --check <признаки>` (tb.knowledge.learn_cli): только чтение, вывод чисел. По каждому признаку волны на окне заполнения
+# (последние `days` суток окна поиска; для первой волны — 7, Requirement 15.8): (а) заполнение среди заполненных прогонов P2 ≥ feat_cover_min;
+# (б) q20 < q80; (в) |Спирмен| с каждым числовым признаком меню (и другими признаками волны) ≤ WAVE_RHO_MAX. (г) мощность конвейера медианного
+# условия меню при истинном эффекте −WAVE_EFFECT_R по замеренным потоку и σ_d (метод задачи 9 спеки R2, design.md R2, «Замер на живых данных»)
+# на окне поиска: меню с волной (K = K меню без волны + 2 × признаков волны — верхняя граница) ≥ WAVE_POWER_MIN и снижение относительно меню
+# без волны ≤ WAVE_DROP_MAX; (г) оценивается только на установившемся окне (окно поиска не короче discovery_days), иначе None.
+#
+# Метод задачи 9: условия меню, вошедшие в K (не TOO_BROAD, не BLOCKED, n ≥ min_n_menu); по каждому — поток (кластеры теста в сутки окна),
+# σ_d (разброс разностей кластеров), среднее базы (out_r); медианы по условиям. Мощность ступени — Φ(δ√n / σ_d − z(1 − α')):
+#   скрининг: n = поток × discovery_days, α' = alpha / K, × вероятность знака в обеих половинах Φ(δ√(n/2) / σ_d)²; 0 при n < min_n_menu;
+#   holdout:  n = поток × holdout_days, α' = alpha / labels_max_new_per_day; 0 при n < min_n_hyp;
+#   испытание: n = n_target, α' = alpha / max_parallel, × P(среднее «в условии» ≤ −min_effect_r) при истинном среднем база − δ и σ прогона;
+#             0, если n_target недостижим за reach_factor × max_days при потоке условия.
+# Конвейер — произведение трёх ступеней.
+
+WAVE_EFFECT_R = 0.3
+WAVE_POWER_MIN = 0.5
+WAVE_DROP_MAX = 0.05
+WAVE_RHO_MAX = 0.7
+
+
+def _ranks(xs):
+    """Ранги с усреднением связок (1..n)."""
+    order = sorted(range(len(xs)), key=lambda i: xs[i])
+    r = [0.0] * len(xs)
+    i = 0
+    while i < len(order):
+        j = i
+        while j + 1 < len(order) and xs[order[j + 1]] == xs[order[i]]:
+            j += 1
+        avg = (i + j) / 2.0 + 1.0
+        for t in range(i, j + 1):
+            r[order[t]] = avg
+        i = j + 1
+    return r
+
+
+def spearman(xs, ys):
+    """Корреляция Спирмена по парам, где оба значения — числа. -> (rho | None, n пар); меньше 3 пар или нет разброса -> None."""
+    pairs = [(x, y) for x, y in zip(xs, ys) if is_num(x) and is_num(y)]
+    n = len(pairs)
+    if n < 3:
+        return None, n
+    rx, ry = _ranks([q[0] for q in pairs]), _ranks([q[1] for q in pairs])
+    mx, my = sum(rx) / n, sum(ry) / n
+    sxy = sum((u - mx) * (w - my) for u, w in zip(rx, ry))
+    sxx = sum((u - mx) ** 2 for u in rx)
+    syy = sum((w - my) ** 2 for w in ry)
+    if sxx <= 0 or syy <= 0:
+        return None, n
+    return sxy / (sxx * syy) ** 0.5, n
+
+
+def _stage(n, sd_d, effect, alpha_):
+    import math
+    if n <= 0 or not sd_d or sd_d <= 0:
+        return 0.0
+    return _phi(float(effect) * math.sqrt(n) / sd_d - _z(1.0 - float(alpha_)))
+
+
+def pipeline_power(flow, sd_d, k, cfg, base_mean=None, sd_run=None, effect=WAVE_EFFECT_R):
+    """Мощность конвейера условия по потоку (кластеров теста в сутки) и σ_d при истинном эффекте −effect (метод задачи 9 R2).
+    -> {"screen", "holdout", "trial", "pipeline", "n_screen", "n_holdout"} (доли 0..1, округление 4)."""
+    import math
+    v, t = cfg["verify"], cfg["trial"]
+    a = float(v["alpha"])
+    flow = float(flow or 0.0)
+    n_s = flow * float(v["discovery_days"])
+    n_h = flow * float(v["holdout_days"])
+    p_s = 0.0
+    if n_s >= int(v["min_n_menu"]) and sd_d:
+        p_s = _stage(n_s, sd_d, effect, a / max(1, int(k))) * _phi(float(effect) * math.sqrt(n_s / 2.0) / sd_d) ** 2
+    p_h = _stage(n_h, sd_d, effect, a / int(v["labels_max_new_per_day"])) if n_h >= int(v["min_n_hyp"]) else 0.0
+    n_t = int(t["n_target"])
+    p_t = 0.0
+    if flow * float(t["reach_factor"]) * float(t["max_days"]) >= n_t:
+        p_t = _stage(n_t, sd_d, effect, a / max(1, int(t["max_parallel"])))
+        s = float(sd_run) if sd_run else float(sd_d or 0.0)
+        if s > 0:
+            mu = float(base_mean or 0.0) - float(effect)
+            p_t *= _phi((-float(t["min_effect_r"]) - mu) * math.sqrt(n_t) / s)
+    return {"screen": round(p_s, 4), "holdout": round(p_h, 4), "trial": round(p_t, 4), "pipeline": round(p_s * p_h * p_t, 4),
+            "n_screen": round(n_s, 1), "n_holdout": round(n_h, 1)}
+
+
+def _median(xs):
+    v = sorted(x for x in xs if x is not None)
+    if not v:
+        return None
+    m = len(v) // 2
+    return v[m] if len(v) % 2 else (v[m - 1] + v[m]) / 2.0
+
+
+def _cond_stats(tcs, days):
+    """Медианы по условиям: поток (кластеры теста в сутки), σ_d, среднее базы. tcs — списки кластеров теста условий."""
+    from tb.learnloop import stat as ST
+    flows = [len(tc) / days for tc in tcs] if days > 0 else []
+    sds = [ST.sd([x["diff"] for x in tc]) for tc in tcs]
+    bases = [ST.mean([x["out_r"] for x in tc]) for tc in tcs]
+    return {"n_cond": len(tcs), "flow": _median(flows), "sd_d": _median(sds), "base_mean": _median(bases)}
+
+
+def _r4(x):
+    return None if x is None else round(float(x), 4)
+
+
+def wave_check(win, cfg, feats, blocked=None, fill_days=None, side="lower", effect=WAVE_EFFECT_R):
+    """Критерий волны (Requirement 15.7) по окну поиска win ({"rows", "a", "b"}) для признаков feats. fill_days — длина окна заполнения
+    (последние сутки окна; None — всё окно), на нём (а), (б), (в); (г) — на всём окне. Только чтение.
+    -> {"feats": {признак: {"cover", "n", "q20", "q80", "rho", "rho_max", "a", "b", "c"}}, "power": {"base", "wave", "drop", "steady", ...},
+        "window": {...}, "ok_a", "ok_b", "ok_c", "ok_d" (None — окно не установившееся), "ok"}."""
+    from tb.learnloop import stat as ST
+    feats = tuple(dict.fromkeys(feats))
+    cover_min = float(cfg["verify"]["feat_cover_min"])
+    broad = float(cfg["trial"]["max_trade_loss_share"])
+    min_n = int(cfg["verify"]["min_n_menu"])
+    a, b = int(win["a"]), int(win["b"])
+    days = (b - a) / 86400.0
+    fa = a if not fill_days else max(a, b - int(float(fill_days) * 86400))
+    pf = VF.prepared([r for r in win["rows"] if int(r["t0"]) >= fa])
+    n_fill = len(pf["m"])
+    others = tuple(f for f in MENU_NUM if f not in feats)
+    out = {}
+    for f in feats:
+        col = VF.column(pf, f)
+        xs = [x for x in col if is_num(x)]
+        cover = len(xs) / float(n_fill) if n_fill else 0.0
+        q20, q80 = (quantile(xs, Q_LO), quantile(xs, Q_HI)) if xs else (None, None)
+        rho = {}
+        for g in others + tuple(x for x in feats if x != f):
+            r, n = spearman(col, VF.column(pf, g))
+            rho[g] = {"rho": _r4(r), "n": n}
+        vals = [abs(v["rho"]) for v in rho.values() if v["rho"] is not None]
+        rmax = max(vals) if vals else None
+        out[f] = {"cover": round(cover, 4), "n": n_fill, "q20": None if q20 is None else _qv(q20), "q80": None if q80 is None else _qv(q80),
+                  "rho": rho, "rho_max": _r4(rmax), "a": cover >= cover_min, "b": q20 is not None and q20 < q80,
+                  "c": rmax is None or rmax <= WAVE_RHO_MAX}
+    # (г) мощность конвейера: меню без волны (K — фактическое) и меню с волной (K — верхняя граница K без волны + 2 × признаков)
+    base = build_menu(win, cfg, blocked=blocked, side=side, num=others)
+    p = VF.prepared(win)
+    n_rows = len(p["m"])
+    wave_tcs = []
+    for f in feats:
+        xs = [x for x in VF.column(p, f) if is_num(x)]
+        if not xs:
+            continue
+        for op, q in ((">=", Q_HI), ("<=", Q_LO)):
+            hits = VF.hit_vector(p, [{"feature": f, "op": op, "value": _qv(quantile(xs, q))}])
+            share = sum(hits) / float(n_rows) if n_rows else 0.0
+            tc = VF.tc_from_hits(p, hits)
+            if share <= broad and len(tc) >= min_n:
+                wave_tcs.append(tc)
+    base_tcs = [it["tc"] for it in base["items"] if it.get("tc")]
+    sd_run = ST.sd(p["r"])
+    k_base = base["k"]
+    k_wave = k_base + 2 * len(feats)
+    sb = _cond_stats(base_tcs, days)
+    sw = _cond_stats(base_tcs + wave_tcs, days)
+    pb = pipeline_power(sb["flow"], sb["sd_d"], k_base, cfg, sb["base_mean"], sd_run, effect) if sb["flow"] else None
+    pw = pipeline_power(sw["flow"], sw["sd_d"], k_wave, cfg, sw["base_mean"], sd_run, effect) if sw["flow"] else None
+    steady = days >= float(cfg["verify"]["discovery_days"]) - 1e-9
+    drop = round(pb["pipeline"] - pw["pipeline"], 4) if pb and pw else None
+    ok_d = bool(pw and pw["pipeline"] >= WAVE_POWER_MIN and drop is not None and drop <= WAVE_DROP_MAX) if steady else None
+
+    def _fmt(st, pp, k):
+        return dict({"k": k, "n_cond": st["n_cond"], "flow": _r4(st["flow"]), "sd_d": _r4(st["sd_d"]), "base_mean": _r4(st["base_mean"])}, **(pp or {}))
+    rep = {"feats": out,
+           "window": {"a": a, "b": b, "days": round(days, 2), "fill_a": fa, "fill_days": round((b - fa) / 86400.0, 2), "n_rows": n_rows, "n_fill": n_fill},
+           "power": {"base": _fmt(sb, pb, k_base), "wave": _fmt(sw, pw, k_wave), "drop": drop, "steady": steady, "effect_r": -float(effect),
+                     "sd_run": _r4(sd_run), "n_wave_cond": len(wave_tcs)},
+           "ok_a": all(v["a"] for v in out.values()), "ok_b": all(v["b"] for v in out.values()), "ok_c": all(v["c"] for v in out.values()),
+           "ok_d": ok_d}
+    rep["ok"] = bool(rep["ok_a"] and rep["ok_b"] and rep["ok_c"] and ok_d)
+    return rep

@@ -16,7 +16,7 @@ from tb import paths
 from tb.brain import brief as brief_mod
 from tb.brain import common
 from tb.brain import events_cli, idearev, plan_cli
-from tb.core import bus, decisions, expstats, hyps, ideas, journal, plan_schema, portfolio, risklevels, tradectx
+from tb.core import bus, cmktdoc, decisions, expstats, hyps, ideas, journal, plan_schema, portfolio, risklevels, tradectx
 from tb.gateway import registry as _registry
 from tb.logic import learn_rules
 from tb.memory import blocks as memblocks, cases as memcases, cfg as memcfg, features as memfeatures, lessons as memlessons, query as memquery, review as memreview
@@ -578,6 +578,35 @@ def h_similar(ctx, a):
     return out
 
 
+def _jbytes(obj):
+    return len(json.dumps(obj, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8"))
+
+
+def h_market_detail(ctx, a):
+    """Подробности сводного рынка монеты (R1.7, Requirement 21): только чтение через cmktdoc.detail; свой счётчик вызовов в час (tool.per_hour
+    config/cmkt.json, не общий с памятью); ответ вместе с полями шлюза не длиннее tool.max_bytes (досечение частями в порядке cmktdoc.TRUNC_ORDER)."""
+    sym = a["sym"]
+    check_scope(ctx.agent, sym, ctx.agent.limits["modes"][0])
+    tcfg = cmktdoc.tool_cfg(ctx.root)
+    lim, max_bytes = tcfg["per_hour"], tcfg["max_bytes"]
+    from tb.gateway import audit
+    if audit.count_recent(ctx.agent.id, "get_market_detail", 3600.0, root=ctx.root, now=ctx.now) >= lim:
+        raise ToolError("E_RATE_MARKET", "не больше %d вызовов get_market_detail в час" % lim, status="denied")
+    parts = a.get("parts")
+    out = cmktdoc.detail(ctx.root, sym, parts=list(parts) if parts else None, now=ctx.now)
+    out = dict(out) if isinstance(out, dict) else {"sym": sym, "warn": ["STALE"]}
+    out["ok"] = True
+    dropped = list(out.get("trunc") or [])
+    for p in cmktdoc.TRUNC_ORDER:                      # поле ok шлюза тоже входит в предел
+        if _jbytes(out) <= max_bytes:
+            break
+        if p in out:
+            del out[p]
+            dropped.append(p)
+            out["trunc"] = list(dropped)
+    return out
+
+
 def h_lessons(ctx, a):
     cfg = _mem_cfg(ctx)
     _mem_gate(ctx, cfg, "list_lessons")
@@ -913,7 +942,7 @@ _reg(Tool("get_brief", "Compact decision brief (JSON, token-budgeted). scope=sta
            "sym": _s("For scope=event: symbol of the job; it goes first in struct/levels.", 20, pattern=common.RE_SYMBOL.pattern),
            "budget_tokens": _i("Approximate token budget 200..6000.", 200, 6000)}, "read", h_brief,
           out=("brief_id", "ts", "scope", "trunc", "cut", "system", "account", "session", "room", "positions", "plans", "pending", "market", "hot",
-               "ideas", "levels", "struct", "struct_missing", "day", "limits", "risk_level", "economics", "experiments", "paper_history", "pause", "flash", "flow", "playbook", "rulebook", "cands", "intel", "news_digest", "recent", "since_last", "lessons", "memory", "checklist",
+               "ideas", "levels", "struct", "struct_missing", "day", "limits", "risk_level", "economics", "experiments", "paper_history", "pause", "flash", "flow", "cmkt", "deriv", "crowd", "trend", "data", "playbook", "rulebook", "cands", "intel", "news_digest", "recent", "since_last", "lessons", "memory", "checklist",
                "plan", "plans_bad", "missing")))
 _reg(Tool("get_events", "Read bus events (whitelisted fields, no third-party text) without waiting. By default events after the last acked seq (unacked ones are "
           "re-delivered). Does not acknowledge: call ack_events after handling.",
@@ -994,7 +1023,17 @@ _reg(Tool("get_similar_cases", "Past situations similar to a planned entry (own 
            "scope": dict(_s("same_mode | all", 9, enum=("same_mode", "all")), default="same_mode"),
            "features": {"type": "object", "description": "Situation features (numbers/enums from the whitelist).", "properties": _mem_feature_props()}},
           "memory.read", h_similar, out=("mode", "sym", "side", "warn", "similar", "cases", "lessons", "other_mode", "filtered", "note", "trunc")))
-_reg(Tool("list_lessons", "Lesson hypotheses of the memory (status hyp/confirmed/..., n, confidence, template wording). Hypotheses to check, not rules. Read-only.",
+_reg(Tool("get_market_detail", "Consolidated market details of one coin across exchanges, already computed by code (do not recompute): book (depth bands "
+          "+-0.5/1/2 % perp/spot/all, bid/ask in M USD, imb; up to 3 walls a side), cvd (1m/5m/15m share and M USD), oi (total, change %, by market), "
+          "liq (5m and 1h [long, short] M USD, by market), funding (weighted and by market, 8h %, premiums bps), venues (market status, lag_ms, age_s). "
+          "Numbers, enums and ids only. warn STALE = no fresh data, NOT_FOCUS = coin not covered (no numbers), LOW_COV = low coverage; "
+          "trunc = parts dropped by the size limit. Read-only. At most 30 calls/hour.",
+          {"sym": _s("Ticker like SOL.", 20, pattern=common.RE_SYMBOL.pattern),
+           "parts": {"type": "array", "description": "Parts to return (default all): " + ", ".join(cmktdoc.PARTS) + ".", "maxItems": len(cmktdoc.PARTS),
+                     "items": _s("Part.", 8, enum=cmktdoc.PARTS)}},
+          "read", h_market_detail, required=["sym"],
+          out=("sym", "ts", "age_s", "n_ex", "cov", "warn", "book", "cvd", "oi", "liq", "funding", "venues", "trunc")))
+_reg(Tool("list_lessons","Lesson hypotheses of the memory (status hyp/confirmed/..., n, confidence, template wording). Hypotheses to check, not rules. Read-only.",
           {"status": dict(_s("active | all | hyp | confirmed | rejected | expired | merged", 10, enum=("active", "all") + memlessons.STATUSES), default="active"),
            "limit": _i("Max rows 1..20.", 1, 20, 10)}, "memory.read", h_lessons, out=("status", "n", "warn", "lessons", "note", "trunc")))
 _reg(Tool("add_case_review", "Write the reviewer's verdict (schema tb.casereview/1) onto a closed case. Only the reviewer role; one verdict per case; known_at_decision is "

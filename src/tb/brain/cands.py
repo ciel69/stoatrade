@@ -97,12 +97,49 @@ def _mem_cfg(root):
         return {}
 
 
-def rule_check(root, sym, side, event_seq=None, now=None, view=None, event=False, cfg=None):
-    """Одно решение (монета, сторона, событие) под действующим rulebook -> {"view", "event", "res", "event_why", "event_kind"}; res —
+def needs_cm(view):
+    """В действующих, trial или теневых правилах вида есть условие по признаку сводного рынка (cm_*). Нет — строка признаков не читается
+    и решение не ждёт её записи (R1.7: ожидание строки нужно только правилам, которые её используют)."""
+    if not isinstance(view, dict):
+        return False
+    try:
+        from tb.logic import learn_cond as LC
+        return any(isinstance(r, dict) and LC.cond_uses_cm(r.get("cond")) for r in list(view.get("rules") or []) + list(view.get("trial") or []))
+    except RULE_ERRORS:
+        return False
+
+
+def rule_cm(root, sym, event, now=None):
+    """Строка признаков сигнала для правил (R1.7, Requirements 15.3, 15.4, 23.3): t0 — поле d.t0 события шины (не время решения и не время
+    конверта), монета — символ события; tb.core.cmktdoc.features_at(..., wait=True): при pending ждёт до срока ожидания строки
+    (row_ts + accept_s + 1, не дольше accept_s + 2 с реального времени), pending наружу не выходит.
+    -> {"cm": dict | None, "cm_missing": код | None}; нет события -> оба None; нет d.t0 -> no_t0; любой сбой -> db. Не бросает."""
+    try:
+        if not isinstance(event, dict) or not isinstance(event.get("d"), dict):
+            return {"cm": None, "cm_missing": None}
+        from tb.memory import features as MF
+        t0 = MF.num(event["d"].get("t0"))
+        if t0 is None:
+            return {"cm": None, "cm_missing": "no_t0"}
+        from tb.core import cmktdoc
+        esym = event.get("sym") if isinstance(event.get("sym"), str) and event.get("sym") else sym
+        r = cmktdoc.features_at(root, MF.base_sym(esym), t0, now=now, wait=True)
+        if isinstance(r, dict) and isinstance(r.get("cm"), dict):
+            return {"cm": r["cm"], "cm_missing": None}
+        code = r.get("cm_missing") if isinstance(r, dict) else None
+        return {"cm": None, "cm_missing": code if isinstance(code, str) and code else "db"}
+    except Exception:          # noqa: BLE001 — чтение рядов не ломает решение: сбой = признаки cm_ None
+        return {"cm": None, "cm_missing": "db"}
+
+
+def rule_check(root, sym, side, event_seq=None, now=None, view=None, event=False, cfg=None, cm=False):
+    """Одно решение (монета, сторона, событие) под действующим rulebook -> {"view", "event", "res", "event_why", "event_kind", "cm_missing"}; res —
     learn_rules.apply для {"side", "ok": True}; event_why/event_kind — причина события для учёта (rulebook_view.EVENT_WHY), решение не меняют.
 
     event_seq — только из задания раннера entry_scout (для chat None). view — готовый rulebook_view.active (иначе читается). event — уже
-    разрешённое событие (False — разрешить здесь). Любая ошибка -> res в режиме без применения (ok=True, ничего не отсечено)."""
+    разрешённое событие (False — разрешить здесь). cm — готовый ответ rule_cm (False — прочитать здесь, только если правилам вида нужны
+    признаки cm_, needs_cm). cm_missing — код отсутствия строки признаков (no_t0, not_focus, no_row, late, db) или None (строка есть или
+    не читалась). Любая ошибка -> res в режиме без применения (ok=True, ничего не отсечено)."""
     now = time.time() if now is None else now
     view = rule_view(root, now) if view is None else view
     if event is False:
@@ -114,18 +151,25 @@ def rule_check(root, sym, side, event_seq=None, now=None, view=None, event=False
     res = {"ok": True, "fail": None, "hits": [], "eval": [], "missing": [], "blocked": [], "apply": False}
     applies = bool(view and view.get("apply") and view.get("rules"))
     shadow = _shadow_rules(view)
+    cmr = {"cm": None, "cm_missing": None}
+    if (applies or shadow) and ev:
+        if cm is False:
+            cmr = rule_cm(root, sym, ev, now) if needs_cm(view) else cmr
+        elif isinstance(cm, dict):
+            cmr = cm
     if applies or shadow:
         try:
             from tb.logic import learn_rules as LR
             from tb.memory import features as MF
-            feats = MF.rule_features(ev, {"side": side}, _mem_cfg(root) if cfg is None else cfg)
+            feats = MF.rule_features(ev, {"side": side}, _mem_cfg(root) if cfg is None else cfg,
+                                     cm=cmr["cm"] if isinstance(cmr.get("cm"), dict) else {})
             if applies:
                 res = LR.apply(view, {"side": side, "ok": True}, feats)
             if shadow:                                   # вторая итерация (Requirement 18.7): совпадения без применения, решение не меняется
                 res = dict(res, shadow_hits=_shadow_hits(view, {"side": side, "ok": True}, feats))
         except RULE_ERRORS:
             pass
-    return {"view": view, "event": ev, "res": res, "event_why": rw.get("why"), "event_kind": rw.get("kind")}
+    return {"view": view, "event": ev, "res": res, "event_why": rw.get("why"), "event_kind": rw.get("kind"), "cm_missing": cmr.get("cm_missing")}
 
 
 def _shadow_rules(view):
@@ -171,8 +215,9 @@ def apply_rules(out, sym, root=None, event_seq=None, now=None, view=None):
         return out
     ev = resolve(root, sym, event_seq, now, view)
     cfg = _mem_cfg(root)
+    cm = rule_cm(root, sym, ev, now) if (ev and needs_cm(view)) else {"cm": None, "cm_missing": None}      # одна строка признаков на обе стороны
     for side in sides:
-        res = rule_check(root, sym, side, now=now, view=view, event=ev, cfg=cfg)["res"]
+        res = rule_check(root, sym, side, now=now, view=view, event=ev, cfg=cfg, cm=cm)["res"]
         sh = res.get("shadow_hits") or []
         for c in out:
             if not (isinstance(c, dict) and c.get("ok") and c.get("side") == side):

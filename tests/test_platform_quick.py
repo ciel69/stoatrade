@@ -19,7 +19,10 @@ from tb.platform import services as S
 from tb.platform import supervisor as SV
 
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-FULL = ["exec", "scan", "feed", "context", "intel", "sync", "dispatch", "ctl", "dash", "labels", "learnloop", "brain"]      # R1.6: сервис labels (фабрика меток); R2: learnloop (цикл обучения)
+PROFILE_FULL = ["exec", "scan", "feed", "cmkt", "context", "intel", "sync", "dispatch", "ctl", "dash", "labels", "learnloop", "brain"]   # R1.6: labels; R2: learnloop; R1.7: cmkt
+CMKT_ALL = ["cmkt", "cmkt@binancep", "cmkt@binances", "cmkt@bybitp", "cmkt@bybits", "cmkt@okxp", "cmkt@okxs", "cmkt@bitgetp", "cmkt@bitgets",
+            "cmkt@gatep", "cmkt@gates", "cmkt@coinbases"]      # `cmkt` профиля раскрывается в сводку и сборщики включённых рынков config/cmkt.json
+FULL = [x for n in PROFILE_FULL for x in (CMKT_ALL if n == "cmkt" else [n])]
 OURS = lambda pid: "python -m tb.launcher up"      # noqa: E731  подставная командная строка нашего процесса
 
 
@@ -60,7 +63,7 @@ def sleeper(test, body="import time\ntime.sleep(60)\n"):
 
 class DefaultsTest(unittest.TestCase):
     def test_default_set_is_full_and_aliases_exist(self):
-        self.assertEqual(S.DEFAULTS["services"]["paper"], FULL)
+        self.assertEqual(S.DEFAULTS["services"]["paper"], PROFILE_FULL)
         for name in ("start", "stop", "restart", "up", "down", "status"):
             self.assertIn(name, M.V2)
 

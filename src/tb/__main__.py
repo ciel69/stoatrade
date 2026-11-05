@@ -55,6 +55,7 @@ V2 = {
     "control": "tb.control.cli",   # плоскость управления (WP12)
     "memory": "tb.memory.cli",     # память случаев (WP15a)
     "labels": "tb.labels.cli",     # фабрика меток (R1): status|stats|coverage|show|backfill|rerun|backup|verify
+    "cmkt": "tb.cmkt.cli",         # сводный рынок (R1.7): status|show|at|focus (только чтение)
     "knowledge": "tb.knowledge.cli",   # база знаний v2 (R2.9a): verify|backup|restore|stats|disable-v2|migrate-v2a
     "rulebook": "tb.knowledge.rulebook_cli",   # rulebook цикла обучения (R2.3, R2.8): list|show|verify|disable|disable-all|apply|unblock
     "learn": "tb.knowledge.learn_cli",         # цикл обучения (R2): promotion [auto|off]
@@ -97,6 +98,7 @@ USAGE = """использование: ./tb <группа> <команда> [а�
   risk level <show|list|check [--apply]|set N --confirm "..."> | risk init-key   уровни риска 1-5 (WP16; set и init-key только владелец в Terminal)
   memory <similar|stats|add|show|sync|migrate|coverage|verify|review-queue|review|lesson|backtest|compare> ...   память случаев: похожие ситуации, уроки-гипотезы, ретро-проверка, доля пустых признаков (WP15a, WP15b, R1)
   labels <status|stats [--by policy|type]|coverage|show KEY|backfill --since D|rerun --policy ID --since D|backup|verify> [--text]   фабрика меток и теневые политики (R1): backfill и rerun только ставят сигналы в очередь, размечает сервис labels
+  cmkt <status|show SYM|at SYM TS|focus> [--json]   сводный рынок (R1.7): биржи и рынки, снимок монеты, строка ряда на момент сигнала, монеты в фокусе (только чтение)
   knowledge <verify [--quick]|backup|restore [--from FILE]|stats|disable-v2|migrate-v2a> [--text]   база знаний v2 (R2): цепочки и целостность, проверенные копии, восстановление по протоколу (docs/RUNBOOK.md)
   rulebook <list|show [R-NNNN|RL0001]|verify|disable RULE|disable-all|apply on|off|unblock BLOCK_H> [--text]   rulebook цикла обучения (R2): версии, правила, режим применения, проверка цепочки; аварийные действия владельца (необязательные)
   learn promotion [auto|off] [--text]   цикл обучения (R2): режим автопродвижения; off — аварийная остановка продвижения
