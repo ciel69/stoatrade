@@ -22,9 +22,11 @@ dumps/
 # --- личные настройки и инструменты агента ---
 CLAUDE.md
 CLAUDE.local.md
+AGENTS.md
 .claude/
 .opencode/
 .impeccable/
+.codegraph/
 config/*.local.json
 scratchpad/
 tmp/
