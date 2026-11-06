@@ -113,9 +113,9 @@ def entries_today(trades, now):
     return n
 
 
-def anomaly(trades, now, factor=3.0, min_today=6):
+def anomaly(trades, now, factor=3.0, min_today=6, min_prev=7):
     """True, если за последние 24 ч открыто в `factor` раз больше сделок, чем в среднем в сутки за предыдущие 7 суток (идея TradeTrap).
-    Нужно не менее min_today сделок за сутки, чтобы шум малых чисел не срабатывал."""
+    Нужно не менее min_today сделок за сутки и min_prev сделок за предыдущую неделю, чтобы шум и отсутствие истории не блокировали первые live-сделки."""
     day = 0
     prev = 0
     for t in real_trades(trades):
@@ -127,7 +127,7 @@ def anomaly(trades, now, factor=3.0, min_today=6):
             day += 1
         elif DAY <= age < 8 * DAY:
             prev += 1
-    if day < min_today:
+    if day < min_today or prev < min_prev:
         return False
     avg = prev / 7.0
     return day > factor * max(avg, 1.0)

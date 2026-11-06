@@ -101,13 +101,22 @@ def load_subscribers(root=None):
 
 
 def event_class(ev, classes):
-    """Класс приоритета события (0 высший)."""
+    """Класс события (0 важнейший)."""
     t = ev.get("type")
     if t == "scanner_signal":
-        k = str((ev.get("d") or {}).get("kind") or "")
-        if (ev.get("d") or {}).get("big") is True:
-            return 1                              # крупный рыночный сигнал (каскад ликвидаций 2026-10-29): как исполнение, вне лимита сигналов скана
-        return 4 if k.startswith("idea_") else int(classes.get("scanner_signal", 3))
+        d = ev.get("d") or {}
+        k = str(d.get("kind") or "")
+        if d.get("big") is True:
+            return 1
+        if k.startswith("idea_"):
+            return 4
+        score = d.get("score")
+        if isinstance(score, (int, float)) and not isinstance(score, bool):
+            if score >= 4.5:
+                return 1
+            if score >= 3.5:
+                return 2
+        return int(classes.get("scanner_signal", 3))
     return int(classes.get(t, 3))
 
 

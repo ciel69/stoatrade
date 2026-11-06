@@ -22,6 +22,9 @@
   "eval_max_age_days": 30,
   "facts_max_age_min": 30,
   "auto_downgrade_s": 5,
+  "auto_restore_s": 30,
+  "auto_restore_max_day": 5,
+  "auto_restore_codes": ["H3", "H4", "H6"],
   "start_wait_s": 90,
   "recommend": {"paper_trades": 30, "paper_days": 7},
   "min_session_trades": 10

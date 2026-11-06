@@ -26,6 +26,7 @@ DEFAULTS = {
     "login_fail_max": 5, "login_fail_window_s": 300, "login_block_s": 600, "max_live_starts_day": 3, "live_restart_cooldown_min": 10,
     "allow_shutdown": False, "allow_clear_kill_from_dash": False, "allow_live_start_from_dash": False, "status_stale_s": 15, "risk_level_cooldown_min": 60,
     "model_change_cooldown_min": 240, "eval_max_age_days": 30, "facts_max_age_min": 30, "auto_downgrade_s": 5, "start_wait_s": 90,
+    "auto_restore_s": 30, "auto_restore_max_day": 5, "auto_restore_codes": ["H3", "H4", "H6"],
     "recommend": {"paper_trades": 30, "paper_days": 7}, "min_session_trades": 10,
     # вход в дашборд: open_local = с 127.0.0.1 без токена (безопасные действия), токен один раз для опасных; token = как раньше (токен для любых действий)
     "auth": {"mode": "open_local", "remember_days": 30},

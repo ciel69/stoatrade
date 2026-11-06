@@ -620,17 +620,17 @@ class AccountingTest(Base):
         self.pend("DOGE", mode="testnet")
         self.assertEqual(guard.day_state(PROF, "2026-10-27")["pending_count"], 0)
 
-    def test_session_stats_and_max_trades(self):
+    def test_session_stats_and_soft_trade_count(self):
         sid = self.sess["id"]
-        self.pend("DOGE", risk=0.3, session_id=sid)
+        self.pend("DOGE", risk=0.05, session_id=sid)
         st = session.stats(self.sess)
-        self.assertEqual((st["pending"], st["open_risk"], st["trades"]), (1, 0.3, 0))
+        self.assertEqual((st["pending"], st["open_risk"], st["trades"]), (1, 0.05, 0))
         for i in range(PROF["session_types"]["intraday"]["max_trades"] - 1):
             pending.put({"id": "PM-S%d-1027-120000" % i, "env": "mainnet", "mode": "live", "sym": "S%d" % i, "side": "long", "price": 1.0, "risk_usdt": 0.0,
                          "ts": 1.0, "expires": 9e9, "session": sid})
         ok, why = session.verdict(self.sess, PROF)
-        self.assertFalse(ok)
-        self.assertIn("session_max_trades", why)
+        self.assertTrue(ok)                                      # число сделок — справочный лимит; решает бюджет
+        self.assertNotIn("session_max_trades", why)
 
 
 class LearningTest(Base):

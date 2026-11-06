@@ -323,8 +323,33 @@ class TestAutoDowngrade(Base):
         ev = [x for x in bus.read(0, 100, root=self.e.root) if x["type"] == "control_cmd" and x["d"].get("action") == "auto.downgrade"]
         self.assertTrue(ev and ev[-1]["pri"] == "wake")
         self.assertEqual(self.c.status()["platform"]["mode"], "observe")
-        self.c.watch()                                               # повторно не срабатывает
+        self.c.watch()                                               # повторно не срабатывает, пока H3 не восстановился
         self.assertEqual(self.codes().count(("auto.downgrade", "AUTO_DOWNGRADE")), 1)
+
+    def test_transient_downgrade_auto_restores_live(self):
+        self.run_live()
+        self.e.advance(6)
+        self.e.good_exec(profile="trade", now=self.e.clock_t[0], ws={"public": {"up": True}, "private": {"up": False}})
+        self.c.watch()
+        self.assertEqual(ctlstate.platform_state(self.e.root)["mode"], "observe")
+        self.e.advance(31)
+        self.e.good_exec(profile="trade", now=self.e.clock_t[0])
+        self.c.watch()
+        st = ctlstate.platform_state(self.e.root)
+        self.assertEqual((st["state"], st["mode"], st["trading"]), ("running", "live", True))
+        self.assertTrue(self.e.r("state/control/trading.json")["enabled"])
+        self.assertEqual(st["auto_recovery"]["count"], 1)
+        self.assertIn(("auto.restore", "AUTO_RESTORE"), self.codes())
+
+    def test_manual_observe_is_not_auto_restored(self):
+        self.run_live()
+        r, _ = self.e.send(self.c, "mode.set", {"mode": "observe"})
+        self.assertEqual(r["code"], "OK")
+        self.e.advance(31)
+        self.e.good_exec(profile="trade", now=self.e.clock_t[0])
+        self.c.watch()
+        self.assertEqual(ctlstate.platform_state(self.e.root)["mode"], "observe")
+        self.assertNotIn(("auto.restore", "AUTO_RESTORE"), self.codes())
 
     def test_daily_loss_downgrades_and_emits_limit_hit(self):
         self.run_live()
@@ -337,6 +362,11 @@ class TestAutoDowngrade(Base):
         self.c.watch()
         self.assertEqual(ctlstate.platform_state(self.e.root)["mode"], "observe")
         self.assertTrue([x for x in bus.read(0, 100, root=self.e.root) if x["type"] == "limit_hit"])
+        self.e.advance(31)
+        self.e.good_exec(profile="trade", now=self.e.clock_t[0])
+        self.c.watch()
+        self.assertEqual(ctlstate.platform_state(self.e.root)["mode"], "observe")
+        self.assertNotIn(("auto.restore", "AUTO_RESTORE"), self.codes())
 
 
 class TestModeAndKill(Base):

@@ -450,6 +450,7 @@ class ScenarioSet(unittest.TestCase):
         self.assertTrue(v("secret", {"why": "sk-ABCDEF0123456789SECRETKEY"}, {}, "pm/1"))
         self.assertTrue(v("carry", {"carry": [{"decision": "carry"}]}, {}, "audit/1"))
         self.assertFalse(v("carry", {"carry": [{"decision": "close"}]}, {}, "audit/1"))
+        self.assertFalse(v("sem:BLACKOUT", {"decision": "skip", "watch": {"level": 1.0}}, {}, "entry/1"))
 
 
 # ------------------------------------------------------------------ eval: CLI, метка live_ok
@@ -625,7 +626,7 @@ class RuntimeWiring(BrainBase):
         self.assertEqual(set(api["roles"]), {"position_manager", "reviewer", "morning_analyst", "entry_scout"})
         self.assertEqual(api["filter"]["kinds"], ["hot_enter", "range_5m", "turnover_surge", "patrol", "idea_level", "idea_stale", "oi_spike", "oi_flush", "funding_extreme", "liq_cascade", "cvd_divergence", "book_wall"])      # patrol: плановый обход; из idea_* роль будит idea_level (цена у уровня идеи) и idea_stale (ревизия живой идеи); деривативы: OI, фандинг, ликвидации
         self.assertEqual(api["filter"]["max_class"], 4)
-        self.assertLessEqual(api["rate"]["class_jobs_per_hour"]["3"], 36)
+        self.assertLessEqual(api["rate"]["class_jobs_per_hour"]["3"], 90)
         self.assertLessEqual(api["rate"]["class_jobs_per_hour"]["4"], 10)
         self.assertGreaterEqual(api["rate"]["coalesce_s"], 60)
         for rid, types in api["roles"].items():

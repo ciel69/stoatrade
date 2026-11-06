@@ -185,7 +185,7 @@
     "retry_max_s": 60.0,
     "max_attempts": 5,
     "api": {
-      "jobs_per_hour": 12,
+      "jobs_per_hour": 90,
       "critical_per_hour": 30,
       "coalesce_s": 60.0,
       "settle_s": 5.0,

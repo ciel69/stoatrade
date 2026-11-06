@@ -55,7 +55,9 @@ class ProtectPure(unittest.TestCase):
 
     def test_anomaly(self):
         day = [tr("A%d" % i, "tp", NOW - 1000 - i, topen=NOW - 3600 * 5 - i) for i in range(8)]
-        self.assertTrue(protect.anomaly(day, NOW))
+        self.assertFalse(protect.anomaly(day, NOW))                 # нет истории: сравнивать не с чем
+        base = [tr("B%d" % i, "tp", NOW - 2 * 86400, topen=NOW - 2 * 86400 - i * 3600) for i in range(7)]
+        self.assertTrue(protect.anomaly(day + base, NOW))
         week = day + [tr("W%d" % i, "tp", NOW - 90000, topen=NOW - 90000 - i * 3600) for i in range(40)]
         self.assertFalse(protect.anomaly(week, NOW))
 

@@ -174,6 +174,20 @@ class ReconcileTable(unittest.TestCase):
         self.assertEqual(self.e.port.orders["manual-1"]["status"], "New")
         self.assertTrue([x for x in self.e.bus("reconcile_alert") if x["d"]["kind"] == "unknown_order"])
 
+    def test_armed_plan_attaches_exchange_fill(self):
+        r = self.e.submit(plan_long())
+        pid = r["plan_id"]
+        p = self.e.ex.plans[pid]
+        p["rt"]["entry"].update({"state": "blocked", "placed_ts": self.e.clock.time(), "attempts": 1})
+        self.e.ex.save(p, sync=True)
+        self.e.port.pos["SOL"] = {"sym": "SOL", "side": "long", "size": 1.0, "avg": 100.2, "mark": 100.2, "sl": 99.0, "tp": 0.0,
+                                  "liq": 50.0, "upnl": 0.0, "lev": 5.0, "margin": 20.0, "ts": 0.0}
+        self.rec()
+        rt = self.e.rt(pid)
+        self.assertEqual(rt["status"], "managing")
+        self.assertAlmostEqual(rt["pos"]["qty"], 1.0)
+        self.assertNotIn("reconcile_diffs", self.e.ex.holds)
+
     def test_unknown_position_untouched_even_without_stop(self):
         foreign_pos(self.e, sl=0.0)
         self.rec()

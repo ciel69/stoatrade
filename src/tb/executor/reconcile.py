@@ -104,6 +104,9 @@ def _plan(ex, p, by_link, diffs, now):
             if ent.get("link_id") not in by_link:
                 ex._poll_entry(p)       # ордера нет: заполнен / отменён / не отправлен -> poll_entry разберётся по link_id
         elif pos and ent.get("state") in ("waiting", "blocked") and not ex.observe:
+            if ent.get("placed_ts") or ent.get("order_id") or ent.get("link_id"):
+                if ex.attach_exchange_fill(p, pos):
+                    return
             diffs.append({"kind": "orphan_position", "sym": sym})
             _alert(ex, "orphan_position", sym, why="позиция при armed плане")
         return

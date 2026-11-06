@@ -633,8 +633,6 @@ def session_view(s, all_trades, prof, now):
     why = []
     if budget and realized - open_risk <= -budget:
         why.append("бюджет убытка исчерпан")
-    if cfg.get("max_trades") and len(rows) >= cfg["max_trades"]:
-        why.append("лимит сделок")
     return {"id": s["id"], "type": s.get("type"), "venue": s.get("venue"), "thesis": s.get("thesis"),
             "start": s.get("ts"), "expires": expires, "left_s": None if expires is None else expires - now,
             "duration_s": (expires - num(s.get("start"))) if expires is not None and num(s.get("start")) else None,
@@ -914,9 +912,11 @@ def risk_room(root, trades, prof, port, active, now):
         mt = sess_cfg.get("max_trades")
         n_tr = len(rows_s) + len(s_pend) + snap_n
         if mt:
-            rows.append(_room_row("trades", "Сделок в сессии", mt, n_tr, mt - n_tr, "шт.", "Лимит числа сделок для этого типа сессии (открытые, закрытые и ждущие лимиты)."))
+            trow = _room_row("trades", "Сделок в сессии", mt, n_tr, mt - n_tr, "шт.", "Справочный счётчик сделок сессии; допуск режут бюджет, свободные слоты и защита от переторговли.")
             if n_tr >= mt:
-                reasons.append("лимит сделок сессии (%d из %d)" % (n_tr, mt))
+                trow["level"] = "warn"
+                trow["soft"] = True
+            rows.append(trow)
         try:
             perf, perf_n = portfolio.perf_mult(active["type"], prof, trades)
         except (KeyError, TypeError, ValueError):

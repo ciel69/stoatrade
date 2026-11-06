@@ -112,17 +112,14 @@ def stats(s):
 
 
 def verdict(s, prof, now=None):
-    """-> (можно_открывать, причины). Закрывать позиции сессия не заставляет: стопы стоят на бирже."""
+    """-> (можно_торговать, причины). Проверяет только то, что запрещает: стоп, бюджет. Лимит сделок — справочный."""
     now = _now() if now is None else now
     why = []
     st = stats(s)
-    cfg = cfg_of(s["type"], prof)
     if s.get("stopped"):
         why.append("session_stopped")
     if st["realized"] - st["open_risk"] <= -s["budget_usdt"]:
         why.append("session_budget: realized %.3f, open risk %.3f, budget %.3f" % (st["realized"], st["open_risk"], s["budget_usdt"]))
-    if st["trades"] + st["pending"] >= cfg["max_trades"]:
-        why.append("session_max_trades")
     return not why, why
 
 

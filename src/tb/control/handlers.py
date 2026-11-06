@@ -292,7 +292,8 @@ class Ctl(object):
         if args["mode"] == "live" and sorted(args["accepted"]) != warn_ids:
             raise Reject("E_WARN_CHANGED", {"warnings": req["warnings"]})
         self.check_confirm(cmd, req)
-        self.save_platform(state="starting", since=round(self.now(), 1), mode=args["mode"], session=args["session"], step={"name": "switch", "i": 1, "n": 4})
+        self.save_platform(state="starting", since=round(self.now(), 1), mode=args["mode"], session=args["session"], auto_recovery=None,
+                           step={"name": "switch", "i": 1, "n": 4})
         self.busy = cmd["id"]
         self.finish(cmd, "running", "OK", {"state": "starting"})
         if self.sync:
@@ -347,6 +348,20 @@ class Ctl(object):
                 return f
             self.sleep(0.5)
 
+    def _wait_public_feed(self, timeout):
+        """После переключения на live публичный WS исполнителя может подниматься пару секунд; P3 не должен падать на этом старте."""
+        end = self.now() + min(float(timeout), 20.0)
+        while True:
+            h = gates.common.exec_health(root=self.root, now=self.now())
+            d = h.get("data") or {}
+            pub = (d.get("ws") or {}).get("public") or {}
+            age = pub.get("age_s")
+            if h.get("alive") and pub.get("up") and (age is None or float(age) <= 10.0):
+                return True
+            if self.now() >= end:
+                return False
+            self.sleep(0.5)
+
     def _rollback_exec(self, prev):
         if prev[0] and prev != self._exec_profile():
             self.reconf_fn(prev[0], bool(prev[1]), float(self.cfg["start_wait_s"]))
@@ -354,7 +369,7 @@ class Ctl(object):
     def _fail_start(self, cmd, code, data, prev=None):
         if prev:
             self._rollback_exec(prev)
-        self.save_platform(state="stopped", since=round(self.now(), 1), mode="observe", step=None, trading=False)
+        self.save_platform(state="stopped", since=round(self.now(), 1), mode="observe", step=None, trading=False, auto_recovery=None)
         self.busy = None
         return self.finish(cmd, "rejected" if code in ("E_GATE", "E_STATE", "E_AMBER") else "failed", code, data)
 
@@ -381,6 +396,10 @@ class Ctl(object):
                 warn2 = sorted(w["id"] for w in gates.soft(f2))
                 if warn2 != sorted(args["accepted"]):
                     return self._fail_start(cmd, "E_WARN_CHANGED", {"warnings": gates.soft(f2)}, prev)
+                if not self._wait_public_feed(wait):
+                    return self._fail_start(cmd, "E_GATE", {"phase": "after_switch", "gates": [{
+                        "id": "P3", "name": "Публичный фид", "ok": False,
+                        "msg": "публичный WS исполнителя не поднялся после переключения на live"}]}, prev)
             self.save_platform(step={"name": "day", "i": 3, "n": 4})
             waivers = [{"id": w["id"], "code": w["code"], "numbers": w["numbers"]} for w in req["warnings"] if w["id"] in args["accepted"]] if mode == "live" else []
             agent = gates.brain_iface.status(self.root).get("agent") or brain_iface.DEFAULT_AGENT
@@ -391,7 +410,7 @@ class Ctl(object):
             if mode == "live":
                 ctlstate.note_live_start(self.root, self.now())
             self.save_platform(state="running", since=round(self.now(), 1), mode=mode, session=args["session"], day_id=day_id, team=args.get("team"), agent=agent,
-                               trading=mode != "observe", live_waivers=waivers, step=None)
+                               trading=mode != "observe", live_waivers=waivers, auto_recovery=None, step=None)
             self.banner = None
             self.busy = None
             return self.finish(cmd, "done", "OK", {"day_id": day_id, "mode": mode, "waivers": len(waivers)}, {"warnings_accepted": waivers, "mode": mode})
@@ -412,7 +431,7 @@ class Ctl(object):
             return self.finish(cmd, "done", "OK", r.get("data"))
         if st.get("mode") == "live":
             ctlstate.note_live_stop(self.root, self.now())
-        self.save_platform(state="stopped", since=round(self.now(), 1), mode="observe", day_id=None, step=None, live_waivers=[])
+        self.save_platform(state="stopped", since=round(self.now(), 1), mode="observe", day_id=None, step=None, live_waivers=[], auto_recovery=None)
         return self.finish(cmd, "done" if r.get("ok") else "failed", "OK" if r.get("ok") else (r.get("code") or "E_INTERNAL"), r.get("data"))
 
     # ------------------------------------------------------------ остальные действия
@@ -455,7 +474,7 @@ class Ctl(object):
                 ctlstate.note_live_stop(self.root, self.now())
             lifecycle.set_trading(self.root, False, st.get("day_id"), st.get("mode"), st.get("agent"))
             lifecycle.passthrough("emergency_summary", self.root, {"reason": "emergency"}, self.now())
-            self.save_platform(state="halted", since=round(self.now(), 1), trading=False, step=None)
+            self.save_platform(state="halted", since=round(self.now(), 1), trading=False, auto_recovery=None, step=None)
         self.banner = {"level": "alarm", "text": "аварийная остановка: KILL активен%s" % (" (flatten)" if flatten else ""), "day_report": None}
 
     def h_mode_set(self, cmd):
@@ -480,7 +499,8 @@ class Ctl(object):
             lifecycle.set_trading(self.root, True, st.get("day_id"), target, st.get("agent"))
         if cur == "live":
             ctlstate.note_live_stop(self.root, self.now())
-        self.save_platform(mode=target, trading=target != "observe", live_waivers=[] if cur == "live" else st.get("live_waivers"))
+        self.save_platform(mode=target, trading=target != "observe", live_waivers=[] if cur == "live" else st.get("live_waivers"),
+                           auto_recovery=None)
         return self.finish(cmd, "done", "OK", {"mode": target})
 
     def h_risk_set(self, cmd):
@@ -579,7 +599,7 @@ class Ctl(object):
         if k is not None and st["state"] in ("running", "starting", "closing") and not self.busy:
             self.apply_kill(k.get("flatten"), k.get("reason") or "KILL")
         if k is None and st["state"] == "halted":
-            self.save_platform(state="stopped", since=round(now, 1), mode="observe", day_id=None)
+            self.save_platform(state="stopped", since=round(now, 1), mode="observe", day_id=None, auto_recovery=None)
             self.banner = {"level": "info", "text": "KILL снят владельцем: платформа остановлена, новый день запускается кнопкой «Старт»", "day_report": None}
         r = lifecycle.tick(self.root, now)
         if r and not self.busy:
@@ -597,6 +617,9 @@ class Ctl(object):
                 bad = gates.monitor(self.root, now, self.cfg)
                 if bad:
                     self.downgrade(bad)
+        st = self.platform()
+        if st["state"] == "running" and st.get("mode") == "observe" and not self.busy:
+            self.auto_restore(now)
 
     def sync_day(self, r):
         """Состояние платформы за днём WP14 (возобновлённый старт, автоостановка, закрытие, завершённое владельцем): день.json главный."""
@@ -606,13 +629,13 @@ class Ctl(object):
         if s == "starting" and ds == "running":
             self.save_platform(state="running", since=now, mode=r.get("mode"), day_id=r.get("day_id"), agent=r.get("agent"), trading=r.get("mode") != "observe", step=None)
         elif s == "starting" and ds == "stopped":
-            self.save_platform(state="stopped", since=now, mode="observe", step=None, trading=False)
+            self.save_platform(state="stopped", since=now, mode="observe", step=None, trading=False, auto_recovery=None)
         elif s == "running" and ds == "closing":
             self.save_platform(state="closing", since=now, trading=False)
         elif ds == "stopped" and (s == "closing" or (s == "running" and r.get("day_id") and r["day_id"] == st.get("day_id"))):      # закрытие кончилось (в т.ч. автоостановка за один tick)
             if st.get("mode") == "live":
                 ctlstate.note_live_stop(self.root, self.now())
-            self.save_platform(state="stopped", since=now, mode="observe", day_id=None, step=None, live_waivers=[], trading=False)
+            self.save_platform(state="stopped", since=now, mode="observe", day_id=None, step=None, live_waivers=[], trading=False, auto_recovery=None)
             if r.get("auto") and st.get("mode") == "paper" and self.cfg.get("auto_roll_paper", True):
                 self.auto_roll(r)
 
@@ -651,18 +674,68 @@ class Ctl(object):
     def downgrade(self, bad):
         st = self.platform()
         lifecycle.set_trading(self.root, False, st.get("day_id"), "observe", st.get("agent"))
-        self.save_platform(mode="observe", trading=False)
-        ctlstate.note_live_stop(self.root, self.now())
+        now = self.now()
+        codes = sorted({g["id"] for g in bad if g.get("id")})
+        rec = st.get("auto_recovery") if isinstance(st.get("auto_recovery"), dict) else {}
+        if rec.get("day_id") != st.get("day_id"):
+            rec = {"day_id": st.get("day_id"), "count": 0}
+        rec = dict(rec)
+        rec.update({"last_downgrade_ts": round(now, 3), "codes": codes})
+        self.save_platform(mode="observe", trading=False, auto_recovery=rec)
+        ctlstate.note_live_stop(self.root, now)
         why = "; ".join("%s: %s" % (g["id"], g["msg"]) for g in bad)[:300]
-        self.banner = {"level": "alarm", "text": "live понижен до observe: %s" % why, "day_report": None}
-        audit.append(self.root, "-", "ctl", None, "auto.downgrade", protocol.sha(why), "ok", "AUTO_DOWNGRADE", now=self.now(), note=why[:200])
+        self.banner = {"level": "alarm", "text": "live переведён в observe: %s" % why, "day_report": None}
+        audit.append(self.root, "-", "ctl", None, "auto.downgrade", protocol.sha(why), "ok", "AUTO_DOWNGRADE", now=now, note=why[:200])
         self.emit("auto.downgrade", "E_GATE", "ctl", "observe", wake=True)
         if any(g["id"] == "H5" for g in bad):
             try:
                 from tb.core import bus
-                bus.emit("limit_hit", {"which": "daily_loss"}, pri=bus.PRI_WAKE, root=self.root, now=self.now())
+                bus.emit("limit_hit", {"which": "daily_loss"}, pri=bus.PRI_WAKE, root=self.root, now=now)
             except Exception:
                 pass
+
+    def auto_restore(self, now=None):
+        """Вернуть live после автоматического downgrade, когда H3/H4/H6 снова чистые.
+
+        Это не новый вход в live и не обход Gate: исполнитель уже live и ведёт позиции,
+        меняется только разрешение lifecycle на новые входы. H1/H2/H5/H7/H8 сюда не
+        попадают: KILL, отсутствие стопов, дневной лимит, конфиг и лимит стартов остаются
+        ручными решениями владельца.
+        """
+        now = self.now() if now is None else now
+        st = self.platform()
+        if st.get("state") != "running" or st.get("mode") != "observe" or st.get("trading"):
+            return False
+        if self.busy or exec_cfg.kill_state(self.root) is not None:
+            return False
+        rec = st.get("auto_recovery")
+        if not isinstance(rec, dict) or rec.get("day_id") != st.get("day_id"):
+            return False
+        codes = rec.get("codes") or []
+        allowed = set(self.cfg.get("auto_restore_codes") or [])
+        if not codes or any(c not in allowed for c in codes):
+            return False
+        if now - float(rec.get("last_downgrade_ts") or 0) < float(self.cfg["auto_restore_s"]):
+            return False
+        if int(rec.get("count") or 0) >= int(self.cfg["auto_restore_max_day"]):
+            return False
+        bad = gates.monitor(self.root, now, self.cfg)
+        if bad:
+            return False
+        h = gates.common.exec_health(root=self.root, now=now)
+        d = h.get("data") or {}
+        if not h.get("alive") or d.get("profile") != "trade" or d.get("mode") != "live" or bool(d.get("observe")) or d.get("hold"):
+            return False
+        lifecycle.set_trading(self.root, True, st.get("day_id"), "live", st.get("agent"))
+        rec = dict(rec)
+        rec["count"] = int(rec.get("count") or 0) + 1
+        rec["last_restore_ts"] = round(now, 3)
+        self.save_platform(mode="live", trading=True, auto_recovery=rec)
+        why = "+".join(codes)
+        self.banner = {"level": "info", "text": "live восстановлен автоматически после %s" % why, "day_report": None}
+        audit.append(self.root, "-", "ctl", None, "auto.restore", protocol.sha(why), "ok", "AUTO_RESTORE", now=now, note=why[:200])
+        self.emit("auto.restore", "OK", "ctl", "live", wake=True)
+        return True
 
     # ------------------------------------------------------------ статус
     def status(self):

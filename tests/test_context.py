@@ -175,6 +175,21 @@ class TestDegradation(Base):
         self.assertFalse(ctx["sources"]["fear_greed"]["ok"])
         self.assertEqual(ctx["sources"]["fear_greed"]["last_ok_ts"], iso(NOW))
 
+    def test_failed_source_retries_after_a_minute(self):
+        cache, calls = {}, []
+        orig = self.router
+
+        def counting(url, params, timeout=10):
+            calls.append(url)
+            return orig(url, params, timeout)
+        context.http_get_json = counting
+        self.cycle(NOW, cache)
+        self.overrides["alternative.me"] = OSError("down")
+        self.cycle(NOW + 4000, cache)
+        n_failed = len([u for u in calls if "alternative.me" in u])
+        self.cycle(NOW + 4060, cache)
+        self.assertEqual(len([u for u in calls if "alternative.me" in u]), n_failed + 1)
+
 
 class TestWriteAndCli(Base):
     def test_atomic_write_no_tmp_left_and_valid_json(self):

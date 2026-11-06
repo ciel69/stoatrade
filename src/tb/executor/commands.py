@@ -262,6 +262,17 @@ def cmd_adopt(ex, cmd):
     return _do_adopt(ex, cmd, sym, pl.get("manage"))
 
 
+def _adopt_entry_fee(ex, sym, side, now):
+    """Комиссия входа для принятой позиции: без неё closed PnL расходится с Bybit."""
+    try:
+        want = "Buy" if side == "long" else "Sell"
+        rows = ex.port.executions(int((now - 7 * 86400) * 1000), sym) or []
+        return round(sum(float(r.get("fee") or 0) for r in rows
+                         if r.get("side") == want and not float(r.get("closed_size") or 0) > 0), 8)
+    except Exception:
+        return 0.0
+
+
 def _do_adopt(ex, cmd, sym, manage):
     from tb.executor import core
     now = ex.clock()
@@ -271,12 +282,13 @@ def _do_adopt(ex, cmd, sym, manage):
         return _err("E_ADOPT_NO_POSITION", "не удалось прочитать позиции", status="error")
     if not ps:
         return _err("E_ADOPT_NO_POSITION", "позиции по %s нет" % sym, "symbol")
-    pos = ps[0]
+    pos = dict(ps[0])
     if not pos.get("sl") or pos["sl"] <= 0:
-        return _err("E_ADOPT_NO_STOP", "на бирже у позиции нет стопа", "stop.price")
+        return _err("E_ADOPT_NO_STOP", "у позиции на бирже нет стопа", "stop.price")
     for p in ex.active_plans(sym):
         return _err("E_SYMBOL_BUSY", "по %s уже есть план %s" % (sym, p["spec"]["id"]), "symbol")
     side, avg, sl = pos["side"], float(pos["avg"]), float(pos["sl"])
+    pos["fee_open"] = _adopt_entry_fee(ex, sym, side, now)
     r = abs(avg - sl)
     s = 1.0 if side == "long" else -1.0
     tp = float(pos["tp"]) if pos.get("tp") and s * (pos["tp"] - avg) > 0 else avg + s * 10 * r

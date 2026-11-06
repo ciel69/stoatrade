@@ -430,7 +430,10 @@ class TestBusAlerts(SvcCase):
         self.assertEqual(doc["schema"], "tb.blackouts/1")
         self.assertEqual(doc["windows"][0]["name"], "FOMC")
         self.svc.calendar_step(NOW + 100, force=True)
-        self.assertEqual(os.stat(p).st_mtime_ns, m1)                         # не изменилось -> не перезаписывается
+        self.assertEqual(os.stat(p).st_mtime_ns, m1)
+        self.svc.calendar_step(NOW + SV.BLACKOUTS_REFRESH_S + 1, force=True)
+        self.assertNotEqual(os.stat(p).st_mtime_ns, m1)
+        self.assertEqual(json.load(open(p))["ts"], int(NOW + SV.BLACKOUTS_REFRESH_S + 1))                         # не изменилось -> не перезаписывается
 
 
 class TestContextAndBrief(SvcCase):

@@ -26,6 +26,7 @@ from tb import fsutil
 
 _now = time.time
 _sleep = time.sleep
+FAIL_RETRY_S = 60.0
 
 
 def _f(x):
@@ -299,7 +300,7 @@ def poll_cycle(cfg, root, cache, now=None):
             if "last_ok_ts" in c:
                 entry["last_ok_ts"] = epoch_to_iso(c["last_ok_ts"])
         c["entry"] = entry
-        c["next_due"] = now + interval
+        c["next_due"] = now + (float(interval) if entry.get("ok") is True else min(float(interval), FAIL_RETRY_S))
     sources = {n: c["entry"] for n, c in cache.items() if c.get("entry") and not n == "macro"}
     if cfg["sources"].get("macro", {}).get("enabled", True):
         path = cfg["macro_events_file"]

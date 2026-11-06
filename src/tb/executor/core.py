@@ -1004,6 +1004,30 @@ class Executor(object):
         self.act.place_policy_limits(p)
         mdsvc.write_all(self, force=True)
 
+    def attach_exchange_fill(self, p, pos):
+        spec, rt = p["spec"], p["rt"]
+        try:
+            qty, avg = float(pos["size"]), float(pos["avg"])
+        except (KeyError, TypeError, ValueError):
+            return False
+        if qty <= 0 or avg <= 0 or pos.get("side") != spec.get("side"):
+            return False
+        fee = 0.0
+        try:
+            side = "Buy" if spec["side"] == "long" else "Sell"
+            since = int((float((rt.get("ts") or {}).get("armed") or self.clock()) - 5.0) * 1000)
+            rows = self.port.executions(since, spec["symbol"]) or []
+            fee = sum(float(r.get("fee") or 0) for r in rows
+                      if r.get("side") == side and not float(r.get("closed_size") or 0) > 0)
+        except Exception:
+            fee = 0.0
+        now = self.clock()
+        fill = {"exec_id": "recon-%s-%d" % (spec["id"], int(now * 1000)), "px": avg, "qty": qty, "fee": fee, "ts": now}
+        self._finalize_entry(p, {"fills": [fill], "partial": False})
+        self.decide("reconcile", "entry_fill_attached", plan=spec["id"], why="RECON:attach exchange fill",
+                    res={"ok": True, "qty": qty, "fee": round(fee, 8)})
+        return True
+
     def _ensure_stop(self, p, stop0):
         """На бирже нет стопа после входа: выставить аварийно; не вышло -> закрыть по рынку. -> True, если защита есть."""
         spec = p["spec"]
@@ -1616,10 +1640,12 @@ class Executor(object):
         sym = spec["symbol"]
         avg, qty = float(pos["avg"]), float(pos["size"])
         stop0 = float(pos["sl"])
+        fee_open = float(pos.get("fee_open") or 0.0)
         rt["pos"].update({"qty": qty, "avg": avg, "initial_stop": stop0, "cur_stop": stop0, "r_unit": abs(avg - stop0), "best_px": avg, "worst_px": avg,
                           "t_best": round(now, 3), "t_worst": round(now, 3), "lev": pos.get("lev"), "path_n": 0, "path_cov": 0.0,
-                          "entries": [{"ts": round(now, 3), "px": avg, "qty": qty, "fee": 0.0, "link": None, "exec_id": "adopt", "kind": "entry"}],
+                          "entries": [{"ts": round(now, 3), "px": avg, "qty": qty, "fee": fee_open, "link": None, "exec_id": "adopt", "kind": "entry"}],
                           "risk0": qty * abs(avg - stop0)})
+        rt["realized"]["fees"] = round(rt["realized"]["fees"] + fee_open, 8)
         rt["pos"]["exit"] = self._exit_doc(p, avg)
         rt["ts"]["armed"] = rt["ts"]["entered"] = round(now, 3)
         rt["entry"]["state"] = "filled"

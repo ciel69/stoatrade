@@ -28,6 +28,8 @@ from tb.intel import store
 from tb.intel import xex as ixex
 from tb.xdata import xstream as xstream_mod
 
+BLACKOUTS_REFRESH_S = 3600.0
+
 
 class Service(object):
     def __init__(self, root, cfg=None, transport=None, clock=time.time, emit=None, inline=False, log=None, reader_call=None):
@@ -196,7 +198,7 @@ class Service(object):
                 old = json.load(f)
         except (OSError, ValueError):
             old = {}
-        if old.get("windows") != doc["windows"] or not old:
+        if old.get("windows") != doc["windows"] or not old or not isinstance(old.get("ts"), (int, float)) or now - float(old["ts"]) >= BLACKOUTS_REFRESH_S:
             filelock.atomic_write_json(path, doc, indent=None)
         pend, self._fired = ical.due_alerts([e for e in events if e["v"] or ccfg.get("alert_unverified", True)], now, ccfg.get("warn_min") or [60], self._fired)
         for e, thr in pend:

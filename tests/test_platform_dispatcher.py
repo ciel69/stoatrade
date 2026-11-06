@@ -69,6 +69,9 @@ class FilterTest(Base):
         self.assertEqual(cls("entry_filled"), 1)
         self.assertEqual(cls("milestone"), 2)
         self.assertEqual(cls("scanner_signal", kind="hot_enter"), 3)
+        self.assertEqual(cls("scanner_signal", kind="hot_enter", score=3.6), 2)
+        self.assertEqual(cls("scanner_signal", kind="hot_enter", score=4.6), 1)
+        self.assertEqual(cls("scanner_signal", kind="idea_near", score=9.0), 4)
         self.assertEqual(cls("scanner_signal", kind="idea_near"), 4)
         self.assertLess(cls("kill"), cls("entry_filled"))
         self.assertLess(cls("entry_filled"), cls("milestone"))
@@ -305,7 +308,7 @@ class ApiJobsTest(Base):
         blob = json.dumps(j, ensure_ascii=False)
         self.assertNotIn("ignore", blob)
         self.assertEqual(j["kinds"], ["hot_enter"])
-        self.assertEqual(j["prio"], 3)
+        self.assertEqual(j["prio"], 1)
 
     def test_restart_does_not_duplicate_jobs(self):
         d = self.api()
