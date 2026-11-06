@@ -90,6 +90,7 @@ export interface Challenge {
   blocked?: boolean
   expires_in?: number
   min_delay?: number
+  min_type?: number
   phrases?: string[]
   nonce?: string
 }

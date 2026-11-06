@@ -72,6 +72,7 @@ const DECISION: Record<string, string> = {
 /** Что сделала мысль, без служебных названий: если решение незнакомо, говорим «принял решение». */
 export function thoughtKind(r: Pick<DecisionRow, 'what' | 'decision' | 'ok'>): string {
   if (r.what === 'brain_why') return 'объяснил решение'
+  if (r.ok === false && r.decision === 'propose') return 'предложение отклонено'
   if (r.decision) return DECISION[r.decision] ?? 'принял решение'
   return r.ok === false ? 'не выполнено' : 'разобрал ситуацию'
 }
@@ -90,7 +91,8 @@ export function thoughtText(raw: string | null | undefined): string {
   return t.replace(/\s{2,}/g, ' ').replace(/\s+([,.;:])/g, '$1').trim()
 }
 
-/** Подсказка к мысли: кто и когда её записал. */
-export function thoughtHint(r: Pick<DecisionRow, 'role' | 't'>, nowS: number): string {
-  return `Мысль мозга. Записала роль «${roleName(r.role)}», ${ageText(r.t, nowS)}.`
+/** Подсказка к мысли: кто и когда её записал, и чем закончилось отклонённое предложение. */
+export function thoughtHint(r: Pick<DecisionRow, 'role' | 't' | 'ok' | 'code'>, nowS: number): string {
+  const result = r.ok === false ? ` Результат: отклонено${r.code ? ` (${r.code})` : ''}.` : ''
+  return `Мысль мозга. Записала роль «${roleName(r.role)}», ${ageText(r.t, nowS)}.${result}`
 }

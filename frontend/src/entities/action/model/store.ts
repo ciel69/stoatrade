@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { useLive, type LiveMessage } from '@/shared/api'
 import { failureText, plainify } from '@/shared/lib'
-import { FINAL_TIMEOUT_MS, TIMEOUT_TEXT, blockReasons, buildCommand, timeoutText, isExpired, isIrreversible, isLiveStart, isRisky, risksOf, secondsLeft, unavailableReason } from '../lib/flow'
+import { FINAL_TIMEOUT_MS, TIMEOUT_TEXT, blockReasons, buildCommand, acceptWait, timeoutText, isExpired, isIrreversible, isLiveStart, isRisky, risksOf, unavailableReason } from '../lib/flow'
 import { createKeySender } from './key'
 import type { KeyOutcome } from '../lib/key'
 import { memoryChallenge, memoryDoneText, memoryFailure, memoryNeedsChallenge, memoryUnavailable } from '../lib/memory'
@@ -275,7 +275,7 @@ export const useActionStore = defineStore('action', () => {
     const ch = challenge.value
     const now = Date.now()
     if (isExpired(ch?.expires_in, receivedAt.value, now)) return recheck()
-    if (secondsLeft(ch?.min_delay, receivedAt.value, now) > 0) return
+    if (acceptWait(ch, receivedAt.value, now) > 0) return
     dispatch()
   }
 

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch, watchEffect } from 'vue'
-import { acceptLabel, blockReasons, failedGates, isExpired, isLiveStart, ownProgress, passedGates, plainLine, secondsLeft, useActionStore, type ActionMock, type ActionPhase, type Challenge, type RiskItem } from '@/entities/action'
+import { acceptLabel, acceptWait, blockReasons, failedGates, isExpired, isLiveStart, ownProgress, passedGates, plainLine, useActionStore, type ActionMock, type ActionPhase, type Challenge, type RiskItem } from '@/entities/action'
 
 /** Исходные коды и тексты непройденных условий: только для «Подробностей для специалиста». */
 const failedRaw = (ch: Challenge | null): string => failedGates(ch).map((g) => [g.id, g.name, g.msg].filter(Boolean).join(' · ')).join('\n')
@@ -60,7 +60,7 @@ watchEffect(() => {
 // ---- пауза и срок
 const now = ref(Date.now())
 let tick: ReturnType<typeof setInterval> | undefined
-const left = computed(() => secondsLeft(action.challenge?.min_delay, action.receivedAt, now.value))
+const left = computed(() => acceptWait(action.challenge, action.receivedAt, now.value))
 const expired = computed(() => action.phase === 'confirm' && isExpired(action.challenge?.expires_in, action.receivedAt, now.value))
 watch(() => action.phase === 'confirm', (on) => {
   clearInterval(tick)

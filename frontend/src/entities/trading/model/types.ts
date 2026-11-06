@@ -386,6 +386,8 @@ export interface HomeSnapshot {
   allowed: boolean | null
   positions: Position[]
   positions_total: number
+  /** Позиции на бирже, которые исполнитель не смог привязать к плану (orphan). Только для предупреждения, без управления. */
+  foreign_positions?: Array<{ sym: string; side: string | null; owner: string }>
   curve?: Curve
   plans?: PlansBlock
   pending?: PendingBlock

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Challenge } from '../model/types'
-import { ACCEPT_KEYS, acceptLabel, blockReasons, buildCommand, dialogUp, failedGates, timeoutText, isExpired, isIrreversible, isRisky, ownProgress, passedGates, risksOf, secondsLeft, unavailableReason, UNAVAILABLE_TEXT } from './flow'
+import { ACCEPT_KEYS, acceptLabel, acceptWait, blockReasons, buildCommand, dialogUp, failedGates, timeoutText, isExpired, isIrreversible, isRisky, ownProgress, passedGates, risksOf, secondsLeft, unavailableReason, UNAVAILABLE_TEXT } from './flow'
 
 const calm: Challenge = { gates: [{ id: 'G1', name: 'Связь', ok: true }], warnings: [], pre_amber: [], phrases: [], danger: false, blocked: false, nonce: 'n1' }
 const risky: Challenge = {
@@ -123,6 +123,11 @@ describe('время', () => {
     expect(secondsLeft(3, 1000, 4000)).toBe(0)
     expect(secondsLeft(undefined, 1000, 1000)).toBe(0)
     expect(secondsLeft(0, 1000, 1000)).toBe(0)
+  })
+  it('acceptWait uses min_type for owner phrases', () => {
+    expect(acceptWait({ min_delay: 2, min_type: 4, phrases: ['x'] }, 1000, 1000)).toBe(4)
+    expect(acceptWait({ min_delay: 2, min_type: 4, phrases: [] }, 1000, 1000)).toBe(2)
+    expect(acceptWait({ min_delay: 2, min_type: 4, phrases: ['x'] }, 1000, 5000)).toBe(0)
   })
   it('isExpired: срок expires_in; нет срока не истекает', () => {
     expect(isExpired(60, 0, 59_999)).toBe(false)

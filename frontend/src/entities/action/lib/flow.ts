@@ -151,6 +151,13 @@ export function secondsLeft(minDelay: number | undefined, receivedAt: number, no
   return Math.max(0, Math.ceil(minDelay - (now - receivedAt) / 1000))
 }
 
+/** Пауза перед подтверждением: nonce-delay плюс minimum на ввод owner-фразы. */
+export function acceptWait(ch: Challenge | null | undefined, receivedAt: number, now: number): number {
+  const delay = secondsLeft(ch?.min_delay, receivedAt, now)
+  const typed = ch?.phrases?.length ? secondsLeft(ch?.min_type, receivedAt, now) : 0
+  return Math.max(delay, typed)
+}
+
 /** Срок challenge истёк (expires_in секунд от получения). Нет срока: не истекает. */
 export function isExpired(expiresIn: number | undefined, receivedAt: number, now: number): boolean {
   if (!expiresIn || expiresIn <= 0) return false

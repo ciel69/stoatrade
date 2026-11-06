@@ -42,6 +42,7 @@ describe('человеческие подписи мозга', () => {
   it('что сделала мысль: без служебных названий решений', () => {
     expect(thoughtKind({ what: 'brain_why', decision: null, ok: true })).toBe('объяснил решение')
     expect(thoughtKind({ what: 'brain_decision', decision: 'move_stop', ok: true })).toBe('подтянул стоп')
+    expect(thoughtKind({ what: 'brain_decision', decision: 'propose', ok: false })).toBe('предложение отклонено')
     expect(thoughtKind({ what: 'brain_decision', decision: 'weird_new', ok: true })).toBe('принял решение')
     expect(thoughtKind({ what: 'brain_decision', decision: null, ok: false })).toBe('не выполнено')
     expect(thoughtKind({ what: 'brain_decision', decision: null, ok: true })).toBe('разобрал ситуацию')
