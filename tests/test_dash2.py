@@ -189,6 +189,15 @@ class BrainTopic(Fx):
         b = topics.brain(self.root, now)
         self.assertEqual((b["active"]["profile"], b["active"]["role"]), ("lm-oss", "position_manager"))
 
+    def test_active_ignores_eval_calls(self):
+        self.hb()
+        now = time.time()
+        rows = [{"t": now - 30, "role": "entry_scout", "profile": "ds-flash", "provider": "deepseek", "model": "flash", "ok": True, "job": "J-live"},
+                {"t": now - 5, "role": "position_manager", "provider": "deepseek", "model": "flash", "ok": True, "job": "EV-position_manager"}]
+        w(self.root, "state/llm_calls.jsonl", "".join(json.dumps(r) + "\n" for r in rows))
+        b = topics.brain(self.root, now)
+        self.assertEqual((b["active"]["profile"], b["active"]["role"]), ("ds-flash", "entry_scout"))
+
     def test_decisions_are_whitelisted_and_newest_first(self):
         from tb.core import decisions
         decisions.append({"actor": "brain:api", "kind": "skip", "what": "brain_decision", "why": "вход бессмыслен", "args": {"sym": "SOL"}, "basis": {"role": "entry_scout", "profile": "lm-oss", "usd": 0.01},

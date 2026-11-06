@@ -188,7 +188,8 @@ class CtlBridge(object):
         if kind == "challenge":
             d = obj.get("data") or {}
             if full:
-                out["data"] = clean({k: d.get(k) for k in ("action", "danger", "gates", "warnings", "blocked", "pre_amber", "expires_in", "min_delay", "phrases", "kill")})
+                extra = {"min_type": int(self.web.conf().get("min_type_s") or 0)}
+                out["data"] = clean({k: d.get(k) for k in ("action", "danger", "gates", "warnings", "blocked", "pre_amber", "expires_in", "min_delay", "phrases", "kill")} | extra)
                 n = d.get("nonce")
                 if isinstance(n, str) and 0 < len(n) <= 200:       # nonce нужен клиенту для подтверждения; привязан к соединению и аргументам, в аудит и логи не идёт
                     out["data"]["nonce"] = n

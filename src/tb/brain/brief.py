@@ -34,8 +34,8 @@ from tb.core.stops import loss_stop
 from tb.logic import costs as costs_mod
 from tb.logic import exitpol
 
-DEFAULT_BUDGET = 2500
-EVENT_BUDGET = 900
+DEFAULT_BUDGET = 4000
+EVENT_BUDGET = 3200           # event-бриф с реальным struct/levels/cands ~2.8k токенов: 900 резал входные данные
 CHARS_PER_TOKEN = 3.5
 BRIEF_KEEP_DAYS = 14
 BRIEF_MAX_BYTES = 12 * 1024
@@ -56,8 +56,8 @@ _HOT_NUMS = ("score", "ret_5m_pct", "range_5m_pct", "turn_surge_5m", "spread_bps
 _LEVEL_NUMS = ("px", "atr_5m", "vol_med_5m")
 _LEVEL_ALIAS = {"px": "price", "atr_5m": "atr_5m_14", "vol_med_5m": "vol_med_5m_20"}        # так ключи называет logic/levels.key_levels (исполнитель пишет их в levels.json)
 STRUCT_FRESH_S = 300.0
-STRUCT_BUDGET = 600           # токенов на блок struct при scope=start (цель WP «данные мозга»: не больше +600)
-STRUCT_EVENT_BUDGET = 420     # монета события и BTC без подрезки уровней и вторичных чисел: мозгу нужен полный контекст для входа (указание владельца 2026-10-31)
+STRUCT_BUDGET = 900           # токенов на блок struct при scope=start (цель WP «данные мозга»: не больше +900)
+STRUCT_EVENT_BUDGET = 700     # монета события и BTC без подрезки уровней и вторичных чисел: мозгу нужен полный контекст для входа
 STRUCT_MAX_SYMS = 8
 EXIT_MAX_TOKENS = 60          # R4 (Requirement 11.4): блок `exit` «что сделает код» для position_manager — не больше 60 токенов
 EXIT_ROWS = 2                 # позиций в блоке (обычно одна: событие position_manager — про один план); остальные отбрасываются бюджетом
@@ -1495,17 +1495,23 @@ TRIM_STEPS = (
 )
 
 
-def fit(brief, budget):
-    """Усекает досье до бюджета токенов (приблизительно) в порядке приоритета; помечает trunc и перечисляет снятое в `cut`."""
+def fit(brief, budget, keep=()):
+    """Усекает досье до бюджета токенов (приблизительно) в порядке приоритета; помечает trunc и перечисляет снятое в `cut`.
+    keep: имена шагов TRIM_STEPS, данные которых нельзя снимать (event-вход: struct/cands). Если после всех
+    допустимых сокращений бюджет всё ещё превышен, лучше отдать модели полный входной контекст, чем NO_DATA."""
+    keep = frozenset(keep or ())
     cut = []
     for name, fn in TRIM_STEPS:
+        if name in keep:
+            continue
         if tokens(brief) + (CUT_RESERVE + 3 * len(cut) if cut else 0) <= budget:       # запас под ключи trunc/cut, которые добавятся после усечения
             break
         if fn(brief):
             cut.append(name)
-    if cut:
+    if cut or tokens(brief) > budget:
         brief["trunc"] = True
-        brief["cut"] = cut
+        if cut:
+            brief["cut"] = cut
     return brief
 
 
@@ -1646,7 +1652,7 @@ def build(scope="start", since=None, budget_tokens=None, root=None, now=None, co
     if own_budget and b.get("struct"):
         budget_tokens += tokens(b["struct"])          # struct (структура рынка) тоже со своим лимитом (STRUCT_BUDGET / STRUCT_EVENT_BUDGET): не вытесняет остальное досье
     cands_full = b.get("cands")                       # до обрезки: high-risk варианты нельзя терять вместе с блоком
-    b = fit(b, budget_tokens)
+    b = fit(b, budget_tokens, keep=("struct", "struct>3", "cands") if scope == "event" else ())
     if cands_full and "cands" in (b.get("cut") or []):
         hr = [dict(r) for r in cands_full if isinstance(r, dict) and r.get("high_risk") and r.get("ok")]
         if hr:

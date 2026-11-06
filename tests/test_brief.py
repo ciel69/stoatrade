@@ -421,6 +421,18 @@ class TestBudget(Base):
         self.assertIn("cands", b)
         self.assertLessEqual(brief.tokens(b), brief.EVENT_BUDGET)
 
+    def test_event_budget_never_cuts_struct_and_cands(self):
+        """Event-вход не должен терять struct/cands из-за бюджета: иначе precheck ставит NO_DATA."""
+        b = {"scope": "event", "struct": {"s": {"BTW": {"px": 1.0, "note": "x" * 900}}},
+             "cands": [{"sym": "BTW", "why": "x" * 240}],
+             "playbook": {"x": "x" * 500}, "recent": [{"why": "x" * 200}] * 8}
+        brief.fit(b, 100, keep=("struct", "struct>3", "cands"))
+        self.assertIn("struct", b)
+        self.assertIn("cands", b)
+        self.assertNotIn("struct", b.get("cut", []))
+        self.assertNotIn("cands", b.get("cut", []))
+        self.assertTrue(b["trunc"])
+
     def test_event_scope_focuses_on_plan_of_event(self):
         bus.emit("plan_armed", {"rev": 2}, plan="PL-1028-ETH-02", sym="ETH", root=self.root, now=NOW - 5)
         b = self.build("event", since=0)

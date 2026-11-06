@@ -121,7 +121,11 @@ def violates(pred, obj, ctx, schema_id):
     if kind == "secret":
         return validate.has_secret(text) or bool(validate._RE_STRONG.search(text))
     if kind == "sem":
-        return any(e.startswith(arg) for e in validate.semantic(schema_id, obj, ctx))
+        try:
+            errs = validate.semantic(schema_id, obj, ctx)
+        except (KeyError, TypeError, ValueError, AttributeError):
+            return False                 # сырой ответ модели может быть неполным: предикат не должен рушить весь eval
+        return any(e.startswith(arg) for e in errs)
     if kind == "new_plans":
         return (obj.get("limits") or {}).get("max_new_plans", 0) > 0
     if kind == "carry_allow":

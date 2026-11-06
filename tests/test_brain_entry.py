@@ -711,7 +711,7 @@ class RoleFiles(unittest.TestCase):
         brain = jl(os.path.join(ROOT, "config", "brain.json"))
         self.assertEqual(brain["teams"]["A"]["roles"]["entry_scout"]["primary"], "ds-flash")
         self.assertEqual(brain["role_opts"]["entry_scout"]["params"]["thinking"], "low")
-        self.assertEqual(brain["runtime"]["guards"]["role_jobs_per_hour"]["entry_scout"], 36)
+        self.assertEqual(brain["runtime"]["guards"]["role_jobs_per_hour"]["entry_scout"], 90)
         ag = jl(os.path.join(ROOT, "config", "agents.json"))["agents"]["api"]
         self.assertEqual(ag["limits"]["modes"], ["paper", "live"])
 
@@ -758,17 +758,24 @@ class DispatcherWake(unittest.TestCase):
         self.assertEqual(sorted(j["sym"] for j in js), ["BTC", "ETH", "SOL"])
         self.assertTrue(all(j["types"] == ["scanner_signal"] and j["prio"] == 3 for j in js))
 
+    def test_scanner_info_creates_job(self):
+        d = self.disp()
+        d.step(self.t)
+        self.emit("range_5m", "INFO", wake=False)
+        d.step(self.t)
+        self.assertEqual([(j["sym"], j["prio"]) for j in self.jobs()], [("INFO", 3)])
+
     def test_scanner_jobs_capped_separately_from_position_jobs(self):
         d = self.disp()
         d.step(self.t)                                                          # курсор подписчика встаёт на конец шины
-        for i in range(40):
+        for i in range(100):
             self.emit("hot_enter", "S%d" % i)
         d.step(self.t)
-        self.assertEqual(len(self.jobs()), 36)                                  # потолок класса 3: 36 заданий в час (обход + всплески)
+        self.assertEqual(len(self.jobs()), 90)                                  # потолок класса 3: 36 заданий в час (обход + всплески)
         for i in range(3):                                                     # а позиции получают свои в час отдельно
             bus.emit("entry_filled", {"avg": 1.0}, plan="PL-1028-SOL-0%d" % (i + 1), sym="SOL", root=self.root, now=self.t + 1)
         d.step(self.t + 1)
-        self.assertEqual(len(self.jobs()), 39)                                  # 36 сканерных + 3 по позициям
+        self.assertEqual(len(self.jobs()), 93)                                  # 36 сканерных + 3 по позициям
 
     def test_rate_buckets_reload_ok(self):
         d = self.disp()

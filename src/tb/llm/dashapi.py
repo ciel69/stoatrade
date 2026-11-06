@@ -125,23 +125,36 @@ def _ts(s):
         return None
 
 
+def _enabled_profiles(root):
+    try:
+        from tb.brain import profiles
+        rows = profiles.profile_rows(root).get("profiles") or []
+        return {p.get("id") for p in rows if p.get("id") and p.get("provider_enabled")}
+    except Exception:
+        return None
+
+
 def models_perf(root, now, days, mode):
-    """Результат по моделям: сделки с тегом model.<профиль> (expstats, без исключённых сбоем платформы) + учёт вызовов LLM (usage) за период.
-    Эффективность: чистый результат (PnL минус расход на ИИ), PnL на 100 вызовов, на $ и на 1M токенов. n < MIN_N помечается: выводы по такой выборке ненадёжны."""
+    """Результат по моделям: только текущие включённые профили с закрытыми сделками; исторические alias/EV-вызовы не считаются моделями."""
     from tb.core import expstats
     from tb.llm import usage as U
     since = now - days * 86400.0
     calls = U.aggregate(U.read_rows(root, since=since), "profile")
+    enabled = _enabled_profiles(root)
     by = {}
     for t in expstats.load_trades(mode, root=root, with_rules=False):
         ts = _ts(t.get("ts_close"))
         if ts is None or ts < since or t.get("shadow"):
             continue
-        by.setdefault(t.get("model") or "—", []).append(t)
+        by.setdefault(t.get("model") or "-", []).append(t)
     rows = []
     for mid in sorted(set(calls) | set(by)):
+        if enabled and mid not in enabled:
+            continue
         c, ts = calls.get(mid) or {}, by.get(mid, [])
         n = len(ts)
+        if not n:
+            continue
         pnl = sum(t["pnl"] or 0.0 for t in ts)
         rs = [t["r"] for t in ts if t.get("r") is not None]
         n_calls = c.get("calls", 0)
@@ -156,7 +169,7 @@ def models_perf(root, now, days, mode):
                      "calls_per_trade": round(n_calls / float(n), 1) if n else None, "reliable": n >= expstats.MIN_N})
     rows.sort(key=lambda r: (-(r["net"] if r["n"] else -1e9), r["id"]))
     return {"days": days, "mode": mode, "min_n": expstats.MIN_N, "rows": rows,
-            "note": "Результат сделки приписан модели, подавшей план (тег model.*); учёт вызовов идёт по профилю. Выборка мала: до n=%d это наблюдение, а не вывод." % expstats.MIN_N}
+            "note": "Показаны только текущие включённые профили с закрытыми сделками; исторические alias и EV-вызовы не считаются моделями. До n=%d это наблюдение, а не вывод." % expstats.MIN_N}
 
 
 def _models_perf(root, now, q):

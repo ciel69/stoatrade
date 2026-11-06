@@ -85,6 +85,11 @@ def _recent_decisions(root):
     return [_decision_row(r) for r in reversed(rows[-DECISIONS_OUT:])]
 
 
+def _is_eval_call(r):
+    """Вызовы `./tb brain eval` не должны выглядеть как работа live-мозга: у них нет profile в usage-строке."""
+    return str(r.get("job") or "").startswith("EV-")
+
+
 def brain(root=None, now=None):
     now = time.time() if now is None else now
     hb = _read_json(paths.runtime("platform", "brain.hb.json", root=root))
@@ -101,7 +106,7 @@ def brain(root=None, now=None):
         status = "thinking"
     else:
         status = "idle"
-    calls = [r for r in _tail_rows(paths.state("llm_calls.jsonl", root=root)) if r.get("kind") != "fmt" and isinstance(r.get("t"), (int, float))]
+    calls = [r for r in _tail_rows(paths.state("llm_calls.jsonl", root=root)) if r.get("kind") != "fmt" and not _is_eval_call(r) and isinstance(r.get("t"), (int, float))]
     last_by_role = {}
     for r in calls:
         if now - r["t"] <= RECENT_CALL_S and r.get("role"):
@@ -749,6 +754,8 @@ def home(root=None, now=None, mode=None):
             "limits": [{"id": r.get("id"), "label": r.get("label"), "limit": _num(r.get("limit")), "used": _num(r.get("used")), "room": _num(r.get("room")), "unit": r.get("unit"), "level": r.get("level")}
                        for r in (rr.get("rows") or []) if isinstance(r, dict)],
             "limits_paper": bool(rr.get("paper")), "allowed": rr.get("allowed"), "positions": pos[:POSITIONS_OUT], "positions_total": len(pos),
+            "foreign_positions": [{"sym": str(x.get("sym") or "")[:20], "side": x.get("side"), "owner": str(x.get("owner") or "")[:40]}
+                                   for x in ((s.get("v2") or {}).get("foreign_positions") or []) if isinstance(x, dict) and x.get("sym")][:8],
             "curve": _curve(s.get("curve")), "plans": _plans(s.get("v2"), mode, now, root=root), "pending": _pending(s.get("pending"), now, s.get("v2"), mode)}
 
 

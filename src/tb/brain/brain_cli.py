@@ -193,7 +193,13 @@ def cmd_eval(root, a):
         if not _tty():
             print("живой eval запускает владелец в Terminal (нужен TTY)", file=sys.stderr)
             return 2
-        rep = evalrun.run_live(root, conf, rr, a.profile, role=a.role, max_usd=a.max_usd)
+        print("eval: профиль %s, сценариев %d, лимит $%.2f; Ctrl+C безопасно прервёт без записи live_ok"
+              % (a.profile, n, a.max_usd if a.max_usd is not None else th["max_usd"]), file=sys.stderr)
+        try:
+            rep = evalrun.run_live(root, conf, rr, a.profile, role=a.role, max_usd=a.max_usd)
+        except KeyboardInterrupt:
+            print("eval прерван; live_ok не изменён", file=sys.stderr)
+            return 130
         if rep.get("ok") is False:
             _out(rep)
             return 1
